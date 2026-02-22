@@ -39,6 +39,7 @@ val releaseKeyAlias = readConfig("RELEASE_KEY_ALIAS", "PB_RELEASE_KEY_ALIAS")
 val releaseKeyPassword = readConfig("RELEASE_KEY_PASSWORD", "PB_RELEASE_KEY_PASSWORD")
     ?: readConfig("keyPassword", "PB_RELEASE_KEY_PASSWORD")
 val enableReleaseLint = readConfig("ENABLE_RELEASE_LINT", "PB_ENABLE_RELEASE_LINT")?.toBooleanStrictOrNull() ?: false
+val enableAbiSplits = readConfig("ENABLE_ABI_SPLITS", "PB_ENABLE_ABI_SPLITS")?.toBooleanStrictOrNull() ?: false
 val workspaceRoot = rootProject.projectDir.resolve("..")
 val runtimeAssetsDir = layout.buildDirectory.dir("generated/runtime-assets")
 val syncRuntimeAssets by tasks.registering(Sync::class) {
@@ -111,6 +112,15 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+    }
+
+    splits {
+        abi {
+            isEnable = enableAbiSplits
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+            isUniversalApk = enableAbiSplits
         }
     }
 

@@ -1,0 +1,111 @@
+﻿name: release-apk
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    env:
+      PB_VERSION_CODE: ${{ github.run_number }}
+      PB_APP_ID: com.protocolbunker.host
+      PB_ENABLE_ABI_SPLITS: "true"
+      SIGNING_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+      SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve Version
+        shell: bash
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION_NAME="${TAG#v}"
+          if [[ -z "$VERSION_NAME" ]]; then
+            VERSION_NAME="$TAG"
+          fi
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "PB_VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "Release tag: $TAG"
+          echo "Version name: $VERSION_NAME"
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server-go/go.mod
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK/NDK Packages
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.2.12479018"
+
+      - name: Configure Release Signing (optional)
+        if: ${{ env.SIGNING_KEYSTORE_B64 != '' }}
+        shell: bash
+        run: |
+          mkdir -p android-app/keys
+          echo "$SIGNING_KEYSTORE_B64" | base64 --decode > android-app/keys/release.jks
+          echo "PB_RELEASE_STORE_FILE=keys/release.jks" >> "$GITHUB_ENV"
+          echo "PB_RELEASE_STORE_PASSWORD=$SIGNING_STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "PB_RELEASE_KEY_ALIAS=$SIGNING_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "PB_RELEASE_KEY_PASSWORD=$SIGNING_KEY_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Run Go Tests
+        working-directory: server-go
+        run: go test ./...
+
+      - name: Build Go Android ABI Binaries
+        run: ./server-go/scripts/build-android-binaries.sh
+
+      - name: Build Release APK
+        working-directory: android-app
+        run: ./gradlew --no-daemon clean assembleRelease
+
+      - name: Prepare Release Artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          find android-app/app/build/outputs/apk/release -maxdepth 1 -type f -name "*.apk" -print | sort
+          mapfile -t apks < <(find android-app/app/build/outputs/apk/release -maxdepth 1 -type f -name "*.apk" | sort)
+          if [[ "${#apks[@]}" -lt 5 ]]; then
+            echo "Expected at least 5 APK files (4 ABI + universal), found ${#apks[@]}"
+            exit 1
+          fi
+          for apk in "${apks[@]}"; do
+            base="$(basename "$apk")"
+            cp "$apk" "dist/protocol-bunker-host-${RELEASE_TAG}-${base}"
+          done
+
+      - name: Upload CI Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: protocol-bunker-host-${{ env.RELEASE_TAG }}-apks
+          path: dist/*.apk
+
+      - name: Attach APKs To GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release upload "$RELEASE_TAG" dist/*.apk --clobber

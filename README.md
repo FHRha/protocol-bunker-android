@@ -115,6 +115,61 @@ Device-режим:
 - Linux/macOS: `RUN_DEVICE_TESTS=1 ./scripts/ci.sh`
 - Windows: `.\scripts\ci.ps1 -RunDeviceTests`
 
+## GitHub Releases (автосборка APK)
+
+В репозитории настроен workflow: `.github/workflows/release.yml`.
+
+Как выпускать версию:
+
+1. Создайте tag в формате `vX.Y.Z` (например, `v0.1.0`).
+2. В GitHub откройте `Releases` -> `Draft a new release`.
+3. Выберите этот tag, заполните заголовок и текст релиза (Markdown), при необходимости отметьте `Set as a pre-release`.
+4. Нажмите `Publish release`.
+
+После публикации GitHub Actions автоматически:
+- запускает `go test ./...`,
+- пересобирает Go ABI-бинарники для `arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`,
+- собирает `assembleRelease` с ABI splits,
+- прикрепляет в релиз 5 APK:
+  - `arm64-v8a`
+  - `armeabi-v7a`
+  - `x86_64`
+  - `x86`
+  - `universal`
+
+Важно:
+- workflow ожидает минимум 5 APK и завершится ошибкой, если их меньше;
+- если не настроены секреты keystore, release будет debug-signed (только для теста).
+
+Для production-подписи задайте secrets в GitHub:
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_STORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+
+### Как писать текст релиза (Release notes)
+
+Проще всего использовать такой шаблон в окне GitHub Release:
+
+```md
+## Что нового
+- ...
+
+## Исправления
+- ...
+
+## APK файлы
+- arm64-v8a: большинство современных Android
+- armeabi-v7a: старые ARM-устройства
+- x86_64: эмуляторы/редкие x86_64 устройства
+- x86: старые x86 эмуляторы
+- universal: универсальный APK (больше размер)
+
+## Примечания
+- Статус: pre-release/release
+- Известные ограничения: ...
+```
+
 ## Тесты
 
 ### Go
