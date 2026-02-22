@@ -1,203 +1,96 @@
-﻿# Protocol_Bunker-android-host
+﻿# Protocol: Bunker Host (Android)
 
-Отдельный Android-host проект для локальной игры Protocol: Bunker.
+Android-приложение, которое запускает локальную комнату для игры **«Протокол: Бункер»** прямо на телефоне.
 
-## Важно: режим сети
+Основной проект игры: [protocol-bunker](https://github.com/FHRha/protocol-bunker)
 
-Проект рассчитан только на локальную компанию рядом:
-- одна Wi-Fi сеть, или
-- hotspot (точка доступа) телефона-хоста.
+## Скачать
 
-WAN/внешний IP в этом проекте не используется.
+Все ссылки ведут на **GitHub Releases -> Latest**. На странице релиза выберите нужный файл:
 
-## Структура
+| Платформа | Файлы в релизе |
+|---|---|
+| Android | [Все необходимые Android-релизы (armv7, arm64 и т.д.)](https://github.com/FHRha/protocol-bunker-android/releases) |
+| macOS | В разработке |
+| Windows | [Setup x64](https://github.com/FHRha/protocol-bunker/releases/latest) · [EXE x64 (zip)](https://github.com/FHRha/protocol-bunker/releases/latest) · [Portable x64](https://github.com/FHRha/protocol-bunker/releases/latest) |
+| Linux x64 | [Public](https://github.com/FHRha/protocol-bunker/releases/latest) · [Server](https://github.com/FHRha/protocol-bunker/releases/latest) |
+| Linux ARM64 | [Public](https://github.com/FHRha/protocol-bunker/releases/latest) · [Server](https://github.com/FHRha/protocol-bunker/releases/latest) |
 
-- `android-app/` - Android приложение (Kotlin, ForegroundService).
-- `server-go/` - локальный Go сервер игры.
-- `shared-contract/` - зафиксированные API-контракты и примеры JSON.
-- `client/`, `shared/`, `scenarios/`, `assets/` - материалы основной игры.
+> Если файлов на странице релиза пока нет — значит сборки еще не залиты (или GitHub решил устроить нам квест).
 
-## Что уже работает
+## Что это за приложение
 
-- Android UI управления сервером: порт, старт/стоп, статус, LAN URL, логи.
-- Запуск через `ForegroundService` + постоянная нотификация.
-- Открытие клиента в браузере и во встроенном WebView.
-- Реальный `client/dist` обслуживается из `server-go` (SPA fallback).
-- Реализованы HTTP/WS API для игрового флоу (лобби -> матч -> завершение).
-- Режим стримера/overlay удалён из Android-host сборки.
-- `DEV_MODE` запускает реальный Go-сервер в режиме `dev_tab` + включает dev-сценарии.
-- Mock backend сохранён только как аварийный fallback (если Go-бинарь не запускается/недоступен).
-- ABI-сборка Go бинаря и упаковка в assets:
-  - `arm64-v8a/server-go`
-  - `armeabi-v7a/server-go`
-  - `x86_64/server-go`
-  - `x86/server-go`
-- CI-скрипты: `go test`, ABI build, `assembleDebug`, `assembleRelease`, опциональные device smoke.
+- Телефон становится хостом комнаты.
+- Друзья подключаются по ссылке.
+- Хост тоже может играть с этого же телефона.
+- Работает только локально: одна Wi-Fi сеть или точка доступа.
 
-## Требования для локальной сборки
+## Что уже есть
+
+- Старт/стоп сервера в Android-приложении.
+- Ссылка для подключения и кнопка копирования.
+- Открытие игры во встроенном окне и в браузере.
+- Логи сервера прямо в приложении.
+- Фоновая работа через уведомление.
+- Режим разработки для проверки механик.
+
+## Быстрый запуск
+
+1. Установите APK из раздела Releases.
+2. Запустите приложение и нажмите старт.
+3. Скопируйте ссылку комнаты и отправьте друзьям.
+4. Играйте.
+
+## Для разработчиков
+
+### Требования
 
 - Go 1.25+
 - JDK 17
-- Android SDK (platform-tools, platforms;android-35, build-tools;35.0.0)
-- Android NDK (рекомендуется `ndk;27.2.12479018`) для ABI-сборки `server-go`
+- Android SDK (`platform-tools`, `platforms;android-35`, `build-tools;35.0.0`)
+- Android NDK (`ndk;27.2.12479018`)
 
-Можно использовать SDK внутри репозитория: `android-app/.android-sdk`.
-
-## Release-конфиг Android
-
-Шаблон: `android-app/keystore.properties.example`
-
-Скопируйте в `android-app/keystore.properties` и заполните:
-- `APP_ID`
-- `VERSION_CODE`
-- `VERSION_NAME`
-- `RELEASE_STORE_FILE`
-- `RELEASE_STORE_PASSWORD`
-- `RELEASE_KEY_ALIAS`
-- `RELEASE_KEY_PASSWORD`
-
-Если release-keystore не задан, `assembleRelease` подписывается debug-ключом (только для теста).
-
-## Сборка
-
-### 1) Go сервер
+### Локальная сборка
 
 ```bash
+# 1) Go
 cd server-go
 go test ./...
 go build ./...
-```
 
-### 2) Android ABI-бинарники
-
-Windows:
-
-```powershell
-cd server-go
+# 2) Go-бинарники под Android ABI
+# Windows:
 .\scripts\build-android-binaries.ps1
-```
-
-Linux/macOS:
-
-```bash
-cd server-go
+# Linux/macOS:
 ./scripts/build-android-binaries.sh
+
+# 3) APK
+cd ../android-app
+./gradlew assembleDebug assembleRelease
 ```
 
-### 3) Android APK
+## Автосборка релизов
 
-```powershell
-cd android-app
-.\gradlew.bat assembleDebug assembleRelease
-```
+Workflow: `.github/workflows/release.yml`
 
-## CI-команды
+После публикации релиза GitHub Actions автоматически:
 
-Linux/macOS:
-
-```bash
-./scripts/ci.sh
-```
-
-Windows:
-
-```powershell
-.\scripts\ci.ps1
-```
-
-Скрипты автоматически:
-- запускают `go test ./...`,
-- собирают ABI-бинарники,
-- запускают `assembleDebug` и `assembleRelease`,
-- при включении device-режима запускают `connectedDebugAndroidTest` и smoke e2e.
-
-Device-режим:
-- Linux/macOS: `RUN_DEVICE_TESTS=1 ./scripts/ci.sh`
-- Windows: `.\scripts\ci.ps1 -RunDeviceTests`
-
-## GitHub Releases (автосборка APK)
-
-В репозитории настроен workflow: `.github/workflows/release.yml`.
-
-Как выпускать версию:
-
-1. Создайте tag в формате `vX.Y.Z` (например, `v0.1.0`).
-2. В GitHub откройте `Releases` -> `Draft a new release`.
-3. Выберите этот tag, заполните заголовок и текст релиза (Markdown), при необходимости отметьте `Set as a pre-release`.
-4. Нажмите `Publish release`.
-
-После публикации GitHub Actions автоматически:
-- запускает `go test ./...`,
-- пересобирает Go ABI-бинарники для `arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`,
-- собирает `assembleRelease` с отдельными ABI flavor-variant,
-- прикрепляет в релиз 5 APK:
+- прогоняет `go test ./...`;
+- собирает Android APK;
+- прикладывает 5 файлов в релиз:
   - `arm64`
   - `armv7`
   - `x86`
-  - `x86_64`
+  - `x8664`
   - `universal`
 
-Важно:
-- workflow ожидает 5 конкретных APK и завершится ошибкой, если какого-то нет;
-- если не настроены секреты keystore, release будет debug-signed (только для теста).
+## Production-подпись APK
 
-Для production-подписи задайте secrets в GitHub:
+В `Settings -> Secrets and variables -> Actions` добавьте:
+
 - `ANDROID_KEYSTORE_BASE64`
 - `ANDROID_STORE_PASSWORD`
 - `ANDROID_KEY_ALIAS`
 - `ANDROID_KEY_PASSWORD`
 
-### Как писать текст релиза (Release notes)
-
-Проще всего использовать такой шаблон в окне GitHub Release:
-
-```md
-## Что нового
-- ...
-
-## Исправления
-- ...
-
-## APK файлы
-- arm64-v8a: большинство современных Android
-- armeabi-v7a: старые ARM-устройства
-- x86_64: эмуляторы/редкие x86_64 устройства
-- x86: старые x86 эмуляторы
-- universal: универсальный APK (больше размер)
-
-## Примечания
-- Статус: pre-release/release
-- Известные ограничения: ...
-```
-
-## Тесты
-
-### Go
-
-```bash
-cd server-go
-go test ./...
-```
-
-### Android instrumented
-
-```powershell
-cd android-app
-.\gradlew.bat connectedDebugAndroidTest
-```
-
-### Smoke e2e через ADB
-
-Windows:
-
-```powershell
-cd android-app
-.\scripts\smoke-e2e.ps1
-```
-
-Linux/macOS:
-
-```bash
-cd android-app
-./scripts/smoke-e2e.sh
-```
+Если эти secrets не заданы, релиз соберется с debug-подписью (только для тестов).
