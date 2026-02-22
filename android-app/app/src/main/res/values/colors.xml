@@ -1,0 +1,23 @@
+<resources>
+    <color name="brand_primary">#165D74</color>
+    <color name="brand_primary_variant">#0F4354</color>
+    <color name="brand_on_primary">#FFFFFF</color>
+    <color name="brand_secondary">#E6A42F</color>
+    <color name="brand_on_secondary">#1A1A1A</color>
+
+    <color name="app_background">#EEF3F9</color>
+    <color name="app_surface">#FFFFFF</color>
+    <color name="app_on_surface">#0F1B2D</color>
+    <color name="app_status_bar">#DCE7F4</color>
+    <color name="app_navigation_bar">#DCE7F4</color>
+
+    <color name="card_stroke">#D4DFED</color>
+    <color name="text_secondary">#5E6E85</color>
+    <color name="field_bg">#ECF2FA</color>
+    <color name="field_stroke">#9CB2CD</color>
+    <color name="chip_bg">#DDE8F6</color>
+
+    <color name="status_running">#118C4F</color>
+    <color name="status_stopped">#8A3C2A</color>
+    <color name="status_error">#B3261E</color>
+</resources>

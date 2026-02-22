@@ -1,0 +1,58 @@
+# OS / Explorer
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors / IDE
+.idea/
+.vscode/
+*.iml
+
+# Logs / temp
+*.log
+*.tmp
+*.swp
+*~
+
+# Environment files
+.env
+.env.*
+
+# Android
+android-app/.gradle/
+android-app/.idea/
+android-app/local.properties
+android-app/.android-sdk/
+android-app/.cxx/
+android-app/.externalNativeBuild/
+android-app/captures/
+android-app/**/build/
+android-app/**/reports/
+android-app/**/test-results/
+
+# Signing files
+android-app/keystore.properties
+android-app/*.jks
+android-app/*.keystore
+android-app/*.p12
+
+# Go
+server-go/bin/
+server-go/build/
+server-go/dist/
+server-go/coverage.out
+server-go/*.test
+
+# JS / Node (if local installs are used)
+client/node_modules/
+client/.npm/
+client/.pnpm-store/
+client/.yarn/
+client/.cache/
+shared/node_modules/
+scenarios/node_modules/
+server-go/*.exe
+android-app/keys/*.jks
+android-app/cmdline-tools.zip
+android-app/last-logcat.txt
+window_dump*.xml

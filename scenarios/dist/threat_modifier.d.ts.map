@@ -1,0 +1,1 @@
+{"version":3,"file":"threat_modifier.d.ts","sourceRoot":"","sources":["../src/threat_modifier.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,cAAc,EAAE,MAAM,gBAAgB,CAAC;AASrD,MAAM,WAAW,iBAAiB;IAChC,KAAK,EAAE,MAAM,CAAC;IACd,OAAO,EAAE,MAAM,EAAE,CAAC;CACnB;AAED,eAAO,MAAM,6BAA6B,GACxC,OAAO,KAAK,CAAC,IAAI,CAAC,cAAc,EAAE,OAAO,GAAG,YAAY,CAAC,CAAC,KACzD,iBAaF,CAAC"}

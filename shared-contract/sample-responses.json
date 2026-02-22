@@ -1,0 +1,113 @@
+{
+  "health": {
+    "status": "ok",
+    "service": "protocol-bunker-host",
+    "port": 8080,
+    "mode": "lan_only"
+  },
+  "scenarios": [
+    {
+      "id": "classic",
+      "name": "Classic Bunker",
+      "description": "Базовый сценарий: раунды, голосование и особые условия."
+    }
+  ],
+  "overlayLinks": {
+    "ok": true,
+    "roomCode": "ABCD",
+    "overlayViewToken": "view-token",
+    "overlayControlToken": "control-token",
+    "lanBase": "http://192.168.0.10:8080",
+    "publicBase": null,
+    "linkVisibility": "lan_only",
+    "buildProfile": "android-host-lan",
+    "links": {
+      "lanBase": "http://192.168.0.10:8080",
+      "publicBase": null,
+      "appUrl": {
+        "lan": "http://192.168.0.10:8080/?room=ABCD"
+      },
+      "viewerUrl": {
+        "lan": "http://192.168.0.10:8080/spectate#v=<base64>"
+      },
+      "overlayViewUrl": {
+        "lan": "http://192.168.0.10:8080/overlay?room=ABCD&token=view-token"
+      },
+      "overlayDebugUrl": {
+        "lan": "http://192.168.0.10:8080/overlay?room=ABCD&token=view-token&debug=1"
+      },
+      "overlayControlUrl": {
+        "lan": "http://192.168.0.10:8080/overlay-control?room=ABCD&token=control-token"
+      },
+      "overlayControlStateUrl": {
+        "lan": "http://192.168.0.10:8080/overlay-control/state?room=ABCD&token=control-token"
+      },
+      "controlPanelUrl": {
+        "lan": "http://192.168.0.10:8080/overlay-control?room=ABCD&token=control-token"
+      }
+    }
+  },
+  "overlayControlState": {
+    "ok": true,
+    "role": "CONTROL",
+    "roomCode": "ABCD",
+    "categories": [
+      { "key": "profession", "label": "Профессия" },
+      { "key": "health", "label": "Здоровье" },
+      { "key": "hobby", "label": "Хобби" }
+    ],
+    "players": [
+      {
+        "playerId": "p_1",
+        "name": "Host",
+        "connected": true,
+        "alive": true,
+        "nickname": "Host",
+        "categories": [
+          { "key": "profession", "label": "Профессия" }
+        ]
+      }
+    ],
+    "overrides": {},
+    "overlayState": {
+      "roomId": "ABCD",
+      "playerCount": 1,
+      "top": {
+        "bunker": { "revealed": 0, "total": 0, "lines": ["скрыто"] },
+        "catastrophe": { "text": "скрыто" },
+        "threats": { "revealed": 0, "total": 0, "lines": ["скрыто"] }
+      },
+      "players": []
+    },
+    "presenterModeEnabled": false,
+    "presenter": {
+      "enabled": false,
+      "roomCode": "ABCD",
+      "roomPhase": "lobby"
+    }
+  },
+  "overlayControlSave": {
+    "ok": true,
+    "roomCode": "ABCD",
+    "overrides": {
+      "top": {
+        "bunkerLines": ["line 1", "line 2"]
+      }
+    }
+  },
+  "overlayControlAction": {
+    "ok": true,
+    "roomCode": "ABCD",
+    "role": "CONTROL",
+    "presenterModeEnabled": true,
+    "presenter": {
+      "enabled": true,
+      "roomPhase": "game",
+      "gamePhase": "reveal"
+    }
+  },
+  "apiError": {
+    "ok": false,
+    "message": "Room not found"
+  }
+}
