@@ -95,9 +95,15 @@ build_one() {
   fi
 
   if [[ -n "$goarm" ]]; then
-    GOOS=android GOARCH="$goarch" GOARM="$goarm" CGO_ENABLED=1 CC="$cc" go build -trimpath -ldflags="-s -w" -o "$out" "$SERVER_DIR"
+    (
+      cd "$SERVER_DIR"
+      GOOS=android GOARCH="$goarch" GOARM="$goarm" CGO_ENABLED=1 CC="$cc" go build -trimpath -ldflags="-s -w" -o "$out" .
+    )
   else
-    GOOS=android GOARCH="$goarch" CGO_ENABLED=1 CC="$cc" go build -trimpath -ldflags="-s -w" -o "$out" "$SERVER_DIR"
+    (
+      cd "$SERVER_DIR"
+      GOOS=android GOARCH="$goarch" CGO_ENABLED=1 CC="$cc" go build -trimpath -ldflags="-s -w" -o "$out" .
+    )
   fi
   chmod +x "$out"
 }
