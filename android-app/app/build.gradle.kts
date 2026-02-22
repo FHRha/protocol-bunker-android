@@ -39,10 +39,17 @@ val releaseKeyAlias = readConfig("RELEASE_KEY_ALIAS", "PB_RELEASE_KEY_ALIAS")
 val releaseKeyPassword = readConfig("RELEASE_KEY_PASSWORD", "PB_RELEASE_KEY_PASSWORD")
     ?: readConfig("keyPassword", "PB_RELEASE_KEY_PASSWORD")
 val enableReleaseLint = readConfig("ENABLE_RELEASE_LINT", "PB_ENABLE_RELEASE_LINT")?.toBooleanStrictOrNull() ?: false
-val enableAbiSplits = readConfig("ENABLE_ABI_SPLITS", "PB_ENABLE_ABI_SPLITS")?.toBooleanStrictOrNull() ?: false
 val workspaceRoot = rootProject.projectDir.resolve("..")
-val runtimeAssetsDir = layout.buildDirectory.dir("generated/runtime-assets")
-val syncRuntimeAssets by tasks.registering(Sync::class) {
+val bundledBinaryRoot = project.layout.projectDirectory.dir("src/main/assets/server-binaries")
+val runtimeAssetsCommonDir = layout.buildDirectory.dir("generated/runtime-assets/common")
+val runtimeAssetsArm64Dir = layout.buildDirectory.dir("generated/runtime-assets/arm64")
+val runtimeAssetsArmv7Dir = layout.buildDirectory.dir("generated/runtime-assets/armv7")
+val runtimeAssetsX86Dir = layout.buildDirectory.dir("generated/runtime-assets/x86")
+val runtimeAssetsX8664Dir = layout.buildDirectory.dir("generated/runtime-assets/x8664")
+val runtimeAssetsUniversalDir = layout.buildDirectory.dir("generated/runtime-assets/universal")
+val supportedAbis = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+
+val syncRuntimeAssetsCommon by tasks.registering(Sync::class) {
     val decksSource = workspaceRoot.resolve("assets/decks")
     val clientDistSource = workspaceRoot.resolve("client/dist")
     val specialsSource = workspaceRoot.resolve("scenarios/classic/SPECIAL_CONDITIONS.json")
@@ -58,8 +65,55 @@ val syncRuntimeAssets by tasks.registering(Sync::class) {
     from(decksSource) { into("server-runtime/assets/decks") }
     from(clientDistSource) { into("server-runtime/client/dist") }
     from(specialsSource) { into("server-runtime/scenarios/classic") }
-    into(runtimeAssetsDir)
+    into(runtimeAssetsCommonDir)
 }
+
+fun registerBinarySyncTask(
+    taskName: String,
+    outputDir: org.gradle.api.provider.Provider<org.gradle.api.file.Directory>,
+    abiDirs: List<String>
+) = tasks.register<Sync>(taskName) {
+    doFirst {
+        abiDirs.forEach { abi ->
+            check(bundledBinaryRoot.file("$abi/server-go").asFile.exists()) {
+                "Missing server binary for ABI $abi: ${bundledBinaryRoot.file("$abi/server-go").asFile.absolutePath}"
+            }
+        }
+    }
+    if (bundledBinaryRoot.file("README.md").asFile.exists()) {
+        from(bundledBinaryRoot.file("README.md")) { into("server-binaries") }
+    }
+    abiDirs.forEach { abi ->
+        from(bundledBinaryRoot.dir(abi)) { into("server-binaries/$abi") }
+    }
+    into(outputDir)
+}
+
+val syncRuntimeAssetsArm64 by registerBinarySyncTask(
+    taskName = "syncRuntimeAssetsArm64",
+    outputDir = runtimeAssetsArm64Dir,
+    abiDirs = listOf("arm64-v8a")
+)
+val syncRuntimeAssetsArmv7 by registerBinarySyncTask(
+    taskName = "syncRuntimeAssetsArmv7",
+    outputDir = runtimeAssetsArmv7Dir,
+    abiDirs = listOf("armeabi-v7a")
+)
+val syncRuntimeAssetsX86 by registerBinarySyncTask(
+    taskName = "syncRuntimeAssetsX86",
+    outputDir = runtimeAssetsX86Dir,
+    abiDirs = listOf("x86")
+)
+val syncRuntimeAssetsX8664 by registerBinarySyncTask(
+    taskName = "syncRuntimeAssetsX8664",
+    outputDir = runtimeAssetsX8664Dir,
+    abiDirs = listOf("x86_64")
+)
+val syncRuntimeAssetsUniversal by registerBinarySyncTask(
+    taskName = "syncRuntimeAssetsUniversal",
+    outputDir = runtimeAssetsUniversalDir,
+    abiDirs = supportedAbis
+)
 val resolvedReleaseStoreFile = releaseStoreFilePath?.let { rawPath ->
     val moduleRelative = file(rawPath)
     if (moduleRelative.exists()) moduleRelative else rootProject.file(rawPath)
@@ -73,7 +127,8 @@ val hasReleaseSigning = !releaseStoreFilePath.isNullOrBlank() &&
 android {
     namespace = "com.protocolbunker.host"
     compileSdk = 35
-    sourceSets.getByName("main").assets.srcDir(runtimeAssetsDir)
+    sourceSets.getByName("main").assets.setSrcDirs(emptyList<String>())
+    sourceSets.getByName("main").assets.srcDir(runtimeAssetsCommonDir)
 
     defaultConfig {
         applicationId = releaseAppId
@@ -83,6 +138,20 @@ android {
         versionName = releaseVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+
+    flavorDimensions += "abi"
+    productFlavors {
+        create("arm64") { dimension = "abi" }
+        create("armv7") { dimension = "abi" }
+        create("x86") { dimension = "abi" }
+        create("x8664") { dimension = "abi" }
+        create("universal") { dimension = "abi" }
+    }
+    sourceSets.getByName("arm64").assets.srcDir(runtimeAssetsArm64Dir)
+    sourceSets.getByName("armv7").assets.srcDir(runtimeAssetsArmv7Dir)
+    sourceSets.getByName("x86").assets.srcDir(runtimeAssetsX86Dir)
+    sourceSets.getByName("x8664").assets.srcDir(runtimeAssetsX8664Dir)
+    sourceSets.getByName("universal").assets.srcDir(runtimeAssetsUniversalDir)
 
     signingConfigs {
         create("release") {
@@ -115,15 +184,6 @@ android {
         }
     }
 
-    splits {
-        abi {
-            isEnable = enableAbiSplits
-            reset()
-            include("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
-            isUniversalApk = enableAbiSplits
-        }
-    }
-
     lint {
         // In restricted networks (where dl.google.com is blocked), lint artifacts may be unreachable.
         // Keep release assembly available by default; enable lint explicitly in full-network CI.
@@ -142,7 +202,12 @@ android {
 }
 
 tasks.named("preBuild").configure {
-    dependsOn(syncRuntimeAssets)
+    dependsOn(syncRuntimeAssetsCommon)
+    dependsOn(syncRuntimeAssetsArm64)
+    dependsOn(syncRuntimeAssetsArmv7)
+    dependsOn(syncRuntimeAssetsX86)
+    dependsOn(syncRuntimeAssetsX8664)
+    dependsOn(syncRuntimeAssetsUniversal)
 }
 
 if (!hasReleaseSigning) {

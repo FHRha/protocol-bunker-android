@@ -13,7 +13,6 @@ jobs:
     env:
       PB_VERSION_CODE: ${{ github.run_number }}
       PB_APP_ID: com.protocolbunker.host
-      PB_ENABLE_ABI_SPLITS: "true"
       SIGNING_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
       SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -86,13 +85,19 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          find android-app/app/build/outputs/apk/release -maxdepth 1 -type f -name "*.apk" -print | sort
-          mapfile -t apks < <(find android-app/app/build/outputs/apk/release -maxdepth 1 -type f -name "*.apk" | sort)
-          if [[ "${#apks[@]}" -lt 5 ]]; then
-            echo "Expected at least 5 APK files (4 ABI + universal), found ${#apks[@]}"
-            exit 1
-          fi
-          for apk in "${apks[@]}"; do
+          expected_apks=(
+            "android-app/app/build/outputs/apk/arm64/release/app-arm64-release.apk"
+            "android-app/app/build/outputs/apk/armv7/release/app-armv7-release.apk"
+            "android-app/app/build/outputs/apk/x86/release/app-x86-release.apk"
+            "android-app/app/build/outputs/apk/x8664/release/app-x8664-release.apk"
+            "android-app/app/build/outputs/apk/universal/release/app-universal-release.apk"
+          )
+          for apk in "${expected_apks[@]}"; do
+            if [[ ! -f "$apk" ]]; then
+              echo "Missing expected release APK: $apk"
+              find android-app/app/build/outputs/apk -type f -name "*.apk" -print | sort || true
+              exit 1
+            fi
             base="$(basename "$apk")"
             cp "$apk" "dist/protocol-bunker-host-${RELEASE_TAG}-${base}"
           done

@@ -129,16 +129,16 @@ Device-режим:
 После публикации GitHub Actions автоматически:
 - запускает `go test ./...`,
 - пересобирает Go ABI-бинарники для `arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`,
-- собирает `assembleRelease` с ABI splits,
+- собирает `assembleRelease` с отдельными ABI flavor-variant,
 - прикрепляет в релиз 5 APK:
-  - `arm64-v8a`
-  - `armeabi-v7a`
-  - `x86_64`
+  - `arm64`
+  - `armv7`
   - `x86`
+  - `x86_64`
   - `universal`
 
 Важно:
-- workflow ожидает минимум 5 APK и завершится ошибкой, если их меньше;
+- workflow ожидает 5 конкретных APK и завершится ошибкой, если какого-то нет;
 - если не настроены секреты keystore, release будет debug-signed (только для теста).
 
 Для production-подписи задайте secrets в GitHub:
