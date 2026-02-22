@@ -76,11 +76,11 @@ jobs:
         run: go test ./...
 
       - name: Build Go Android ABI Binaries
-        run: ./server-go/scripts/build-android-binaries.sh
+        run: bash ./server-go/scripts/build-android-binaries.sh
 
       - name: Build Release APK
         working-directory: android-app
-        run: ./gradlew --no-daemon clean assembleRelease
+        run: bash ./gradlew --no-daemon clean assembleRelease
 
       - name: Prepare Release Artifacts
         shell: bash
