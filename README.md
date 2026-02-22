@@ -146,10 +146,3 @@ Linux/macOS:
 cd android-app
 ./scripts/smoke-e2e.sh
 ```
-
-## Что осталось до первого полностью подтвержденного релиза
-
-- Прогнать полный e2e матч на реальном телефоне/нескольких клиентах (LAN/hotspot).
-- Подтвердить стабильность ForegroundService на Android 12/13/14 на реальном устройстве.
-- Для `connectedDebugAndroidTest` нужен доступ к `dl.google.com` (UTP зависимости AGP).
-- Выполнить release-подпись production-keystore (без debug fallback).
