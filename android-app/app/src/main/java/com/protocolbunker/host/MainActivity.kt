@@ -21,6 +21,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -40,6 +42,7 @@ import kotlinx.coroutines.launch
 class MainActivity : AppCompatActivity() {
     private lateinit var prefs: AppPreferences
 
+    private lateinit var rootContainer: View
     private lateinit var navButton: ImageButton
     private lateinit var startButton: Button
     private lateinit var startHintText: TextView
@@ -64,6 +67,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         bindViews()
+        applySystemInsets()
         requestNotificationsPermissionIfNeeded()
 
         navButton.setOnClickListener { anchor ->
@@ -91,6 +95,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bindViews() {
+        rootContainer = findViewById(R.id.rootContainer)
         navButton = findViewById(R.id.navButton)
         startButton = findViewById(R.id.startButton)
         startHintText = findViewById(R.id.startHintText)
@@ -103,6 +108,24 @@ class MainActivity : AppCompatActivity() {
         lanUrlText = findViewById(R.id.lanUrlText)
         lanModeText = findViewById(R.id.lanModeText)
         backendText = findViewById(R.id.backendText)
+    }
+
+    private fun applySystemInsets() {
+        val baseLeft = rootContainer.paddingLeft
+        val baseTop = rootContainer.paddingTop
+        val baseRight = rootContainer.paddingRight
+        val baseBottom = rootContainer.paddingBottom
+        ViewCompat.setOnApplyWindowInsetsListener(rootContainer) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(
+                baseLeft + bars.left,
+                baseTop + bars.top,
+                baseRight + bars.right,
+                baseBottom + bars.bottom
+            )
+            insets
+        }
+        ViewCompat.requestApplyInsets(rootContainer)
     }
 
     private fun observeRuntime() {
