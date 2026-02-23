@@ -47,6 +47,11 @@ val runtimeAssetsArmv7Dir = layout.buildDirectory.dir("generated/runtime-assets/
 val runtimeAssetsX86Dir = layout.buildDirectory.dir("generated/runtime-assets/x86")
 val runtimeAssetsX8664Dir = layout.buildDirectory.dir("generated/runtime-assets/x8664")
 val runtimeAssetsUniversalDir = layout.buildDirectory.dir("generated/runtime-assets/universal")
+val nativeExecArm64Dir = layout.buildDirectory.dir("generated/native-exec-libs/arm64")
+val nativeExecArmv7Dir = layout.buildDirectory.dir("generated/native-exec-libs/armv7")
+val nativeExecX86Dir = layout.buildDirectory.dir("generated/native-exec-libs/x86")
+val nativeExecX8664Dir = layout.buildDirectory.dir("generated/native-exec-libs/x8664")
+val nativeExecUniversalDir = layout.buildDirectory.dir("generated/native-exec-libs/universal")
 val supportedAbis = listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
 
 val syncRuntimeAssetsCommon by tasks.registering(Sync::class) {
@@ -89,6 +94,27 @@ fun registerBinarySyncTask(
     into(outputDir)
 }
 
+fun registerNativeExecSyncTask(
+    taskName: String,
+    outputDir: org.gradle.api.provider.Provider<org.gradle.api.file.Directory>,
+    abiDirs: List<String>
+) = tasks.register<Sync>(taskName) {
+    doFirst {
+        abiDirs.forEach { abi ->
+            check(bundledBinaryRoot.file("$abi/server-go").asFile.exists()) {
+                "Missing server binary for ABI $abi: ${bundledBinaryRoot.file("$abi/server-go").asFile.absolutePath}"
+            }
+        }
+    }
+    abiDirs.forEach { abi ->
+        from(bundledBinaryRoot.file("$abi/server-go")) {
+            into(abi)
+            rename { "libserver_go.so" }
+        }
+    }
+    into(outputDir)
+}
+
 val syncRuntimeAssetsArm64 by registerBinarySyncTask(
     taskName = "syncRuntimeAssetsArm64",
     outputDir = runtimeAssetsArm64Dir,
@@ -114,6 +140,31 @@ val syncRuntimeAssetsUniversal by registerBinarySyncTask(
     outputDir = runtimeAssetsUniversalDir,
     abiDirs = supportedAbis
 )
+val syncNativeExecArm64 by registerNativeExecSyncTask(
+    taskName = "syncNativeExecArm64",
+    outputDir = nativeExecArm64Dir,
+    abiDirs = listOf("arm64-v8a")
+)
+val syncNativeExecArmv7 by registerNativeExecSyncTask(
+    taskName = "syncNativeExecArmv7",
+    outputDir = nativeExecArmv7Dir,
+    abiDirs = listOf("armeabi-v7a")
+)
+val syncNativeExecX86 by registerNativeExecSyncTask(
+    taskName = "syncNativeExecX86",
+    outputDir = nativeExecX86Dir,
+    abiDirs = listOf("x86")
+)
+val syncNativeExecX8664 by registerNativeExecSyncTask(
+    taskName = "syncNativeExecX8664",
+    outputDir = nativeExecX8664Dir,
+    abiDirs = listOf("x86_64")
+)
+val syncNativeExecUniversal by registerNativeExecSyncTask(
+    taskName = "syncNativeExecUniversal",
+    outputDir = nativeExecUniversalDir,
+    abiDirs = supportedAbis
+)
 val resolvedReleaseStoreFile = releaseStoreFilePath?.let { rawPath ->
     val moduleRelative = file(rawPath)
     if (moduleRelative.exists()) moduleRelative else rootProject.file(rawPath)
@@ -129,6 +180,7 @@ android {
     compileSdk = 35
     sourceSets.getByName("main").assets.setSrcDirs(emptyList<String>())
     sourceSets.getByName("main").assets.srcDir(runtimeAssetsCommonDir)
+    sourceSets.getByName("main").jniLibs.setSrcDirs(emptyList<String>())
 
     defaultConfig {
         applicationId = releaseAppId
@@ -152,6 +204,11 @@ android {
     sourceSets.getByName("x86").assets.srcDir(runtimeAssetsX86Dir)
     sourceSets.getByName("x8664").assets.srcDir(runtimeAssetsX8664Dir)
     sourceSets.getByName("universal").assets.srcDir(runtimeAssetsUniversalDir)
+    sourceSets.getByName("arm64").jniLibs.srcDir(nativeExecArm64Dir)
+    sourceSets.getByName("armv7").jniLibs.srcDir(nativeExecArmv7Dir)
+    sourceSets.getByName("x86").jniLibs.srcDir(nativeExecX86Dir)
+    sourceSets.getByName("x8664").jniLibs.srcDir(nativeExecX8664Dir)
+    sourceSets.getByName("universal").jniLibs.srcDir(nativeExecUniversalDir)
 
     signingConfigs {
         create("release") {
@@ -208,6 +265,11 @@ tasks.named("preBuild").configure {
     dependsOn(syncRuntimeAssetsX86)
     dependsOn(syncRuntimeAssetsX8664)
     dependsOn(syncRuntimeAssetsUniversal)
+    dependsOn(syncNativeExecArm64)
+    dependsOn(syncNativeExecArmv7)
+    dependsOn(syncNativeExecX86)
+    dependsOn(syncNativeExecX8664)
+    dependsOn(syncNativeExecUniversal)
 }
 
 if (!hasReleaseSigning) {

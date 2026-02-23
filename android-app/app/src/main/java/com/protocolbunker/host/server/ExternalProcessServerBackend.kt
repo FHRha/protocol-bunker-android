@@ -39,8 +39,10 @@ internal class ExternalProcessServerBackend : ServerBackend {
         }
 
         if (!binary.canExecute()) {
-            check(binary.setExecutable(true, false)) {
-                "Не удалось выдать execute права бинарю: ${binary.absolutePath}"
+            // Some devices block chmod on non-writable locations (e.g. nativeLibraryDir).
+            runCatching { binary.setExecutable(true, false) }
+            check(binary.canExecute()) {
+                "Бинарь не исполняемый: ${binary.absolutePath}"
             }
         }
 
@@ -79,6 +81,7 @@ internal class ExternalProcessServerBackend : ServerBackend {
         processBuilder.directory(context.filesDir)
 
         logger("Go backend config: port=$port, devMode=$devMode")
+        logger("Go backend binary: ${binary.absolutePath}")
         logger("Go backend paths: assets=${assetsRoot.absolutePath}, client=${clientDistRoot.absolutePath}, scenarios=${scenariosRoot.absolutePath}")
         logger("Go command: ${processArgs.joinToString(" ")}")
 
@@ -180,10 +183,22 @@ internal class ExternalProcessServerBackend : ServerBackend {
 
     companion object {
         private const val BIN_RELATIVE_PATH = "server-go/server-go"
+        private const val NATIVE_BIN_NAME = "libserver_go.so"
 
         fun isBinaryAvailable(context: Context): Boolean = binaryFile(context).exists()
 
-        private fun binaryFile(context: Context): File = File(context.filesDir, BIN_RELATIVE_PATH)
+        private fun binaryFile(context: Context): File {
+            val nativeBinary = nativeBinaryFile(context)
+            if (nativeBinary?.isFile == true) {
+                return nativeBinary
+            }
+            return File(context.filesDir, BIN_RELATIVE_PATH)
+        }
+
+        private fun nativeBinaryFile(context: Context): File? {
+            val nativeDir = context.applicationInfo.nativeLibraryDir ?: return null
+            return File(nativeDir, NATIVE_BIN_NAME)
+        }
 
         private fun classifyEarlyExitHint(stderr: String): String {
             val normalized = stderr.lowercase(Locale.ROOT)
