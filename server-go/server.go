@@ -647,22 +647,22 @@ func (s *server) attachControlCompanionLocked(room *room, conn *websocket.Conn) 
 func (s *server) handleOverlaySubscribeLocked(conn *websocket.Conn, payload map[string]any) {
 	var request clientOverlaySubscribePayload
 	if !decodePayload(payload, &request) {
-		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р В РІР‚С™Р В Р’В Р В РІР‚В¦Р В Р Р‹Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р Р†РІР‚С›РІР‚вЂњ Р В Р Р‹Р Р†Р вЂљРЎвЂєР В Р’В Р РЋРІР‚СћР В Р Р‹Р В РІР‚С™Р В Р’В Р РЋР’ВР В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ў overlaySubscribe.")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	roomCode := strings.ToUpper(strings.TrimSpace(request.RoomCode))
 	token := strings.TrimSpace(request.Token)
 	if roomCode == "" || token == "" {
-		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р Р‹Р РЋРІР‚СљР В Р’В Р вЂ™Р’В¶Р В Р’В Р В РІР‚В¦Р В Р Р‹Р Р†Р вЂљРІвЂћвЂ“ roomCode Р В Р’В Р РЋРІР‚В token Р В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р РЏ companion-Р В Р’В Р РЋРІР‚вЂќР В Р’В Р РЋРІР‚СћР В Р’В Р СћРІР‚ВР В Р’В Р РЋРІР‚СњР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В РІР‚в„–Р В Р Р‹Р Р†Р вЂљР Р‹Р В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦Р В Р’В Р РЋРІР‚ВР В Р Р‹Р В Р РЏ.")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	room := s.rooms[roomCode]
 	if room == nil {
-		s.sendErrorLocked(conn, "Р В Р’В Р РЋРІвЂћСћР В Р’В Р РЋРІР‚СћР В Р’В Р РЋР’ВР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р вЂ™Р’В° Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р’В Р Р†РІР‚С›РІР‚вЂњР В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°.")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	if !s.isControlCompanionTokenLocked(room, token) {
-		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р В РІР‚С™Р В Р’В Р В РІР‚В¦Р В Р Р‹Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р Р†РІР‚С›РІР‚вЂњ control token.")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	s.attachControlCompanionLocked(room, conn)
@@ -671,14 +671,14 @@ func (s *server) handleOverlaySubscribeLocked(conn *websocket.Conn, payload map[
 func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any) {
 	var hello clientHelloPayload
 	if !decodePayload(payload, &hello) {
-		s.sendErrorLocked(conn, "Р В РЎСљР В Р’ВµР В Р вЂ Р В Р’ВµР РЋР вЂљР В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°Р РЋРІР‚С™ hello")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 
 	if hello.Create {
 		hello.Name = strings.TrimSpace(hello.Name)
 		if hello.Name == "" {
-			s.sendErrorLocked(conn, "Р В Р’ВР В РЎВР РЋР РЏ Р В РЎвЂР В РЎвЂ“Р РЋР вЂљР В РЎвЂўР В РЎвЂќР В Р’В° Р В РЎвЂўР В Р’В±Р РЋР РЏР В Р’В·Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР Р‰Р В Р вЂ¦Р В РЎвЂў")
+			s.sendErrorLocked(conn, "Operation failed.")
 			return
 		}
 		if err := s.createRoomAndAttachLocked(conn, hello); err != nil {
@@ -689,18 +689,18 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 
 	roomCode := strings.ToUpper(strings.TrimSpace(hello.RoomCode))
 	if roomCode == "" {
-		s.sendErrorLocked(conn, "Р В РЎСљР РЋРЎвЂњР В Р’В¶Р В Р’ВµР В Р вЂ¦ roomCode")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	room := s.rooms[roomCode]
 	if room == nil {
-		s.sendErrorLocked(conn, "Р В РЎв„ўР В РЎвЂўР В РЎВР В Р вЂ¦Р В Р’В°Р РЋРІР‚С™Р В Р’В° Р В Р вЂ¦Р В Р’Вµ Р В Р вЂ¦Р В Р’В°Р В РІвЂћвЂ“Р В РўвЂР В Р’ВµР В Р вЂ¦Р В Р’В°")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 
 	if companionToken := resolveControlCompanionTokenFromHello(hello); companionToken != "" {
 		if !s.isControlCompanionTokenLocked(room, companionToken) {
-			s.sendErrorLocked(conn, "Р В РЎСљР В Р’ВµР В Р вЂ Р В Р’ВµР РЋР вЂљР В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ control token.")
+			s.sendErrorLocked(conn, "Operation failed.")
 			return
 		}
 		s.attachControlCompanionLocked(room, conn)
@@ -709,7 +709,7 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 
 	hello.Name = strings.TrimSpace(hello.Name)
 	if hello.Name == "" {
-		s.sendErrorLocked(conn, "Р В Р’ВР В РЎВР РЋР РЏ Р В РЎвЂР В РЎвЂ“Р РЋР вЂљР В РЎвЂўР В РЎвЂќР В Р’В° Р В РЎвЂўР В Р’В±Р РЋР РЏР В Р’В·Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР Р‰Р В Р вЂ¦Р В РЎвЂў")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 
@@ -726,7 +726,7 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 	}
 
 	if existing == nil && room.Phase == phaseGame {
-		s.sendErrorLocked(conn, "Р В РЎСљР В Р’Вµ Р РЋРЎвЂњР В РўвЂР В Р’В°Р В Р’В»Р В РЎвЂўР РЋР С“Р РЋР Р‰ Р В Р вЂ Р В РЎвЂўР РЋР С“Р РЋР С“Р РЋРІР‚С™Р В Р’В°Р В Р вЂ¦Р В РЎвЂўР В Р вЂ Р В РЎвЂР РЋРІР‚С™Р РЋР Р‰ Р В РЎвЂР В РЎвЂ“Р РЋР вЂљР В РЎвЂўР В РЎвЂќР В Р’В°. Р В РЎСџР В Р’ВµР РЋР вЂљР В Р’ВµР В Р’В·Р В Р’В°Р В РІвЂћвЂ“Р В РўвЂР В РЎвЂР РЋРІР‚С™Р В Р’Вµ Р В Р вЂ  Р В РЎвЂќР В РЎвЂўР В РЎВР В Р вЂ¦Р В Р’В°Р РЋРІР‚С™Р РЋРЎвЂњ.")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	if existing == nil && len(room.Players) >= s.effectiveMaxPlayers(room) {
@@ -734,7 +734,7 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 		s.writeWSLocked(conn, wsServerMessage{
 			Type: "error",
 			Payload: map[string]any{
-				"message":    fmt.Sprintf("Р В РЎв„ўР В РЎвЂўР В РЎВР В Р вЂ¦Р В Р’В°Р РЋРІР‚С™Р В Р’В° Р В Р’В·Р В Р’В°Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В Р’ВµР В Р вЂ¦Р В Р’В° (Р В РЎВР В Р’В°Р В РЎвЂќР РЋР С“ %d).", maxPlayers),
+				"message":    fmt.Sprintf("Room is full (max %d).", maxPlayers),
 				"code":       "ROOM_FULL",
 				"maxPlayers": maxPlayers,
 			},
@@ -744,7 +744,7 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 
 	joined := s.attachPlayerLocked(room, hello, conn, existing)
 	if joined == nil {
-		s.sendErrorLocked(conn, "Р В РЎСљР В Р’Вµ Р РЋРЎвЂњР В РўвЂР В Р’В°Р В Р’В»Р В РЎвЂўР РЋР С“Р РЋР Р‰ Р В РЎвЂ”Р В РЎвЂўР В РўвЂР В РЎвЂќР В Р’В»Р РЋР вЂ№Р РЋРІР‚РЋР В РЎвЂР РЋРІР‚С™Р РЋР Р‰ Р В РЎвЂР В РЎвЂ“Р РЋР вЂљР В РЎвЂўР В РЎвЂќР В Р’В°")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	s.broadcastRoomStateLocked(room)
@@ -756,7 +756,7 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 func (s *server) createRoomAndAttachLocked(conn *websocket.Conn, hello clientHelloPayload) error {
 	scenarioID := strings.TrimSpace(hello.ScenarioID)
 	if scenarioID == "" {
-		return fmt.Errorf("Р В Р’В Р РЋРЎС™Р В Р Р‹Р РЋРІР‚СљР В Р’В Р вЂ™Р’В¶Р В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦ scenarioId")
+		return fmt.Errorf("Operation failed.")
 	}
 
 	var scenario scenarioMeta
@@ -769,7 +769,7 @@ func (s *server) createRoomAndAttachLocked(conn *websocket.Conn, hello clientHel
 		}
 	}
 	if !scenarioFound {
-		return fmt.Errorf("Р В Р’В Р В Р вЂ№Р В Р Р‹Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р Р‹Р В РІР‚С™Р В Р’В Р РЋРІР‚ВР В Р’В Р Р†РІР‚С›РІР‚вЂњ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р’В Р Р†РІР‚С›РІР‚вЂњР В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦")
+		return fmt.Errorf("Operation failed.")
 	}
 
 	roomCode := s.generateRoomCodeLocked()
@@ -799,7 +799,7 @@ func (s *server) createRoomAndAttachLocked(conn *websocket.Conn, hello clientHel
 	joined := s.attachPlayerLocked(room, hello, conn, nil)
 	if joined == nil {
 		delete(s.rooms, room.Code)
-		return fmt.Errorf("Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р Р‹Р РЋРІР‚СљР В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’В°Р В Р’В Р вЂ™Р’В»Р В Р’В Р РЋРІР‚СћР В Р Р‹Р В РЎвЂњР В Р Р‹Р В Р вЂ° Р В Р’В Р РЋРІР‚вЂќР В Р’В Р РЋРІР‚СћР В Р’В Р СћРІР‚ВР В Р’В Р РЋРІР‚СњР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В РІР‚в„–Р В Р Р‹Р Р†Р вЂљР Р‹Р В Р’В Р РЋРІР‚ВР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р В Р вЂ° Р В Р Р‹Р В РЎвЂњР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В·Р В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р вЂ™Р’ВµР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р РЏ Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚СћР В Р’В Р РЋР’ВР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†Р вЂљРІвЂћвЂ“")
+		return fmt.Errorf("Operation failed.")
 	}
 	s.broadcastRoomStateLocked(room)
 	return nil
@@ -995,19 +995,19 @@ func (s *server) handleUpdateSettingsLocked(conn *websocket.Conn, payload map[st
 func (s *server) handleUpdateRulesLocked(conn *websocket.Conn, payload map[string]any) {
 	room, playerID := s.roomAndPlayerByConnLocked(conn)
 	if room == nil {
-		s.sendErrorLocked(conn, "Р В Р’В Р Р†Р вЂљРІвЂћСћР В Р Р‹Р Р†Р вЂљРІвЂћвЂ“ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р’В Р В РІР‚В  Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚СћР В Р’В Р РЋР’ВР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р вЂ™Р’Вµ")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	if room.Scenario.ID != scenarioClassic {
-		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎСџР В Р Р‹Р В РІР‚С™Р В Р’В Р вЂ™Р’В°Р В Р’В Р В РІР‚В Р В Р’В Р РЋРІР‚ВР В Р’В Р вЂ™Р’В»Р В Р’В Р вЂ™Р’В° Р В Р’В Р СћРІР‚ВР В Р’В Р РЋРІР‚СћР В Р Р‹Р В РЎвЂњР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРІР‚СљР В Р’В Р РЋРІР‚вЂќР В Р’В Р В РІР‚В¦Р В Р Р‹Р Р†Р вЂљРІвЂћвЂ“ Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р вЂ°Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚Сћ Р В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р РЏ Classic.")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	if room.Phase != phaseLobby {
-		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎСџР В Р Р‹Р В РІР‚С™Р В Р’В Р вЂ™Р’В°Р В Р’В Р В РІР‚В Р В Р’В Р РЋРІР‚ВР В Р’В Р вЂ™Р’В»Р В Р’В Р вЂ™Р’В° Р В Р’В Р РЋР’ВР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В¶Р В Р’В Р В РІР‚В¦Р В Р’В Р РЋРІР‚Сћ Р В Р’В Р РЋР’ВР В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦Р В Р Р‹Р В Р РЏР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р В Р вЂ° Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р вЂ°Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚Сћ Р В Р’В Р В РІР‚В  Р В Р’В Р вЂ™Р’В»Р В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В±Р В Р’В Р вЂ™Р’В±Р В Р’В Р РЋРІР‚В.")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	if playerID != room.ControlID {
-		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎвЂєР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р вЂ°Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚Сћ CONTROL Р В Р’В Р РЋР’ВР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В¶Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р Р†Р вЂљРЎв„ў Р В Р’В Р РЋР’ВР В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦Р В Р Р‹Р В Р РЏР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р В Р вЂ° Р В Р’В Р РЋРІР‚вЂќР В Р Р‹Р В РІР‚С™Р В Р’В Р вЂ™Р’В°Р В Р’В Р В РІР‚В Р В Р’В Р РЋРІР‚ВР В Р’В Р вЂ™Р’В»Р В Р’В Р вЂ™Р’В°.")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 
@@ -1030,19 +1030,19 @@ func (s *server) handleUpdateRulesLocked(conn *websocket.Conn, payload map[strin
 		}
 		manualMap, ok := manualRaw.(map[string]any)
 		if !ok {
-			s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р В РІР‚С™Р В Р’В Р В РІР‚В¦Р В Р Р‹Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р Р†РІР‚С›РІР‚вЂњ manualConfig")
+			s.sendErrorLocked(conn, "Operation failed.")
 			return
 		}
 		var manualCfg manualRulesConfig
 		if !decodePayload(manualMap, &manualCfg) {
-			s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р В РІР‚С™Р В Р’В Р В РІР‚В¦Р В Р Р‹Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р Р†РІР‚С›РІР‚вЂњ manualConfig")
+			s.sendErrorLocked(conn, "Operation failed.")
 			return
 		}
 		manualCfg = normalizeManualConfig(manualCfg, presetCount)
 		room.Ruleset = buildManualRuleset(manualCfg, len(room.Players))
 		room.RulesPresetCount = manualCfg.SeedTemplatePlayer
 	default:
-		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р’В Р вЂ™Р’ВµР В Р’В Р РЋРІР‚ВР В Р’В Р вЂ™Р’В·Р В Р’В Р В РІР‚В Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р В РЎвЂњР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р В РІР‚В¦Р В Р Р‹Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р Р†РІР‚С›РІР‚вЂњ Р В Р Р‹Р В РІР‚С™Р В Р’В Р вЂ™Р’ВµР В Р’В Р вЂ™Р’В¶Р В Р’В Р РЋРІР‚ВР В Р’В Р РЋР’В Р В Р’В Р РЋРІР‚вЂќР В Р Р‹Р В РІР‚С™Р В Р’В Р вЂ™Р’В°Р В Р’В Р В РІР‚В Р В Р’В Р РЋРІР‚ВР В Р’В Р вЂ™Р’В».")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 
@@ -1091,30 +1091,30 @@ func (s *server) handleHostTransferLocked(conn *websocket.Conn, payload map[stri
 func (s *server) handleKickFromLobbyLocked(conn *websocket.Conn, payload map[string]any) {
 	room, playerID := s.roomAndPlayerByConnLocked(conn)
 	if room == nil {
-		s.sendErrorLocked(conn, "Р В Р’В Р Р†Р вЂљРІвЂћСћР В Р Р‹Р Р†Р вЂљРІвЂћвЂ“ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р’В Р В РІР‚В  Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚СћР В Р’В Р РЋР’ВР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р вЂ™Р’Вµ")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	if room.Phase != phaseLobby {
-		s.sendErrorLocked(conn, "Р В Р’В Р РЋРІвЂћСћР В Р’В Р РЋРІР‚СћР В Р’В Р РЋР’ВР В Р’В Р вЂ™Р’В°Р В Р’В Р В РІР‚В¦Р В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’В° Р В Р’В Р СћРІР‚ВР В Р’В Р РЋРІР‚СћР В Р Р‹Р В РЎвЂњР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРІР‚СљР В Р’В Р РЋРІР‚вЂќР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В° Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р вЂ°Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚Сћ Р В Р’В Р В РІР‚В  Р В Р’В Р вЂ™Р’В»Р В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В±Р В Р’В Р вЂ™Р’В±Р В Р’В Р РЋРІР‚В.")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	if playerID != room.ControlID {
-		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎвЂєР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р вЂ°Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚Сћ CONTROL Р В Р’В Р РЋР’ВР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В¶Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р Р†Р вЂљРЎв„ў Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚ВР В Р’В Р РЋРІР‚СњР В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р В Р вЂ° Р В Р’В Р РЋРІР‚ВР В Р’В Р РЋРІР‚вЂњР В Р Р‹Р В РІР‚С™Р В Р’В Р РЋРІР‚СћР В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚СћР В Р’В Р В РІР‚В .")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 
 	targetID := strings.TrimSpace(asString(payload["targetPlayerId"]))
 	if targetID == "" {
-		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р Р‹Р РЋРІР‚СљР В Р’В Р вЂ™Р’В¶Р В Р’В Р В РІР‚В¦Р В Р’В Р РЋРІР‚Сћ Р В Р Р‹Р РЋРІР‚СљР В Р’В Р РЋРІР‚СњР В Р’В Р вЂ™Р’В°Р В Р’В Р вЂ™Р’В·Р В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р В Р вЂ° targetPlayerId.")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	if targetID == room.HostID {
-		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р’В Р вЂ™Р’ВµР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р вЂ°Р В Р’В Р вЂ™Р’В·Р В Р Р‹Р В Р РЏ Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚ВР В Р’В Р РЋРІР‚СњР В Р’В Р В РІР‚В¦Р В Р Р‹Р РЋРІР‚СљР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р В Р вЂ° Р В Р Р‹Р Р†Р вЂљР’В¦Р В Р’В Р РЋРІР‚СћР В Р Р‹Р В РЎвЂњР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р вЂ™Р’В°.")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	target := room.Players[targetID]
 	if target == nil {
-		s.sendErrorLocked(conn, "Р В Р’В Р вЂ™Р’ВР В Р’В Р РЋРІР‚вЂњР В Р Р‹Р В РІР‚С™Р В Р’В Р РЋРІР‚СћР В Р’В Р РЋРІР‚Сњ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р’В Р Р†РІР‚С›РІР‚вЂњР В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦.")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	if target.Connection != nil {
@@ -1129,11 +1129,11 @@ func (s *server) handleKickFromLobbyLocked(conn *websocket.Conn, payload map[str
 func (s *server) handleGameActionLocked(conn *websocket.Conn, actionType string, payload map[string]any) {
 	room, playerID := s.roomAndPlayerByConnLocked(conn)
 	if room == nil {
-		s.sendErrorLocked(conn, "Р В Р’В Р Р†Р вЂљРІвЂћСћР В Р Р‹Р Р†Р вЂљРІвЂћвЂ“ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р’В Р В РІР‚В  Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚СћР В Р’В Р РЋР’ВР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р вЂ™Р’Вµ")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	if room.Phase != phaseGame || room.Game == nil {
-		s.sendErrorLocked(conn, "Р В Р’В Р вЂ™Р’ВР В Р’В Р РЋРІР‚вЂњР В Р Р‹Р В РІР‚С™Р В Р’В Р вЂ™Р’В° Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р’В Р Р†РІР‚С›РІР‚вЂњР В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	actionType, payload = normalizeIncomingGameAction(actionType, payload)
@@ -1149,7 +1149,7 @@ func (s *server) handleGameActionLocked(conn *websocket.Conn, actionType string,
 		"markLeftBunker":   true,
 	}
 	if controlOnly[actionType] && playerID != room.ControlID {
-		s.sendErrorLocked(conn, "Р В Р’В Р Р†Р вЂљРЎСљР В Р’В Р вЂ™Р’ВµР В Р’В Р Р†РІР‚С›РІР‚вЂњР В Р Р‹Р В РЎвЂњР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р В РІР‚В Р В Р’В Р РЋРІР‚ВР В Р’В Р вЂ™Р’Вµ Р В Р’В Р СћРІР‚ВР В Р’В Р РЋРІР‚СћР В Р Р‹Р В РЎвЂњР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРІР‚СљР В Р’В Р РЋРІР‚вЂќР В Р’В Р В РІР‚В¦Р В Р’В Р РЋРІР‚Сћ Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р вЂ°Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚Сћ Р В Р Р‹Р В РІР‚С™Р В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В»Р В Р’В Р РЋРІР‚В CONTROL.")
+		s.sendErrorLocked(conn, "Operation failed.")
 		return
 	}
 	log.Printf(
