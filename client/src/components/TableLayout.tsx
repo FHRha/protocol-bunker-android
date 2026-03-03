@@ -99,6 +99,10 @@ export default function TableLayout({
     world && typeof worldThreatsTotal === "number"
       ? Math.max(0, Math.min(world.threats.length, worldThreatsTotal))
       : world?.counts.threats;
+  const visibleThreatsRevealed =
+    world && typeof worldThreatCountDisplay === "number"
+      ? world.threats.slice(0, worldThreatCountDisplay).filter((card) => card.isRevealed).length
+      : world?.threats.filter((card) => card.isRevealed).length ?? 0;
 
   return (
     <div className="table-layout" ref={containerRef}>
@@ -121,8 +125,8 @@ export default function TableLayout({
                 <div className="table-world-title">Катастрофа: {world.disaster.title}</div>
                 <div className="table-world-title">
                   Угрозы:{" "}
-                  {world.threats.some((card) => card.isRevealed)
-                    ? `${world.threats.filter((card) => card.isRevealed).length}/${worldThreatCountDisplay}`
+                  {visibleThreatsRevealed > 0
+                    ? `${visibleThreatsRevealed}/${worldThreatCountDisplay}`
                     : "скрыто"}
                 </div>
                 <div className="table-world-hint">Нажми на центр стола, чтобы посмотреть карточки</div>

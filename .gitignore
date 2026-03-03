@@ -13,6 +13,7 @@ desktop.ini
 *.tmp
 *.swp
 *~
+*.tsbuildinfo
 
 # Environment files
 .env
@@ -56,3 +57,4 @@ android-app/keys/*.jks
 android-app/cmdline-tools.zip
 android-app/last-logcat.txt
 window_dump*.xml
+emu_*.png

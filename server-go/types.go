@@ -50,6 +50,7 @@ type gameSettings struct {
 	PreVoteDiscussionSeconds    int    `json:"preVoteDiscussionSeconds"`
 	EnablePostVoteDiscussion    bool   `json:"enablePostVoteDiscussionTimer"`
 	PostVoteDiscussionSeconds   int    `json:"postVoteDiscussionSeconds"`
+	AutomationMode              string `json:"automationMode"`
 	EnablePresenterMode         bool   `json:"enablePresenterMode"`
 	ContinuePermission          string `json:"continuePermission"`
 	RevealTimeoutAction         string `json:"revealTimeoutAction"`
@@ -57,6 +58,9 @@ type gameSettings struct {
 	SpecialUsage                string `json:"specialUsage"`
 	MaxPlayers                  int    `json:"maxPlayers"`
 	FinalThreatReveal           string `json:"finalThreatReveal"`
+	ForcedDisasterID            string `json:"forcedDisasterId"`
+	// Backward compatibility with older client builds.
+	SelectedDisasterID string `json:"selectedDisasterId,omitempty"`
 }
 
 type manualRulesConfig struct {
@@ -94,6 +98,7 @@ type roomState struct {
 	Phase               string          `json:"phase"`
 	ScenarioMeta        scenarioMeta    `json:"scenarioMeta"`
 	Settings            gameSettings    `json:"settings"`
+	DisasterOptions     []worldCardView `json:"disasterOptions,omitempty"`
 	Ruleset             gameRuleset     `json:"ruleset"`
 	RulesOverriddenHost bool            `json:"rulesOverriddenByHost"`
 	RulesPresetCount    *int            `json:"rulesPresetCount,omitempty"`
@@ -113,9 +118,12 @@ type cardRef struct {
 }
 
 type publicCategoryCard struct {
-	Label    string `json:"labelShort"`
-	ImgURL   string `json:"imgUrl,omitempty"`
-	Revealed bool   `json:"revealed"`
+	InstanceID   string `json:"instanceId,omitempty"`
+	Label        string `json:"labelShort"`
+	ImgURL       string `json:"imgUrl,omitempty"`
+	Revealed     bool   `json:"revealed"`
+	Hidden       bool   `json:"hidden,omitempty"`
+	BackCategory string `json:"backCategory,omitempty"`
 }
 
 type publicCategorySlot struct {
@@ -187,20 +195,21 @@ type specialConditionEffectView struct {
 }
 
 type specialConditionInstanceView struct {
-	InstanceID      string                     `json:"instanceId"`
-	ID              string                     `json:"id"`
-	Title           string                     `json:"title"`
-	Text            string                     `json:"text"`
-	Trigger         string                     `json:"trigger"`
-	Effect          specialConditionEffectView `json:"effect"`
-	Implemented     bool                       `json:"implemented"`
-	RevealedPublic  bool                       `json:"revealedPublic"`
-	Used            bool                       `json:"used"`
-	ImgURL          string                     `json:"imgUrl,omitempty"`
-	NeedsChoice     bool                       `json:"needsChoice,omitempty"`
-	ChoiceKind      string                     `json:"choiceKind,omitempty"`
-	AllowSelfTarget bool                       `json:"allowSelfTarget,omitempty"`
-	TargetScope     string                     `json:"targetScope,omitempty"`
+	InstanceID        string                     `json:"instanceId"`
+	ID                string                     `json:"id"`
+	Title             string                     `json:"title"`
+	Text              string                     `json:"text"`
+	Trigger           string                     `json:"trigger"`
+	Effect            specialConditionEffectView `json:"effect"`
+	Implemented       bool                       `json:"implemented"`
+	RevealedPublic    bool                       `json:"revealedPublic"`
+	Used              bool                       `json:"used"`
+	PendingActivation bool                       `json:"pendingActivation,omitempty"`
+	ImgURL            string                     `json:"imgUrl,omitempty"`
+	NeedsChoice       bool                       `json:"needsChoice,omitempty"`
+	ChoiceKind        string                     `json:"choiceKind,omitempty"`
+	AllowSelfTarget   bool                       `json:"allowSelfTarget,omitempty"`
+	TargetScope       string                     `json:"targetScope,omitempty"`
 }
 
 type worldCardView struct {
@@ -272,27 +281,28 @@ type gameView struct {
 		Specials   []specialConditionInstanceView `json:"specialConditions"`
 	} `json:"you"`
 	Public struct {
-		Players             []publicPlayerView  `json:"players"`
-		RevealedThisRound   []string            `json:"revealedThisRound"`
-		RoundRevealedCount  int                 `json:"roundRevealedCount,omitempty"`
-		RoundTotalAlive     int                 `json:"roundTotalAlive,omitempty"`
-		CurrentTurnPlayerID *string             `json:"currentTurnPlayerId,omitempty"`
-		VotesRemaining      int                 `json:"votesRemainingInRound,omitempty"`
-		VotesTotal          int                 `json:"votesTotalThisRound,omitempty"`
-		RevealLimit         int                 `json:"revealLimit,omitempty"`
-		Voting              *votingView         `json:"voting,omitempty"`
-		VotePhase           *string             `json:"votePhase,omitempty"`
-		VotesPublic         []votePublic        `json:"votesPublic,omitempty"`
-		VotingProgress      *votingProgress     `json:"votingProgress,omitempty"`
-		ThreatModifier      *threatModifierView `json:"threatModifier,omitempty"`
-		CanOpenVotingModal  bool                `json:"canOpenVotingModal,omitempty"`
-		CanContinue         bool                `json:"canContinue,omitempty"`
-		VoteModalOpen       bool                `json:"voteModalOpen,omitempty"`
-		ActiveTimer         *gameTimerState     `json:"activeTimer,omitempty"`
-		LastEliminated      string              `json:"lastEliminated,omitempty"`
-		Winners             []string            `json:"winners,omitempty"`
-		ResolutionNote      string              `json:"resolutionNote,omitempty"`
-		RoundRules          *roundRulesPublic   `json:"roundRules,omitempty"`
+		Players                       []publicPlayerView  `json:"players"`
+		RevealedThisRound             []string            `json:"revealedThisRound"`
+		RoundRevealedCount            int                 `json:"roundRevealedCount,omitempty"`
+		RoundTotalAlive               int                 `json:"roundTotalAlive,omitempty"`
+		CurrentTurnPlayerID           *string             `json:"currentTurnPlayerId,omitempty"`
+		VotesRemaining                int                 `json:"votesRemainingInRound,omitempty"`
+		VotesTotal                    int                 `json:"votesTotalThisRound,omitempty"`
+		RevealLimit                   int                 `json:"revealLimit,omitempty"`
+		Voting                        *votingView         `json:"voting,omitempty"`
+		VotePhase                     *string             `json:"votePhase,omitempty"`
+		DisallowedVoteTargetIDsForYou []string            `json:"disallowedVoteTargetIdsForYou,omitempty"`
+		VotesPublic                   []votePublic        `json:"votesPublic,omitempty"`
+		VotingProgress                *votingProgress     `json:"votingProgress,omitempty"`
+		ThreatModifier                *threatModifierView `json:"threatModifier,omitempty"`
+		CanOpenVotingModal            bool                `json:"canOpenVotingModal,omitempty"`
+		CanContinue                   bool                `json:"canContinue,omitempty"`
+		VoteModalOpen                 bool                `json:"voteModalOpen,omitempty"`
+		ActiveTimer                   *gameTimerState     `json:"activeTimer,omitempty"`
+		LastEliminated                string              `json:"lastEliminated,omitempty"`
+		Winners                       []string            `json:"winners,omitempty"`
+		ResolutionNote                string              `json:"resolutionNote,omitempty"`
+		RoundRules                    *roundRulesPublic   `json:"roundRules,omitempty"`
 	} `json:"public"`
 }
 
@@ -309,13 +319,20 @@ type wsServerMessage struct {
 }
 
 type clientHelloPayload struct {
-	Name        string `json:"name"`
-	RoomCode    string `json:"roomCode,omitempty"`
-	Create      bool   `json:"create,omitempty"`
-	ScenarioID  string `json:"scenarioId,omitempty"`
-	PlayerToken string `json:"playerToken,omitempty"`
-	TabID       string `json:"tabId,omitempty"`
-	SessionID   string `json:"sessionId,omitempty"`
+	Name         string `json:"name"`
+	RoomCode     string `json:"roomCode,omitempty"`
+	Create       bool   `json:"create,omitempty"`
+	ScenarioID   string `json:"scenarioId,omitempty"`
+	PlayerToken  string `json:"playerToken,omitempty"`
+	ControlToken string `json:"controlToken,omitempty"`
+	EditToken    string `json:"editToken,omitempty"`
+	TabID        string `json:"tabId,omitempty"`
+	SessionID    string `json:"sessionId,omitempty"`
+}
+
+type clientOverlaySubscribePayload struct {
+	RoomCode string `json:"roomCode"`
+	Token    string `json:"token"`
 }
 
 type player struct {
@@ -354,6 +371,12 @@ type room struct {
 	LastRoomStateSent bool
 	GameTimer         *time.Timer
 	GameTimerVersion  int64
+	CleanupTimer      *time.Timer
+	CleanupVersion    int64
+	NoConnectedSince  *int64
+	ControlToken      string
+	EditToken         string
+	ControlCompanions map[*websocket.Conn]struct{}
 }
 
 type roomGame interface {
@@ -370,6 +393,7 @@ type server struct {
 	mu                 sync.Mutex
 	rooms              map[string]*room
 	connToID           map[*websocket.Conn]connInfo
+	companionConns     map[*websocket.Conn]companionConnInfo
 	assets             assetCatalog
 	specialDefinitions []specialDefinition
 	upgrader           websocket.Upgrader
@@ -378,6 +402,10 @@ type server struct {
 type connInfo struct {
 	RoomCode string
 	PlayerID string
+}
+
+type companionConnInfo struct {
+	RoomCode string
 }
 
 type config struct {

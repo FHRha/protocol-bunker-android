@@ -47,7 +47,15 @@ var (
 		"biology":    "Биология",
 	}
 
-	specialDeckCategoryName = "Особые условия"
+	specialDeckCategoryName  = "Особые условия"
+	devChoiceEffectType      = "devChooseSpecial"
+	devChoiceTitle           = "Тест особого условия (DEV)"
+	specialAssetFallbackByID = map[string]string{
+		"redeal_facts":   "decks/Особые условия/Давайте на чистоту фактов.jpg",
+		"silence":        "decks/Особые условия/Молчание.jpg",
+		"redeal_biology": "decks/Особые условия/Давайте на чистоту биология.jpg",
+		"protect_brave":  "decks/Особые условия/Защити смелого.jpg",
+	}
 )
 
 type effectiveVoteRecord struct {
@@ -60,7 +68,7 @@ type effectiveVoteRecord struct {
 
 func normalizeSpecialKey(value string) string {
 	lower := strings.ToLower(strings.TrimSpace(value))
-	lower = strings.ReplaceAll(lower, "ё", "е")
+	lower = strings.ReplaceAll(lower, "\u0451", "\u0435")
 	var b strings.Builder
 	b.Grow(len(lower))
 	for _, r := range lower {
@@ -192,25 +200,29 @@ func (g *gameSession) buildSpecialAssetLookup() map[string]string {
 	}
 
 	for deckName, cards := range g.DeckPools {
-		normalizedDeck := normalizeSpecialKey(deckName)
-		if normalizedDeck == "" || (!strings.Contains(normalizedDeck, normalizeSpecialKey(specialDeckCategoryName)) && !strings.Contains(normalizedDeck, "special")) {
-			continue
-		}
 		for _, card := range cards {
 			if card.ID == "" {
 				continue
 			}
-			label := strings.TrimSpace(sanitizeHumanText(card.Label, card.Label))
-			deck := strings.TrimSpace(sanitizeHumanText(deckName, deckName))
+			labelRaw := strings.TrimSpace(card.Label)
+			labelSanitized := strings.TrimSpace(sanitizeHumanText(card.Label, card.Label))
+			deckRaw := strings.TrimSpace(deckName)
+			deckSanitized := strings.TrimSpace(sanitizeHumanText(deckName, deckName))
 			baseName := filepath.Base(strings.ReplaceAll(card.ID, "\\", "/"))
 
 			addCandidate(card.ID, card.ID)
 			addCandidate(strings.TrimPrefix(card.ID, "decks/"), card.ID)
-			addCandidate(label, card.ID)
+			addCandidate(labelRaw, card.ID)
+			addCandidate(labelSanitized, card.ID)
 			addCandidate(baseName, card.ID)
 			addCandidate(trimCardFileExt(baseName), card.ID)
-			addCandidate(deck+"/"+baseName, card.ID)
-			addCandidate(deck+"/"+trimCardFileExt(baseName), card.ID)
+			for _, deck := range []string{deckRaw, deckSanitized} {
+				if deck == "" {
+					continue
+				}
+				addCandidate(deck+"/"+baseName, card.ID)
+				addCandidate(deck+"/"+trimCardFileExt(baseName), card.ID)
+			}
 		}
 	}
 	return assetLookup
@@ -228,12 +240,28 @@ func (g *gameSession) resolveSpecialAssetID(def specialDefinition, assetLookup m
 			}
 		}
 	}
+	if fallback, ok := specialAssetFallbackByID[strings.TrimSpace(def.ID)]; ok {
+		return normalizeAssetIDPath(fallback)
+	}
 	return normalizeAssetIDPath(def.AssetID)
 }
 
 func (g *gameSession) assignInitialSpecialsForPlayer(player *gamePlayer, assetLookup map[string]string) {
 	if player == nil {
 		return
+	}
+	if g.IsDev {
+		if devChoice, ok := g.buildDevChoiceDefinition(player.PlayerID); ok {
+			player.Specials = []specialConditionState{
+				{
+					InstanceID:     g.nextSpecialInstanceID(player.PlayerID),
+					Definition:     devChoice,
+					RevealedPublic: true,
+					Used:           false,
+				},
+			}
+			return
+		}
 	}
 	def := g.drawSpecialFromPool()
 	rawAssetID := def.AssetID
@@ -249,52 +277,119 @@ func (g *gameSession) assignInitialSpecialsForPlayer(player *gamePlayer, assetLo
 			Used:           false,
 		},
 	}
-	if g.IsDev {
-		if devChoice, ok := g.buildDevChoiceDefinition(player.PlayerID); ok {
-			player.Specials = append(player.Specials, specialConditionState{
-				InstanceID:     g.nextSpecialInstanceID(player.PlayerID),
-				Definition:     devChoice,
-				RevealedPublic: true,
-				Used:           false,
-			})
-		}
-	}
 }
 
-func (g *gameSession) buildDevChoiceDefinition(playerID string) (specialDefinition, bool) {
-	var base specialDefinition
-	found := false
-	for _, item := range implementedSpecialDefinitions {
-		if item.Effect.Type == "forceRevealCategoryForAll" {
-			base = item
-			found = true
-			break
+func isDevChoiceSpecialID(definitionID string) bool {
+	return strings.HasPrefix(strings.TrimSpace(definitionID), "dev-choice-")
+}
+
+func copySpecialDefinition(def specialDefinition) specialDefinition {
+	copyDef := def
+	if def.Effect.Params != nil {
+		params := make(map[string]any, len(def.Effect.Params))
+		for k, v := range def.Effect.Params {
+			params[k] = v
 		}
+		copyDef.Effect.Params = params
 	}
-	if !found {
-		for _, item := range implementedSpecialDefinitions {
-			if item.ChoiceKind != "" && item.ChoiceKind != "none" {
-				base = item
-				found = true
-				break
+	if def.Requires != nil {
+		copyDef.Requires = append([]string(nil), def.Requires...)
+	}
+	return copyDef
+}
+
+func (g *gameSession) specialCatalogForDev() []specialDefinition {
+	if len(g.specialCatalog) > 0 {
+		return g.specialCatalog
+	}
+	return implementedSpecialDefinitions
+}
+
+func (g *gameSession) buildDevSpecialOptions() []map[string]any {
+	catalog := g.specialCatalogForDev()
+	options := make([]map[string]any, 0, len(catalog))
+	seen := map[string]bool{}
+	for _, def := range catalog {
+		if !def.Implemented {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(def.Effect.Type), devChoiceEffectType) {
+			continue
+		}
+		id := strings.TrimSpace(def.ID)
+		if id == "" {
+			continue
+		}
+		key := normalizeSpecialKey(id)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		title := strings.TrimSpace(def.Title)
+		if title == "" {
+			title = id
+		}
+		options = append(options, map[string]any{
+			"id":    id,
+			"title": title,
+		})
+	}
+	return options
+}
+
+func (g *gameSession) findSpecialDefinitionForDevChoice(lookupRaw string) (specialDefinition, bool) {
+	lookup := normalizeSpecialKey(strings.TrimSpace(lookupRaw))
+	if lookup == "" {
+		return specialDefinition{}, false
+	}
+	for _, def := range g.specialCatalogForDev() {
+		if !def.Implemented {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(def.Effect.Type), devChoiceEffectType) {
+			continue
+		}
+		candidates := specialLookupCandidates(def)
+		for _, candidate := range candidates {
+			if normalizeSpecialKey(candidate) == lookup {
+				return copySpecialDefinition(def), true
 			}
 		}
 	}
-	if !found {
+	return specialDefinition{}, false
+}
+
+func (g *gameSession) buildDevSpecialFromTemplate(currentDefinitionID string, template specialDefinition) specialDefinition {
+	copyDef := copySpecialDefinition(template)
+	copyDef.ID = strings.TrimSpace(currentDefinitionID)
+	copyDef.Title = strings.TrimSpace(template.Title) + " (DEV)"
+	copyDef.Trigger = "active"
+	copyDef.Implemented = true
+	if copyDef.Effect.Type == "" {
+		copyDef.Effect.Type = "none"
+	}
+	return copyDef
+}
+
+func (g *gameSession) buildDevChoiceDefinition(playerID string) (specialDefinition, bool) {
+	options := g.buildDevSpecialOptions()
+	if len(options) == 0 {
 		return specialDefinition{}, false
 	}
-
-	copyDef := base
-	copyDef.ID = fmt.Sprintf("dev-choice-%s", playerID)
-	copyDef.Title = strings.TrimSpace(base.Title) + "(DEV)"
-	copyDef.Implemented = true
-	if base.Effect.Type == "forceRevealCategoryForAll" {
-		copyDef.Requires = nil
-		copyDef.ChoiceKind = "category"
-		copyDef.TargetScope = ""
-		copyDef.AllowSelf = false
-	}
-	return copyDef, true
+	return specialDefinition{
+		ID:      fmt.Sprintf("dev-choice-%s", playerID),
+		Title:   devChoiceTitle,
+		Text:    "Выберите любое особое условие для теста. После применения карта DEV снова доступна.",
+		Trigger: "active",
+		Effect: specialEffect{
+			Type: devChoiceEffectType,
+			Params: map[string]any{
+				"specialOptions": options,
+			},
+		},
+		Implemented: true,
+		ChoiceKind:  "special",
+	}, true
 }
 
 func (g *gameSession) nextSpecialInstanceID(playerID string) string {
@@ -335,34 +430,166 @@ func (g *gameSession) playerHasRevealedSpecial(player *gamePlayer) bool {
 func (g *gameSession) buildSpecialInstances(player *gamePlayer) []specialConditionInstanceView {
 	out := make([]specialConditionInstanceView, 0, len(player.Specials))
 	for _, special := range player.Specials {
+		choiceKind := effectiveSpecialChoiceKind(special.Definition)
+		targetScope := effectiveSpecialTargetScope(special.Definition, choiceKind)
 		view := specialConditionInstanceView{
-			InstanceID:     special.InstanceID,
-			ID:             special.Definition.ID,
-			Title:          special.Definition.Title,
-			Text:           special.Definition.Text,
-			Trigger:        special.Definition.Trigger,
-			Implemented:    special.Definition.Implemented,
-			RevealedPublic: special.RevealedPublic,
-			Used:           special.Used,
-			ImgURL:         specialImageURL(special.Definition),
+			InstanceID:        special.InstanceID,
+			ID:                special.Definition.ID,
+			Title:             special.Definition.Title,
+			Text:              special.Definition.Text,
+			Trigger:           special.Definition.Trigger,
+			Implemented:       special.Definition.Implemented,
+			RevealedPublic:    special.RevealedPublic,
+			Used:              special.Used,
+			PendingActivation: special.PendingActivation,
+			ImgURL:            specialImageURL(special.Definition),
 			Effect: specialConditionEffectView{
 				Type:   special.Definition.Effect.Type,
 				Params: special.Definition.Effect.Params,
 			},
 		}
-		if special.Definition.ChoiceKind != "" {
-			view.ChoiceKind = special.Definition.ChoiceKind
-			view.NeedsChoice = special.Definition.ChoiceKind != "none"
+		if choiceKind != "" {
+			view.ChoiceKind = choiceKind
+			view.NeedsChoice = choiceKind != "none"
 		}
 		if special.Definition.AllowSelf {
 			view.AllowSelfTarget = true
 		}
-		if special.Definition.TargetScope != "" {
-			view.TargetScope = special.Definition.TargetScope
+		if targetScope != "" {
+			view.TargetScope = targetScope
 		}
 		out = append(out, view)
 	}
 	return out
+}
+
+func effectiveSpecialChoiceKind(def specialDefinition) string {
+	kind := strings.TrimSpace(strings.ToLower(def.ChoiceKind))
+	switch kind {
+	case "player", "neighbor", "category", "bunker", "special", "none":
+		return kind
+	}
+	effectType := strings.TrimSpace(strings.ToLower(def.Effect.Type))
+	switch effectType {
+	case "banvoteagainst",
+		"disablevote",
+		"doublevotesagainst_and_disableselfvote",
+		"replacerevealedcard",
+		"discardrevealedanddealhidden",
+		"stealbaggage_and_givespecial":
+		return "player"
+	case "swaprevealedwithneighbor":
+		return "neighbor"
+	case "forcerevealcategoryforall":
+		return "category"
+	case "devchoosespecial":
+		return "special"
+	case "replacebunkercard", "discardbunkercard", "stealbunkercardtoexiled":
+		return "bunker"
+	}
+	if strings.Contains(effectType, "bunker") {
+		return "bunker"
+	}
+	targetRaw := strings.TrimSpace(strings.ToLower(asString(def.Effect.Params["target"])))
+	if strings.Contains(targetRaw, "bunker") {
+		return "bunker"
+	}
+	return "none"
+}
+
+func effectiveSpecialTargetScope(def specialDefinition, choiceKind string) string {
+	scope := strings.TrimSpace(strings.ToLower(def.TargetScope))
+	switch scope {
+	case "self", "neighbors", "any_alive", "any_including_self":
+		return scope
+	}
+	switch strings.TrimSpace(strings.ToLower(def.Effect.Type)) {
+	case "swaprevealedwithneighbor":
+		return "neighbors"
+	case "banvoteagainst",
+		"disablevote",
+		"doublevotesagainst_and_disableselfvote",
+		"replacerevealedcard",
+		"discardrevealedanddealhidden",
+		"stealbaggage_and_givespecial":
+		return "any_alive"
+	}
+	if choiceKind == "neighbor" {
+		return "neighbors"
+	}
+	if choiceKind == "player" {
+		return "any_alive"
+	}
+	return ""
+}
+
+func (g *gameSession) hasRevealedBunkerCards() bool {
+	if g.IsDev {
+		return len(g.World.Bunker) > 0
+	}
+	for _, card := range g.World.Bunker {
+		if card.IsRevealed {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *gameSession) findPlayerSpecialByInstance(player *gamePlayer, specialInstanceID string) *specialConditionState {
+	if player == nil || specialInstanceID == "" {
+		return nil
+	}
+	for i := range player.Specials {
+		if player.Specials[i].InstanceID == specialInstanceID {
+			return &player.Specials[i]
+		}
+	}
+	return nil
+}
+
+func (g *gameSession) revealedBunkerIndices() []int {
+	if g.IsDev {
+		indices := make([]int, 0, len(g.World.Bunker))
+		for idx := range g.World.Bunker {
+			indices = append(indices, idx)
+		}
+		return indices
+	}
+	indices := make([]int, 0, len(g.World.Bunker))
+	for idx, card := range g.World.Bunker {
+		if card.IsRevealed {
+			indices = append(indices, idx)
+		}
+	}
+	return indices
+}
+
+func (g *gameSession) resolveBunkerIndex(payload map[string]any, allowRandom bool) (int, string) {
+	raw, hasValue := payload["bunkerIndex"]
+	missingSelection := !hasValue || raw == nil
+	if !missingSelection {
+		if rawText, ok := raw.(string); ok && strings.TrimSpace(rawText) == "" {
+			missingSelection = true
+		}
+	}
+	if missingSelection {
+		if !allowRandom {
+			return -1, "Нужно выбрать карту бункера."
+		}
+		revealed := g.revealedBunkerIndices()
+		if len(revealed) == 0 {
+			return -1, "Нет раскрытых карт бункера."
+		}
+		return revealed[g.rng.Intn(len(revealed))], ""
+	}
+	index := asInt(raw, -1)
+	if index < 0 || index >= len(g.World.Bunker) {
+		return -1, "Некорректная карта бункера."
+	}
+	if !g.IsDev && !g.World.Bunker[index].IsRevealed {
+		return -1, "Можно выбрать только раскрытую карту бункера."
+	}
+	return index, ""
 }
 
 func (g *gameSession) clearActiveTimer() {
@@ -601,7 +828,7 @@ func (g *gameSession) startTieBreakRevote(candidates []string) {
 	for _, candidateID := range candidates {
 		g.VoteCandidates[candidateID] = true
 	}
-	g.RevoteDisallow = map[string]bool{}
+	g.RevoteDisallowByVoter = map[string]map[string]bool{}
 	g.resetVotesForRevote()
 	g.VotePhase = votePhaseVoting
 	g.clearActiveTimer()
@@ -640,10 +867,12 @@ func (g *gameSession) buildEffectiveVotes(source map[string]voteRecord) map[stri
 				info.ReasonText = reason
 			}
 		}
-		if info.TargetID != "" && g.RevoteDisallow[info.TargetID] {
-			info.Status = "invalid"
-			if info.ReasonText == "" {
-				info.ReasonText = "Нельзя голосовать за этого кандидата."
+		if info.TargetID != "" {
+			if disallow := g.RevoteDisallowByVoter[playerID]; disallow != nil && disallow[info.TargetID] {
+				info.Status = "invalid"
+				if info.ReasonText == "" {
+					info.ReasonText = "Нельзя голосовать за этого кандидата."
+				}
 			}
 		}
 		if info.TargetID != "" && !g.VoteCandidates[info.TargetID] {
@@ -723,7 +952,15 @@ func (g *gameSession) removeFromVoting(targetID string) {
 	delete(g.VoteWeights, targetID)
 	delete(g.VoteDisabled, targetID)
 	delete(g.AutoWastedVoters, targetID)
-	delete(g.RevoteDisallow, targetID)
+	for voterID, restricted := range g.RevoteDisallowByVoter {
+		if restricted == nil {
+			continue
+		}
+		delete(restricted, targetID)
+		if len(restricted) == 0 {
+			delete(g.RevoteDisallowByVoter, voterID)
+		}
+	}
 	if g.DoubleAgainst == targetID {
 		g.DoubleAgainst = ""
 	}
@@ -751,13 +988,26 @@ func (g *gameSession) handleOnOwnerEliminated(player *gamePlayer) {
 		if special.Used || special.Definition.Trigger != "onOwnerEliminated" || !special.Definition.Implemented {
 			continue
 		}
-		special.Used = true
-		if special.Definition.Effect.Type == "addFinalThreat" {
-			threatKey := asString(special.Definition.Effect.Params["threatKey"])
-			if strings.TrimSpace(threatKey) == "" {
-				threatKey = special.Definition.ID
+		choiceKind := effectiveSpecialChoiceKind(special.Definition)
+		if choiceKind != "none" {
+			if choiceKind == "bunker" && !g.hasRevealedBunkerCards() {
+				special.Used = true
+				special.PendingActivation = false
+				continue
 			}
-			g.FinalThreats = append(g.FinalThreats, threatKey)
+			special.PendingActivation = true
+			if !special.RevealedPublic {
+				special.RevealedPublic = true
+			}
+			continue
+		}
+
+		result := g.applySpecialEffect(player, special, map[string]any{})
+		if result.Error != "" {
+			continue
+		}
+		if !special.RevealedPublic {
+			special.RevealedPublic = true
 		}
 	}
 }
@@ -1010,13 +1260,7 @@ func (g *gameSession) applySpecial(actorID, specialInstanceID string, payload ma
 		return gameActionResult{Error: "Особое условие не найдено."}
 	}
 
-	var special *specialConditionState
-	for i := range player.Specials {
-		if player.Specials[i].InstanceID == specialInstanceID {
-			special = &player.Specials[i]
-			break
-		}
-	}
+	special := g.findPlayerSpecialByInstance(player, specialInstanceID)
 	if special == nil {
 		return gameActionResult{Error: "Особое условие не найдено."}
 	}
@@ -1038,11 +1282,16 @@ func (g *gameSession) applySpecial(actorID, specialInstanceID string, payload ma
 	for k, v := range payload {
 		effectivePayload[k] = v
 	}
-	choiceKind := special.Definition.ChoiceKind
-	targetScope := special.Definition.TargetScope
+	choiceKind := effectiveSpecialChoiceKind(special.Definition)
+	targetScope := effectiveSpecialTargetScope(special.Definition, choiceKind)
 
 	if choiceKind != "" && choiceKind != "none" && len(payload) == 0 {
-		if !(choiceKind == "category" && asString(special.Definition.Effect.Params["category"]) != "") {
+		allowImplicitChoice := choiceKind == "category" && asString(special.Definition.Effect.Params["category"]) != ""
+		if choiceKind == "bunker" {
+			effectType := strings.TrimSpace(special.Definition.Effect.Type)
+			allowImplicitChoice = effectType == "discardBunkerCard" || effectType == "stealBunkerCardToExiled"
+		}
+		if !allowImplicitChoice {
 			return gameActionResult{Error: "Нужен выбор для применения карты."}
 		}
 	}
@@ -1078,6 +1327,8 @@ func (g *gameSession) applySpecial(actorID, specialInstanceID string, payload ma
 		return gameActionResult{Error: errText}
 	}
 
+	wasDevChoiceCard := g.IsDev && isDevChoiceSpecialID(special.Definition.ID)
+	effectTypeBeforeApply := strings.TrimSpace(strings.ToLower(special.Definition.Effect.Type))
 	result := g.applySpecialEffect(player, special, effectivePayload)
 	if result.Error != "" {
 		return result
@@ -1085,9 +1336,154 @@ func (g *gameSession) applySpecial(actorID, specialInstanceID string, payload ma
 	if !result.StateChanged {
 		return result
 	}
+	special = g.findPlayerSpecialByInstance(player, specialInstanceID)
+	if special == nil {
+		return result
+	}
+	if wasDevChoiceCard && effectTypeBeforeApply != strings.ToLower(devChoiceEffectType) {
+		if chooser, ok := g.buildDevChoiceDefinition(player.PlayerID); ok {
+			special.Definition = chooser
+			special.Used = false
+			special.PendingActivation = false
+			special.RevealedPublic = true
+			result.StateChanged = true
+		}
+	}
 	if !special.RevealedPublic {
 		special.RevealedPublic = true
 		result.Events = append(result.Events, g.makeEvent("info", fmt.Sprintf("%s применяет особое условие: %s.", player.Name, special.Definition.Title)))
+	}
+	return result
+}
+
+func (g *gameSession) applySpecialWithPending(actorID, specialInstanceID string, payload map[string]any) gameActionResult {
+	player := g.Players[actorID]
+	if player == nil {
+		return gameActionResult{Error: "Игрок не найден."}
+	}
+	if specialInstanceID == "" {
+		return gameActionResult{Error: "Особое условие не найдено."}
+	}
+
+	special := g.findPlayerSpecialByInstance(player, specialInstanceID)
+	if special == nil {
+		return gameActionResult{Error: "Особое условие не найдено."}
+	}
+	if !special.Definition.Implemented {
+		return gameActionResult{Error: "Эта карта ещё не реализована."}
+	}
+	if special.Used {
+		return gameActionResult{Error: "Эта карта уже использована."}
+	}
+
+	trigger := special.Definition.Trigger
+	if trigger == "secret_onEliminate" {
+		return gameActionResult{Error: "Эта карта срабатывает автоматически."}
+	}
+	if trigger == "onOwnerEliminated" {
+		if player.Status != playerEliminated {
+			return gameActionResult{Error: "Эта карта доступна только после вашего изгнания."}
+		}
+		if !special.PendingActivation {
+			return gameActionResult{Error: "Эту карту сейчас нельзя применить."}
+		}
+	} else {
+		if player.Status != playerAlive {
+			return gameActionResult{Error: "Игрок не может выполнить действие."}
+		}
+		if g.Phase == scenarioPhaseEnded {
+			return gameActionResult{Error: "Игра уже завершена."}
+		}
+		if !g.IsDev && g.Settings.SpecialUsage == "only_during_voting" && g.Phase != scenarioPhaseVoting {
+			return gameActionResult{Error: "Особые условия можно использовать только во время голосования."}
+		}
+	}
+
+	effectivePayload := map[string]any{}
+	for k, v := range payload {
+		effectivePayload[k] = v
+	}
+	choiceKind := effectiveSpecialChoiceKind(special.Definition)
+	targetScope := effectiveSpecialTargetScope(special.Definition, choiceKind)
+
+	if choiceKind != "" && choiceKind != "none" && len(payload) == 0 {
+		allowImplicitChoice := choiceKind == "category" && asString(special.Definition.Effect.Params["category"]) != ""
+		if choiceKind == "bunker" {
+			effectType := strings.TrimSpace(special.Definition.Effect.Type)
+			allowImplicitChoice = effectType == "discardBunkerCard" || effectType == "stealBunkerCardToExiled"
+		}
+		if !allowImplicitChoice {
+			return gameActionResult{Error: "Нужен выбор для применения карты."}
+		}
+	}
+
+	if targetScope == "neighbors" {
+		targetID, side, errText := g.resolveNeighborChoice(actorID, effectivePayload)
+		if errText != "" {
+			return gameActionResult{Error: errText}
+		}
+		effectivePayload["targetPlayerId"] = targetID
+		effectivePayload["side"] = side
+	} else if targetScope == "self" {
+		effectivePayload["targetPlayerId"] = actorID
+	} else if targetScope == "any_alive" || targetScope == "any_including_self" {
+		candidates := g.getTargetCandidates(targetScope, actorID)
+		targetID := strings.TrimSpace(asString(effectivePayload["targetPlayerId"]))
+		if targetID == "" {
+			return gameActionResult{Error: "Нужно выбрать цель."}
+		}
+		if !slices.Contains(candidates, targetID) {
+			return gameActionResult{Error: "Недопустимая цель."}
+		}
+	}
+
+	if choiceKind == "player" && !special.Definition.AllowSelf {
+		targetID := strings.TrimSpace(asString(effectivePayload["targetPlayerId"]))
+		if targetID != "" && targetID == actorID {
+			return gameActionResult{Error: "Нельзя выбрать себя."}
+		}
+	}
+
+	if errText := g.validateSpecialRequires(player, special, effectivePayload); errText != "" {
+		return gameActionResult{Error: errText}
+	}
+
+	wasDevChoiceCard := g.IsDev && isDevChoiceSpecialID(special.Definition.ID)
+	effectTypeBeforeApply := strings.TrimSpace(strings.ToLower(special.Definition.Effect.Type))
+	result := g.applySpecialEffect(player, special, effectivePayload)
+	if result.Error != "" {
+		return result
+	}
+	special = g.findPlayerSpecialByInstance(player, specialInstanceID)
+	if special == nil {
+		if !result.StateChanged {
+			return result
+		}
+		return result
+	}
+	if wasDevChoiceCard && result.StateChanged && effectTypeBeforeApply != strings.ToLower(devChoiceEffectType) {
+		if chooser, ok := g.buildDevChoiceDefinition(player.PlayerID); ok {
+			special.Definition = chooser
+			special.Used = false
+			special.PendingActivation = false
+			special.RevealedPublic = true
+			result.StateChanged = true
+		}
+	}
+	if trigger == "onOwnerEliminated" && special.PendingActivation {
+		special.PendingActivation = false
+		result.StateChanged = true
+	}
+	if !special.RevealedPublic {
+		special.RevealedPublic = true
+		result.Events = append(
+			result.Events,
+			g.makeEvent("info", fmt.Sprintf("%s применяет особое условие: %s.", player.Name, special.Definition.Title)),
+		)
+		result.StateChanged = true
+	}
+	if !result.StateChanged {
+		return result
 	}
 	return result
 }
@@ -1159,6 +1555,35 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 	}
 
 	switch effectType {
+	case devChoiceEffectType:
+		if !g.IsDev {
+			return gameActionResult{Error: "DEV-карта доступна только в dev_test."}
+		}
+		selectedID := strings.TrimSpace(asString(payload["specialId"]))
+		if selectedID == "" {
+			return gameActionResult{Error: "Нужно выбрать особое условие."}
+		}
+		selectedDef, ok := g.findSpecialDefinitionForDevChoice(selectedID)
+		if !ok {
+			return gameActionResult{Error: "Выбранное особое условие не найдено."}
+		}
+		assetLookup := g.buildSpecialAssetLookup()
+		nextDef := g.buildDevSpecialFromTemplate(special.Definition.ID, selectedDef)
+		resolvedAssetID := g.resolveSpecialAssetID(selectedDef, assetLookup)
+		if strings.TrimSpace(resolvedAssetID) == "" {
+			resolvedAssetID = g.resolveSpecialAssetID(nextDef, assetLookup)
+		}
+		nextDef.AssetID = resolvedAssetID
+		special.Definition = nextDef
+		special.Used = false
+		special.PendingActivation = false
+		special.RevealedPublic = true
+		return gameActionResult{
+			StateChanged: true,
+			Events: []gameEvent{
+				g.makeEvent("info", fmt.Sprintf("%s выбирает для DEV-карты: %s.", player.Name, selectedDef.Title)),
+			},
+		}
 	case "banVoteAgainst":
 		if g.Phase != scenarioPhaseVoting {
 			return gameActionResult{Error: "Сейчас нет голосования."}
@@ -1229,11 +1654,19 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 			return gameActionResult{Error: "Нет данных голосования."}
 		}
 		if asBool(def.Effect.Params["disallowPreviousCandidate"]) {
-			_, topCandidates := g.computeVoteTotals(source)
-			g.RevoteDisallow = map[string]bool{}
-			for _, candidateID := range topCandidates {
-				g.RevoteDisallow[candidateID] = true
+			disallowByVoter := make(map[string]map[string]bool, len(source))
+			for voterID, record := range source {
+				if !record.IsValid || strings.TrimSpace(record.TargetID) == "" {
+					continue
+				}
+				if !g.VoteCandidates[record.TargetID] {
+					continue
+				}
+				disallowByVoter[voterID] = map[string]bool{record.TargetID: true}
 			}
+			g.RevoteDisallowByVoter = disallowByVoter
+		} else {
+			g.RevoteDisallowByVoter = map[string]map[string]bool{}
 		}
 		g.resetVotesForRevote()
 		g.VotePhase = votePhaseVoting
@@ -1346,6 +1779,75 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 		special.Used = true
 		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s перераздаёт раскрытые карты категории %s.", player.Name, deckName))}}
 
+	case "replaceBunkerCard":
+		index, errText := g.resolveBunkerIndex(payload, false)
+		if errText != "" {
+			return gameActionResult{Error: errText}
+		}
+		bunkerDeck, _, _ := resolveWorldDeckNames(g.DeckPools)
+		if bunkerDeck == "" {
+			return gameActionResult{Error: "Нет колоды бункера для замены."}
+		}
+		replacement, nextPool, ok := drawRandomCard(g.DeckPools[bunkerDeck], g.rng)
+		if !ok {
+			return gameActionResult{Error: "Нет доступных карт бункера для замены."}
+		}
+		g.DeckPools[bunkerDeck] = nextPool
+		target := &g.World.Bunker[index]
+		target.ID = replacement.ID
+		target.Title = replacement.Label
+		target.Description = replacement.Label
+		target.Text = ""
+		target.ImageID = replacement.ID
+		target.IsRevealed = true
+		target.RevealedBy = player.PlayerID
+		if target.RevealedAtRound == nil {
+			revealRound := g.Round
+			target.RevealedAtRound = &revealRound
+		}
+		special.Used = true
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s заменяет карту бункера.", player.Name))}}
+
+	case "discardBunkerCard":
+		index, errText := g.resolveBunkerIndex(payload, true)
+		if errText != "" {
+			return gameActionResult{Error: errText}
+		}
+		target := &g.World.Bunker[index]
+		target.ID = fmt.Sprintf("bunker-discarded-%d-%d", time.Now().UnixMilli(), g.rng.Intn(1_000_000))
+		target.Title = "Карта бункера потеряна"
+		target.Description = "Карта бункера была сброшена спецусловием."
+		target.Text = ""
+		target.ImageID = ""
+		target.IsRevealed = true
+		target.RevealedBy = player.PlayerID
+		if target.RevealedAtRound == nil {
+			revealRound := g.Round
+			target.RevealedAtRound = &revealRound
+		}
+		special.Used = true
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("Спецусловие \"%s\" сбрасывает карту бункера.", def.Title))}}
+
+	case "stealBunkerCardToExiled":
+		index, errText := g.resolveBunkerIndex(payload, true)
+		if errText != "" {
+			return gameActionResult{Error: errText}
+		}
+		target := &g.World.Bunker[index]
+		target.ID = fmt.Sprintf("bunker-stolen-%d-%d", time.Now().UnixMilli(), g.rng.Intn(1_000_000))
+		target.Title = "Карта бункера украдена"
+		target.Description = "Карта бункера была забрана изгнанным игроком."
+		target.Text = ""
+		target.ImageID = ""
+		target.IsRevealed = true
+		target.RevealedBy = player.PlayerID
+		if target.RevealedAtRound == nil {
+			revealRound := g.Round
+			target.RevealedAtRound = &revealRound
+		}
+		special.Used = true
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("Спецусловие \"%s\" убирает карту бункера из стола.", def.Title))}}
+
 	case "forceRevealCategoryForAll":
 		categoryKey := resolveCategoryKey(asString(payload["category"]))
 		if categoryKey == "" {
@@ -1388,6 +1890,20 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 		if len(targetBaggage) == 0 {
 			return gameActionResult{Error: "У цели нет багажа."}
 		}
+		requestedBaggageCardID := strings.TrimSpace(asString(payload["baggageCardId"]))
+		stolen := targetBaggage[0]
+		if requestedBaggageCardID != "" {
+			stolen = nil
+			for _, card := range targetBaggage {
+				if card.InstanceID == requestedBaggageCardID {
+					stolen = card
+					break
+				}
+			}
+			if stolen == nil {
+				return gameActionResult{Error: "Нужно выбрать конкретную карту багажа."}
+			}
+		}
 		giveCount := asInt(def.Effect.Params["giveSpecialCount"], 1)
 		if giveCount < 1 {
 			giveCount = 1
@@ -1396,19 +1912,33 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 			return gameActionResult{Error: "В колоде особых условий больше нет карт."}
 		}
 
-		stolen := targetBaggage[0]
-		target.Hand = slices.DeleteFunc(target.Hand, func(card handCard) bool { return card.InstanceID == stolen.InstanceID })
+		stolenCard := *stolen
+		stolenVisible := stolenCard.Revealed || g.IsDev
+		target.Hand = slices.DeleteFunc(target.Hand, func(card handCard) bool { return card.InstanceID == stolenCard.InstanceID })
 		player.Hand = append(player.Hand, handCard{
-			InstanceID: g.nextCardInstanceID(player.PlayerID),
-			CardID:     stolen.CardID,
-			Deck:       stolen.Deck,
-			SlotKey:    stolen.SlotKey,
-			Label:      stolen.Label,
-			Revealed:   stolen.Revealed,
-			Missing:    stolen.Missing,
+			InstanceID:         g.nextCardInstanceID(player.PlayerID),
+			CardID:             stolenCard.CardID,
+			Deck:               stolenCard.Deck,
+			SlotKey:            stolenCard.SlotKey,
+			Label:              stolenCard.Label,
+			Revealed:           stolenVisible,
+			Missing:            stolenCard.Missing,
+			PublicBackCategory: stolenCard.PublicBackCategory,
+		})
+		specialAssetID := strings.TrimSpace(g.resolveSpecialAssetID(def, g.buildSpecialAssetLookup()))
+		target.Hand = append(target.Hand, handCard{
+			InstanceID:         g.nextCardInstanceID(target.PlayerID),
+			CardID:             specialAssetID,
+			Deck:               stolenCard.Deck,
+			SlotKey:            stolenCard.SlotKey,
+			Label:              def.Title,
+			Revealed:           false,
+			Missing:            specialAssetID == "",
+			PublicBackCategory: specialDeckCategoryName,
 		})
 		for i := 0; i < giveCount; i++ {
 			defToGive := g.drawSpecialFromPool()
+			defToGive.AssetID = g.resolveSpecialAssetID(defToGive, g.buildSpecialAssetLookup())
 			target.Specials = append(target.Specials, specialConditionState{
 				InstanceID:     g.nextSpecialInstanceID(target.PlayerID),
 				Definition:     defToGive,
@@ -1417,6 +1947,24 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 			})
 		}
 		special.Used = true
+		if !isDevChoiceSpecialID(special.Definition.ID) {
+			player.Specials = slices.DeleteFunc(player.Specials, func(item specialConditionState) bool {
+				return item.InstanceID == special.InstanceID
+			})
+		}
+		imgURL := ""
+		if stolenVisible && stolenCard.CardID != "" {
+			imgURL = "/assets/" + stolenCard.CardID
+		}
+		player.SpecialCategoryProxyCards = []publicCategoryCard{
+			{
+				Label:        stolenCard.Label,
+				ImgURL:       imgURL,
+				Revealed:     stolenVisible,
+				Hidden:       !stolenVisible,
+				BackCategory: categoryKeyToLabel["baggage"],
+			},
+		}
 		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s забирает багаж у %s.", player.Name, target.Name))}}
 
 	case "addFinalThreat":

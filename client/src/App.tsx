@@ -100,6 +100,15 @@ function safeLabel(value: string, fallback: string): string {
   return isSuspiciousLabel(value) ? fallback : value;
 }
 
+function safeRichText(value: string | undefined, fallback: string): string {
+  const normalized = (value ?? "").trim();
+  if (!normalized) return fallback;
+  if (/[\u0000-\u001f\u007f]/.test(normalized)) return fallback;
+  if (/�/.test(normalized)) return fallback;
+  if (/(?:Ð|Ñ|Ã|Â){2,}/.test(normalized)) return fallback;
+  return normalized;
+}
+
 function fallbackEventMessage(kind: GameEvent["kind"]): string {
   switch (kind) {
     case "roundStart":
@@ -143,6 +152,28 @@ function sanitizeIncomingRoomState(roomState: RoomState): RoomState {
       name: safeLabel(player.name, "Игрок"),
     })),
   };
+}
+
+function sanitizeIncomingRoomStatePatch(patch: Partial<RoomState>): Partial<RoomState> {
+  const next: Partial<RoomState> = { ...patch };
+  if (patch.scenarioMeta) {
+    next.scenarioMeta = {
+      ...patch.scenarioMeta,
+      name: patch.scenarioMeta.name
+        ? safeLabel(patch.scenarioMeta.name, "Сценарий")
+        : patch.scenarioMeta.name,
+      description: patch.scenarioMeta.description
+        ? safeLabel(patch.scenarioMeta.description, "Описание сценария")
+        : patch.scenarioMeta.description,
+    };
+  }
+  if (patch.players) {
+    next.players = patch.players.map((player) => ({
+      ...player,
+      name: safeLabel(player.name, "Игрок"),
+    }));
+  }
+  return next;
 }
 
 function sanitizeIncomingGameView(gameView: GameView): GameView {
@@ -196,7 +227,7 @@ function sanitizeIncomingGameView(gameView: GameView): GameView {
       specialConditions: gameView.you.specialConditions.map((special) => ({
         ...special,
         title: safeLabel(special.title, "Особое условие"),
-        text: safeLabel(special.text, "Описание недоступно."),
+        text: safeRichText(special.text, "Описание недоступно."),
       })),
     },
     public: {
@@ -236,6 +267,103 @@ function sanitizeIncomingGameView(gameView: GameView): GameView {
   };
 }
 
+function sanitizeIncomingGameViewPatch(patch: Partial<GameView>): Partial<GameView> {
+  const next: Partial<GameView> = { ...patch };
+  const sanitizeCardRef = <T extends { labelShort?: string }>(card: T): T => ({
+    ...card,
+    labelShort: card.labelShort ? safeLabel(card.labelShort, "Карта") : card.labelShort,
+  });
+
+  if (patch.categoryOrder) {
+    next.categoryOrder = patch.categoryOrder.map((category) => safeLabel(category, "Категория"));
+  }
+  if (typeof patch.lastStageText === "string") {
+    next.lastStageText = safeLabel(patch.lastStageText, "Состояние игры обновлено.");
+  }
+  if (patch.world) {
+    next.world = {
+      ...patch.world,
+      disaster: {
+        ...patch.world.disaster,
+        title: safeLabel(patch.world.disaster.title, "Катастрофа"),
+        description: safeLabel(patch.world.disaster.description, "Описание недоступно."),
+        text: patch.world.disaster.text
+          ? safeLabel(patch.world.disaster.text, "Описание недоступно.")
+          : patch.world.disaster.text,
+      },
+      bunker: patch.world.bunker.map((card) => ({
+        ...card,
+        title: safeLabel(card.title, "Бункер"),
+        description: safeLabel(card.description, "Описание недоступно."),
+        text: card.text ? safeLabel(card.text, "Описание недоступно.") : card.text,
+      })),
+      threats: patch.world.threats.map((card) => ({
+        ...card,
+        title: safeLabel(card.title, "Угроза"),
+        description: safeLabel(card.description, "Описание недоступно."),
+        text: card.text ? safeLabel(card.text, "Описание недоступно.") : card.text,
+      })),
+    };
+  }
+  if (patch.you) {
+    next.you = {
+      ...patch.you,
+      name: safeLabel(patch.you.name, "Игрок"),
+      hand: patch.you.hand.map(sanitizeCardRef),
+      categories: patch.you.categories.map((slot) => ({
+        ...slot,
+        category: safeLabel(slot.category, "Категория"),
+        cards: slot.cards.map((card) => ({
+          ...card,
+          labelShort: safeLabel(card.labelShort, "Карта"),
+        })),
+      })),
+      specialConditions: patch.you.specialConditions.map((special) => ({
+        ...special,
+        title: safeLabel(special.title, "Особое условие"),
+        text: safeRichText(special.text, "Описание недоступно."),
+      })),
+    };
+  }
+  if (patch.public) {
+    next.public = {
+      ...patch.public,
+      resolutionNote: patch.public.resolutionNote
+        ? safeLabel(patch.public.resolutionNote, "Результаты голосования обновлены.")
+        : patch.public.resolutionNote,
+      winners: patch.public.winners?.map((winner) => safeLabel(winner, "Игрок")),
+      votesPublic: patch.public.votesPublic?.map((vote) => ({
+        ...vote,
+        voterName: safeLabel(vote.voterName, "Игрок"),
+        targetName: vote.targetName ? safeLabel(vote.targetName, "Игрок") : vote.targetName,
+        reason: vote.reason ? safeLabel(vote.reason, "Голос недействителен.") : vote.reason,
+      })),
+      roundRules: patch.public.roundRules
+        ? {
+            ...patch.public.roundRules,
+            forcedRevealCategory: patch.public.roundRules.forcedRevealCategory
+              ? safeLabel(patch.public.roundRules.forcedRevealCategory, "Категория")
+              : patch.public.roundRules.forcedRevealCategory,
+          }
+        : patch.public.roundRules,
+      players: patch.public.players.map((player) => ({
+        ...player,
+        name: safeLabel(player.name, "Игрок"),
+        revealedCards: player.revealedCards.map(sanitizeCardRef),
+        categories: player.categories.map((slot) => ({
+          ...slot,
+          category: safeLabel(slot.category, "Категория"),
+          cards: slot.cards.map((card) => ({
+            ...card,
+            labelShort: safeLabel(card.labelShort, "Карта"),
+          })),
+        })),
+      })),
+    };
+  }
+  return next;
+}
+
 function getOrCreateSessionId(useSessionStorage: boolean): string {
   const storage = useSessionStorage ? window.sessionStorage : window.localStorage;
   const existing = storage.getItem(SESSION_ID_KEY);
@@ -260,6 +388,7 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("disconnected");
   const [lastWsError, setLastWsError] = useState<string | null>(null);
+  const [entryActionPending, setEntryActionPending] = useState(false);
   const [scenarios, setScenarios] = useState<ScenarioMeta[]>([]);
   const [scenariosLoading, setScenariosLoading] = useState(true);
   const [theme, setTheme] = useState<ThemeMode>(() => getInitialTheme());
@@ -290,6 +419,7 @@ export default function App() {
   const sessionIdRef = useRef<string | null>(null);
   const lastHelloAtRef = useRef<number | null>(null);
   const reconnectPendingRef = useRef(false);
+  const pendingCreateIntentRef = useRef(false);
   const dossierActionRef = useRef(false);
   const isHost = roomState?.hostId === playerId;
   const isControl = roomState?.controlId === playerId;
@@ -304,7 +434,7 @@ export default function App() {
   const showRolePillCompact = showRolePill && isMobile;
   const showDevIdentityBadge = roomState ? Boolean(roomState.isDev) : DEV_TAB_IDENTITY;
   const wsInteractive = connectionStatus === "connected";
-  const roleLabel = isControl ? ru.roleControl : isHost ? ru.roleHost : ru.rolePlayer;
+  const roleLabel = isHost && isControl ? ru.roleHostControl : isControl ? ru.roleControl : isHost ? ru.roleHost : ru.rolePlayer;
   const statusLabel =
     connectionStatus === "connected"
       ? ru.statusOnline
@@ -359,6 +489,8 @@ export default function App() {
       awaitingGameViewRef.current = false;
       setErrorMessage(ru.errorReconnectNetwork);
       reconnectPendingRef.current = false;
+      pendingCreateIntentRef.current = false;
+      setEntryActionPending(false);
       snapshotRetryRef.current = 0;
     };
     snapshotTimerRef.current = setTimeout(handleTimeout, SNAPSHOT_TIMEOUT_MS);
@@ -367,6 +499,8 @@ export default function App() {
   const hardResetSession = (options?: { clearLastRoom?: boolean; preserveError?: boolean }) => {
     clearSnapshotTimer();
     reconnectPendingRef.current = false;
+    pendingCreateIntentRef.current = false;
+    setEntryActionPending(false);
     if (options?.clearLastRoom) {
       const lastRoom = localStorage.getItem("bunker.lastRoomCode");
       if (lastRoom) {
@@ -608,6 +742,9 @@ export default function App() {
   const applyRoomStatePatch = (patch: Partial<RoomState>) => {
     setRoomState((prev) => {
       if (!prev) {
+        if (patch.roomCode && patch.phase && patch.scenarioMeta && patch.settings && patch.ruleset) {
+          return patch as RoomState;
+        }
         void sendResume();
         return prev;
       }
@@ -622,6 +759,9 @@ export default function App() {
   const applyGameViewPatch = (patch: Partial<GameView>) => {
     setGameView((prev) => {
       if (!prev) {
+        if (patch.phase && typeof patch.round === "number" && patch.you && patch.public) {
+          return patch as GameView;
+        }
         void sendResume();
         return prev;
       }
@@ -635,6 +775,7 @@ export default function App() {
 
   useEffect(() => {
     const unsubscribeMessage = client.onMessage((message) => {
+      try {
       switch (message.type) {
         case "helloAck":
           setPlayerId(message.payload.playerId);
@@ -649,6 +790,8 @@ export default function App() {
         case "roomState":
           setRoomState(sanitizeIncomingRoomState(message.payload));
           setErrorMessage(null);
+          setEntryActionPending(false);
+          pendingCreateIntentRef.current = false;
           if (IDENTITY_MODE !== "prod") {
             console.log("[dev] roomState", message.payload.roomCode, message.payload.phase);
           }
@@ -678,10 +821,10 @@ export default function App() {
           return;
         case "statePatch": {
           if (message.payload.roomState) {
-            applyRoomStatePatch(sanitizeIncomingRoomState(message.payload.roomState));
+            applyRoomStatePatch(sanitizeIncomingRoomStatePatch(message.payload.roomState));
           }
           if (message.payload.gameView) {
-            applyGameViewPatch(sanitizeIncomingGameView(message.payload.gameView));
+            applyGameViewPatch(sanitizeIncomingGameViewPatch(message.payload.gameView));
           }
           return;
         }
@@ -690,15 +833,16 @@ export default function App() {
           return;
         case "hostChanged": {
           const newHostId = message.payload.newHostId;
-          setRoomState((prev) => (prev ? { ...prev, hostId: newHostId } : prev));
-          if (newHostId === playerId) {
+          const newControlId = message.payload.newControlId ?? newHostId;
+          setRoomState((prev) => (prev ? { ...prev, hostId: newHostId, controlId: newControlId } : prev));
+          if (newControlId === playerId) {
             setErrorMessage(null);
             pushUiToast(ru.hostChangedYou, "success");
             return;
           }
           const candidate =
-            roomStateRef.current?.players.find((player) => player.playerId === newHostId) ??
-            gameViewRef.current?.public.players.find((player) => player.playerId === newHostId);
+            roomStateRef.current?.players.find((player) => player.playerId === newControlId) ??
+            gameViewRef.current?.public.players.find((player) => player.playerId === newControlId);
           pushUiToast(ru.hostChangedOther(candidate?.name ?? "игрок"), "info");
           return;
         }
@@ -706,6 +850,8 @@ export default function App() {
           const msg = safeLabel(message.payload.message, "Произошла ошибка сервера.");
           const code = message.payload.code;
           const maxPlayers = message.payload.maxPlayers;
+          setEntryActionPending(false);
+          pendingCreateIntentRef.current = false;
           if (isMobileNarrow && dossierActionRef.current) {
             setMobileDossierError(msg);
             dossierActionRef.current = false;
@@ -745,6 +891,12 @@ export default function App() {
         default:
           return;
       }
+      } catch (error) {
+        if (IDENTITY_MODE !== "prod") {
+          console.error("[dev] onMessage failed", error, message);
+        }
+        setErrorMessage("Ошибка обработки данных сервера.");
+      }
     });
 
     const unsubscribeStatus = client.onStatus((status, error) => {
@@ -764,6 +916,9 @@ export default function App() {
         if (roomStateRef.current) {
           void sendResume();
         } else if (intentRef.current) {
+          if (intentRef.current.mode === "create" && pendingCreateIntentRef.current) {
+            return;
+          }
           void sendHelloWithIntent(intentRef.current);
         }
       }
@@ -820,8 +975,11 @@ export default function App() {
       tabId: effectiveTabId,
     };
     intentRef.current = intent;
+    setEntryActionPending(true);
+    pendingCreateIntentRef.current = false;
     void sendHelloWithIntent(intent).catch(() => {
       setErrorMessage(ru.errorReconnectNetwork);
+      setEntryActionPending(false);
     });
   }, [client, location.pathname, location.search, playerId, roomState, tabId]);
 
@@ -863,10 +1021,15 @@ export default function App() {
   }, []);
 
   const handleCreate = async (name: string, scenarioId: string) => {
+    if (entryActionPending) return;
     setErrorMessage(null);
+    setEntryActionPending(true);
+    pendingCreateIntentRef.current = true;
     localStorage.setItem("bunker.playerName", name);
     if (DEV_TAB_IDENTITY && !tabId) {
       setErrorMessage("Не удалось создать идентификатор вкладки.");
+      setEntryActionPending(false);
+      pendingCreateIntentRef.current = false;
       return;
     }
     const intent: SessionIntent = {
@@ -880,15 +1043,21 @@ export default function App() {
       await sendHelloWithIntent(intent);
     } catch {
       setErrorMessage(ru.errorReconnectNetwork);
+      setEntryActionPending(false);
+      pendingCreateIntentRef.current = false;
     }
   };
 
   const handleJoin = async (name: string, roomCode: string) => {
+    if (entryActionPending) return;
     setErrorMessage(null);
+    setEntryActionPending(true);
+    pendingCreateIntentRef.current = false;
     localStorage.setItem("bunker.playerName", name);
     const token = DEV_TAB_IDENTITY ? undefined : localStorage.getItem(tokenKey(roomCode)) ?? undefined;
     if (DEV_TAB_IDENTITY && !tabId) {
       setErrorMessage("Не удалось создать идентификатор вкладки.");
+      setEntryActionPending(false);
       return;
     }
     const intent: SessionIntent = {
@@ -903,6 +1072,7 @@ export default function App() {
       await sendHelloWithIntent(intent);
     } catch {
       setErrorMessage(ru.errorReconnectNetwork);
+      setEntryActionPending(false);
     }
   };
 
@@ -1000,6 +1170,15 @@ export default function App() {
     client.send({ type: "kickFromLobby", payload: { targetPlayerId } });
   };
 
+  const handleTransferHostFromLobby = (targetPlayerId?: string) => {
+    if (!ensureWsInteractive()) return;
+    setErrorMessage(null);
+    client.send({
+      type: "requestHostTransfer",
+      payload: targetPlayerId ? { targetPlayerId } : {},
+    });
+  };
+
   const handleDevAddPlayer = (name?: string) => {
     if (!ensureWsInteractive()) return;
     setErrorMessage(null);
@@ -1045,10 +1224,14 @@ export default function App() {
     setErrorMessage(null);
     hardResetSession();
     intentRef.current = intent;
+    setEntryActionPending(true);
+    pendingCreateIntentRef.current = intent.mode === "create";
     try {
       await sendHelloWithIntent(intent);
     } catch {
       setErrorMessage(ru.errorReconnectNetwork);
+      setEntryActionPending(false);
+      pendingCreateIntentRef.current = false;
     }
   };
 
@@ -1136,7 +1319,7 @@ export default function App() {
                 >
                   {roomCodeLabel}
                 </span>
-                <span>{ru.scenarioPill(roomState.scenarioMeta.name)}</span>
+                <span className="topbar-room-scenario">{ru.scenarioPill(roomState.scenarioMeta.name)}</span>
                 {isLobbyRoute ? (
                   <div className="topbar-room-controls">
                     <button
@@ -1249,6 +1432,7 @@ export default function App() {
                   onCreate={handleCreate}
                   onJoin={handleJoin}
                   devBadgeActive={showDevIdentityBadge}
+                  pending={entryActionPending}
                 />
               }
             />
@@ -1264,6 +1448,7 @@ export default function App() {
                   onUpdateSettings={handleUpdateSettings}
                   onUpdateRules={handleUpdateRules}
                   onKickPlayer={handleKickFromLobby}
+                  onTransferHost={handleTransferHostFromLobby}
                 />
               }
             />

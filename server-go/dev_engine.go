@@ -291,6 +291,7 @@ func (d *devTestSession) autoVoteBots() gameActionResult {
 		}
 
 		viable := make([]string, 0, len(d.core.VoteCandidates))
+		revoteBlocked := d.core.RevoteDisallowByVoter[voterID]
 		for candidateID := range d.core.VoteCandidates {
 			if candidateID == voterID {
 				continue
@@ -302,7 +303,7 @@ func (d *devTestSession) autoVoteBots() gameActionResult {
 			if target.BannedAgainst[voterID] {
 				continue
 			}
-			if d.core.RevoteDisallow[candidateID] {
+			if revoteBlocked != nil && revoteBlocked[candidateID] {
 				continue
 			}
 			viable = append(viable, candidateID)

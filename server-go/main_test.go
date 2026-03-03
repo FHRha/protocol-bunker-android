@@ -142,6 +142,118 @@ func TestServer_DevScenarioDefaultsToHostContinuePermission(t *testing.T) {
 	}
 }
 
+func TestServer_WSDevScenario_StartsWithSinglePlayer(t *testing.T) {
+	assetsRoot, clientRoot := makeTestRoots(t)
+	srv, err := newServer(config{
+		Host:               "127.0.0.1",
+		Port:               18086,
+		AssetsRoot:         assetsRoot,
+		ClientDistRoot:     clientRoot,
+		EnableDevScenarios: true,
+	})
+	if err != nil {
+		t.Fatalf("newServer failed: %v", err)
+	}
+	testServer := httptest.NewServer(srv.routes())
+	defer testServer.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http")
+	hostConn, err := dialWS(wsURL)
+	if err != nil {
+		t.Fatalf("host dial failed: %v", err)
+	}
+	defer hostConn.Close()
+
+	mustSend(t, hostConn, map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"name":       "Host",
+			"create":     true,
+			"scenarioId": scenarioDevTest,
+			"sessionId":  "sess-dev-single-start",
+		},
+	})
+	_ = mustReadType(t, hostConn, "helloAck")
+	roomStateMsg := mustReadRoomState(t, hostConn)
+	roomStateMsg = mustSelectDisaster(t, hostConn, roomStateMsg)
+
+	mustSend(t, hostConn, map[string]any{
+		"type":    "startGame",
+		"payload": map[string]any{},
+	})
+	view := mustReadType(t, hostConn, "gameView")
+	if mustNestedString(t, view, "payload", "phase") != scenarioPhaseReveal {
+		t.Fatalf("expected reveal phase after dev start with one player")
+	}
+}
+
+func TestServer_WSDevScenario_ControlCompanionCanStartGame(t *testing.T) {
+	assetsRoot, clientRoot := makeTestRoots(t)
+	srv, err := newServer(config{
+		Host:               "127.0.0.1",
+		Port:               18087,
+		AssetsRoot:         assetsRoot,
+		ClientDistRoot:     clientRoot,
+		EnableDevScenarios: true,
+	})
+	if err != nil {
+		t.Fatalf("newServer failed: %v", err)
+	}
+	testServer := httptest.NewServer(srv.routes())
+	defer testServer.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http")
+	hostConn, err := dialWS(wsURL)
+	if err != nil {
+		t.Fatalf("host dial failed: %v", err)
+	}
+	defer hostConn.Close()
+
+	mustSend(t, hostConn, map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"name":       "Host",
+			"create":     true,
+			"scenarioId": scenarioDevTest,
+			"sessionId":  "sess-dev-companion-host",
+		},
+	})
+	hostAck := mustReadType(t, hostConn, "helloAck")
+	roomStateMsg := mustReadRoomState(t, hostConn)
+	roomStateMsg = mustSelectDisaster(t, hostConn, roomStateMsg)
+	roomCode := roomStateMsg.RoomCode
+	controlToken := mustNestedString(t, hostAck, "payload", "controlToken")
+	if roomCode == "" || controlToken == "" {
+		t.Fatalf("expected room code and control token for host")
+	}
+
+	companionConn, err := dialWS(wsURL)
+	if err != nil {
+		t.Fatalf("companion dial failed: %v", err)
+	}
+	defer companionConn.Close()
+
+	mustSend(t, companionConn, map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"roomCode":     roomCode,
+			"controlToken": controlToken,
+			"sessionId":    "sess-dev-companion-client",
+		},
+	})
+	_ = mustReadType(t, companionConn, "helloAck")
+	_ = mustReadRoomState(t, companionConn)
+
+	mustSend(t, companionConn, map[string]any{
+		"type":    "startGame",
+		"payload": map[string]any{},
+	})
+	view := mustReadType(t, companionConn, "gameView")
+	if mustNestedString(t, view, "payload", "phase") != scenarioPhaseReveal {
+		t.Fatalf("expected reveal phase after companion start")
+	}
+}
+
 func TestServer_WSDevScenario_DossierHasCards(t *testing.T) {
 	assetsRoot, clientRoot := makeTestRoots(t)
 	srv, err := newServer(config{
@@ -182,6 +294,7 @@ func TestServer_WSDevScenario_DossierHasCards(t *testing.T) {
 	})
 	_ = mustReadType(t, hostConn, "helloAck")
 	hostRoomState := mustReadRoomState(t, hostConn)
+	hostRoomState = mustSelectDisaster(t, hostConn, hostRoomState)
 	roomCode := hostRoomState.RoomCode
 	if roomCode == "" {
 		t.Fatalf("room code must not be empty")
@@ -270,6 +383,7 @@ func TestServer_WSDevScenario_UsesDedicatedRuntimeActionSet(t *testing.T) {
 	})
 	_ = mustReadType(t, hostConn, "helloAck")
 	hostRoomState := mustReadRoomState(t, hostConn)
+	hostRoomState = mustSelectDisaster(t, hostConn, hostRoomState)
 	roomCode := hostRoomState.RoomCode
 
 	for i := 0; i < 3; i++ {
@@ -353,6 +467,7 @@ func TestServer_WSGameFlow(t *testing.T) {
 	hostAck := mustReadType(t, hostConn, "helloAck")
 	hostPlayerID := mustNestedString(t, hostAck, "payload", "playerId")
 	roomStateMsg := mustReadRoomState(t, hostConn)
+	roomStateMsg = mustSelectDisaster(t, hostConn, roomStateMsg)
 	roomCode := roomStateMsg.RoomCode
 	if roomCode == "" {
 		t.Fatalf("room code must not be empty")
@@ -529,7 +644,17 @@ func makeTestRoots(t *testing.T) (string, string) {
 		t.Fatalf("write index failed: %v", err)
 	}
 
-	decks := []string{"Профессия", "Здоровье", "Хобби", "Багаж", "Биология", "Факты"}
+	decks := []string{
+		"Профессия",
+		"Здоровье",
+		"Хобби",
+		"Багаж",
+		"Биология",
+		"Факты",
+		"Бункер",
+		"Катастрофа",
+		"Угроза",
+	}
 	for _, deck := range decks {
 		deckDir := filepath.Join(assetsRoot, "decks", deck)
 		if err := os.MkdirAll(deckDir, 0o755); err != nil {
@@ -639,6 +764,22 @@ func mustReadRoomState(t *testing.T, conn *websocket.Conn) roomState {
 	}
 	t.Fatalf("roomState not received")
 	return roomState{}
+}
+
+func mustSelectDisaster(t *testing.T, conn *websocket.Conn, state roomState) roomState {
+	t.Helper()
+	if len(state.DisasterOptions) == 0 {
+		t.Fatalf("no disaster options available in room state")
+	}
+	settings := state.Settings
+	if settings.SelectedDisasterID == "" {
+		settings.SelectedDisasterID = state.DisasterOptions[0].ID
+	}
+	mustSend(t, conn, map[string]any{
+		"type":    "updateSettings",
+		"payload": settings,
+	})
+	return mustReadRoomState(t, conn)
 }
 
 func mustReadGameView(t *testing.T, conn *websocket.Conn) gameView {

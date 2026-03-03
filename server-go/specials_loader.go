@@ -56,6 +56,12 @@ func resolveChoiceKindFromTargeting(raw string) string {
 	if targeting == "" {
 		return "none"
 	}
+	if containsAny(targeting, "choose special", "special", "особ") {
+		return "special"
+	}
+	if containsAny(targeting, "bunker", "бункер") {
+		return "bunker"
+	}
 	if containsAny(targeting, "neighbor", "сосед", "left", "right", "слева", "справа") {
 		return "neighbor"
 	}
@@ -69,7 +75,7 @@ func resolveChoiceKindFromTargeting(raw string) string {
 }
 
 func resolveTargetScopeFromTargeting(raw string, choiceKind string) string {
-	if choiceKind == "category" || choiceKind == "none" {
+	if choiceKind == "category" || choiceKind == "none" || choiceKind == "special" || choiceKind == "bunker" {
 		return ""
 	}
 	targeting := strings.ToLower(strings.TrimSpace(raw))
@@ -130,7 +136,42 @@ func loadImplementedSpecialDefinitionsFromFile(filePath string) ([]specialDefini
 			continue
 		}
 		choiceKind := resolveChoiceKindFromTargeting(item.UITargeting)
+		effectLower := strings.ToLower(strings.TrimSpace(item.Effect.Type))
+		if choiceKind == "none" {
+			switch effectLower {
+			case "banvoteagainst",
+				"disablevote",
+				"doublevotesagainst_and_disableselfvote",
+				"replacerevealedcard",
+				"discardrevealedanddealhidden",
+				"stealbaggage_and_givespecial":
+				choiceKind = "player"
+			case "swaprevealedwithneighbor":
+				choiceKind = "neighbor"
+			case "forcerevealcategoryforall":
+				choiceKind = "category"
+			case "devchoosespecial":
+				choiceKind = "special"
+			default:
+				if strings.Contains(effectLower, "bunker") {
+					choiceKind = "bunker"
+				}
+			}
+		}
 		targetScope := resolveTargetScopeFromTargeting(item.UITargeting, choiceKind)
+		if targetScope == "" {
+			switch effectLower {
+			case "swaprevealedwithneighbor":
+				targetScope = "neighbors"
+			case "banvoteagainst",
+				"disablevote",
+				"doublevotesagainst_and_disableselfvote",
+				"replacerevealedcard",
+				"discardrevealedanddealhidden",
+				"stealbaggage_and_givespecial":
+				targetScope = "any_alive"
+			}
+		}
 		assetID := normalizeAssetIDPath(fileName)
 		effectType := strings.TrimSpace(item.Effect.Type)
 		if effectType == "" {

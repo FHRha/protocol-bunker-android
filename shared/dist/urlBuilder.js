@@ -53,7 +53,15 @@ export function buildLinkSet(input) {
     const publicBase = publicBaseRaw.length > 0 ? normalizeBase(publicBaseRaw) : undefined;
     const encodedRoom = encodeURIComponent(input.roomCode);
     const encodedViewToken = encodeURIComponent(input.overlayViewToken);
-    const encodedControlToken = encodeURIComponent(input.overlayControlToken);
+    const rawControlToken = input.controlCompanionToken?.trim() ||
+        input.editToken?.trim() ||
+        input.controlToken?.trim() ||
+        input.overlayControlToken?.trim() ||
+        "";
+    if (!rawControlToken) {
+        throw new Error("buildLinkSet: control/edit token is required for control URL");
+    }
+    const encodedControlToken = encodeURIComponent(rawControlToken);
     const appPath = `${LINK_PATHS.app}?room=${encodedRoom}`;
     const overlayViewPath = `${LINK_PATHS.overlayView}?room=${encodedRoom}&token=${encodedViewToken}`;
     const overlayControlPath = `${LINK_PATHS.overlayControl}?room=${encodedRoom}&token=${encodedControlToken}`;

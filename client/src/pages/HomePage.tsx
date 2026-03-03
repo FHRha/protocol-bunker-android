@@ -12,6 +12,7 @@ interface HomePageProps {
   onCreate: (name: string, scenarioId: string) => void;
   onJoin: (name: string, roomCode: string) => void;
   devBadgeActive?: boolean;
+  pending?: boolean;
 }
 
 export default function HomePage({
@@ -20,6 +21,7 @@ export default function HomePage({
   onCreate,
   onJoin,
   devBadgeActive,
+  pending = false,
 }: HomePageProps) {
   const [name, setName] = useState(() => localStorage.getItem("bunker.playerName") ?? "");
   const [roomCode, setRoomCode] = useState("");
@@ -27,7 +29,12 @@ export default function HomePage({
   const [rulesOpen, setRulesOpen] = useState(false);
 
   useEffect(() => {
-    if (!scenarioId && scenarios.length > 0) {
+    if (scenarios.length === 0) {
+      if (scenarioId) setScenarioId("");
+      return;
+    }
+    const stillAvailable = scenarios.some((scenario) => scenario.id === scenarioId);
+    if (!stillAvailable) {
       setScenarioId(scenarios[0].id);
     }
   }, [scenarioId, scenarios]);
@@ -93,7 +100,7 @@ export default function HomePage({
             )}
             <button
               className="primary"
-              disabled={!hasName || !scenarioId}
+              disabled={!hasName || !scenarioId || pending}
               onClick={() => onCreate(name.trim(), scenarioId)}
             >
               {ru.createButton}
@@ -112,7 +119,7 @@ export default function HomePage({
             />
             <button
               className="primary"
-              disabled={!hasName || normalizedRoomCode.length === 0}
+              disabled={!hasName || normalizedRoomCode.length === 0 || pending}
               onClick={() => onJoin(name.trim(), normalizedRoomCode)}
             >
               {ru.joinButton}

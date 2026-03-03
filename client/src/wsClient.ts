@@ -5,8 +5,9 @@ export type MessageHandler = (message: ServerMessage) => void;
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "reconnecting";
 export type StatusHandler = (status: ConnectionStatus, error?: string | null) => void;
 
-const PING_INTERVAL_MS = 15000;
-const PONG_TIMEOUT_MS = 25000;
+const PING_INTERVAL_MS = 20000;
+const PONG_TIMEOUT_MS = 120000;
+const STALE_PONG_GRACE_PINGS = 2;
 
 function ensureHandRevealedFlag(payload: unknown) {
   if (!payload || typeof payload !== "object") return;
@@ -48,7 +49,8 @@ export class BunkerClient {
   private reconnectAttempt = 0;
   private manualClose = false;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
-  private pongTimeout: ReturnType<typeof setTimeout> | null = null;
+  private lastPongAt = 0;
+  private stalePongChecks = 0;
 
   constructor(private url: string) {}
 
@@ -65,10 +67,8 @@ export class BunkerClient {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
     }
-    if (this.pongTimeout) {
-      clearTimeout(this.pongTimeout);
-      this.pongTimeout = null;
-    }
+    this.lastPongAt = 0;
+    this.stalePongChecks = 0;
   }
 
   private scheduleReconnect() {
@@ -86,21 +86,30 @@ export class BunkerClient {
 
   private startHeartbeat() {
     this.clearHeartbeat();
+    this.lastPongAt = Date.now();
     const sendPing = () => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-      this.ws.send(JSON.stringify({ type: "ping", payload: {} }));
-      if (this.pongTimeout) {
-        clearTimeout(this.pongTimeout);
-      }
-      this.pongTimeout = setTimeout(() => {
+      const pongAge = Date.now() - this.lastPongAt;
+      if (pongAge > PONG_TIMEOUT_MS) {
+        this.stalePongChecks += 1;
+        if (this.stalePongChecks < STALE_PONG_GRACE_PINGS) {
+          try {
+            this.ws.send(JSON.stringify({ type: "ping", payload: {} }));
+          } catch {
+            // ignore and let next heartbeat close/reconnect if still stale
+          }
+          return;
+        }
         try {
-          this.ws?.close();
+          this.ws.close();
         } catch {
           // ignore
         }
-      }, PONG_TIMEOUT_MS);
+        return;
+      }
+      this.stalePongChecks = 0;
+      this.ws.send(JSON.stringify({ type: "ping", payload: {} }));
     };
-    sendPing();
     this.pingTimer = setInterval(sendPing, PING_INTERVAL_MS);
   }
 
@@ -141,6 +150,8 @@ export class BunkerClient {
         this.scheduleReconnect();
       };
       this.ws.onmessage = (event) => {
+        this.lastPongAt = Date.now();
+        this.stalePongChecks = 0;
         let parsed: unknown;
         try {
           parsed = JSON.parse(event.data);
@@ -150,16 +161,37 @@ export class BunkerClient {
         ensureHandRevealedFlag(parsed);
         const result = ServerMessageSchema.safeParse(parsed);
         if (!result.success) {
+          const rawMessage = parsed as { type?: unknown; payload?: unknown };
+          const rawType = typeof rawMessage.type === "string" ? rawMessage.type : "";
+          const rawPayloadObject =
+            rawMessage.payload !== null && typeof rawMessage.payload === "object";
+          const canFallback =
+            rawType === "roomState" ||
+            rawType === "gameView" ||
+            rawType === "statePatch" ||
+            rawType === "gameEvent" ||
+            rawType === "helloAck" ||
+            rawType === "hostChanged" ||
+            rawType === "error" ||
+            rawType === "pong";
+          if (canFallback && (rawType === "pong" || rawPayloadObject)) {
+            if (IDENTITY_MODE !== "prod") {
+              console.warn("[ws] tolerated malformed message", rawType, result.error.issues[0], parsed);
+            }
+            if (rawType === "pong") {
+              this.lastPongAt = Date.now();
+              return;
+            }
+            this.listeners.forEach((listener) => listener(rawMessage as ServerMessage));
+            return;
+          }
           if (IDENTITY_MODE !== "prod") {
             console.warn("[ws] unknown message", result.error.issues[0], parsed);
           }
           return;
         }
         if (result.data.type === "pong") {
-          if (this.pongTimeout) {
-            clearTimeout(this.pongTimeout);
-            this.pongTimeout = null;
-          }
+          this.lastPongAt = Date.now();
           return;
         }
         this.listeners.forEach((listener) => listener(result.data));

@@ -69,6 +69,16 @@ cd ../android-app
 ./gradlew assembleDebug assembleRelease
 ```
 
+### Проверка кодировки
+
+Перед коммитом можно проверить, что в исходниках нет битой кодировки:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/check-encoding.ps1
+```
+
+Этот же чек запускается в GitHub Actions перед сборкой релиза.
+
 ## Автосборка релизов
 
 Workflow: `.github/workflows/release.yml`

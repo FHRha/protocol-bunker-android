@@ -119,19 +119,514 @@ func TestServer_Edge_LobbyDisconnect_RemovesPlayerButKeepsRoom(t *testing.T) {
 	}
 }
 
+func TestServer_Edge_TransferHost_AutoAndManual(t *testing.T) {
+	_, testServer, hostConn, roomCode, _ := setupTestRoom(t, 18090)
+	defer testServer.Close()
+	defer hostConn.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http")
+	guestConn, err := dialWS(wsURL)
+	if err != nil {
+		t.Fatalf("guest dial failed: %v", err)
+	}
+	defer guestConn.Close()
+
+	mustSend(t, guestConn, map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"name":      "Guest",
+			"roomCode":  roomCode,
+			"sessionId": "edge-transfer-guest",
+		},
+	})
+	guestAck := mustReadType(t, guestConn, "helloAck")
+	_ = mustReadRoomState(t, guestConn)
+	_ = mustReadRoomState(t, hostConn)
+	guestID := mustNestedString(t, guestAck, "payload", "playerId")
+	if guestID == "" {
+		t.Fatalf("guest player id must not be empty")
+	}
+
+	mustSend(t, hostConn, map[string]any{
+		"type":    "requestHostTransfer",
+		"payload": map[string]any{},
+	})
+	autoTransferState := mustReadRoomState(t, hostConn)
+	if autoTransferState.HostID != guestID || autoTransferState.ControlID != guestID {
+		t.Fatalf("auto host transfer failed: host=%s control=%s want=%s", autoTransferState.HostID, autoTransferState.ControlID, guestID)
+	}
+	hostChanged := mustReadType(t, hostConn, "hostChanged")
+	newHostID := mustNestedString(t, hostChanged, "payload", "newHostId")
+	newControlID := mustNestedString(t, hostChanged, "payload", "newControlId")
+	if newHostID != guestID {
+		t.Fatalf("hostChanged newHostId mismatch: got=%s want=%s", newHostID, guestID)
+	}
+	if newControlID != guestID {
+		t.Fatalf("hostChanged newControlId mismatch: got=%s want=%s", newControlID, guestID)
+	}
+
+	mustSend(t, guestConn, map[string]any{
+		"type": "requestHostTransfer",
+		"payload": map[string]any{
+			"targetPlayerId": "missing-player-id",
+		},
+	})
+	_ = mustReadType(t, guestConn, "error")
+}
+
+func TestServer_Edge_TransferHost_NoCandidates_ErrorMessage(t *testing.T) {
+	_, testServer, hostConn, _, _ := setupTestRoom(t, 18095)
+	defer testServer.Close()
+	defer hostConn.Close()
+
+	mustSend(t, hostConn, map[string]any{
+		"type":    "requestHostTransfer",
+		"payload": map[string]any{},
+	})
+	msg := mustReadType(t, hostConn, "error")
+	message := mustNestedString(t, msg, "payload", "message")
+	if !strings.Contains(message, "No online players available") {
+		t.Fatalf("unexpected no-candidates message: %q", message)
+	}
+}
+
+func TestServer_Edge_TransferHost_OfflineTarget_ErrorMessage(t *testing.T) {
+	srv, testServer, hostConn, roomCode, _ := setupTestRoom(t, 18096)
+	defer testServer.Close()
+	defer hostConn.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http")
+	guestConn, err := dialWS(wsURL)
+	if err != nil {
+		t.Fatalf("guest dial failed: %v", err)
+	}
+	defer guestConn.Close()
+
+	mustSend(t, guestConn, map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"name":      "Guest",
+			"roomCode":  roomCode,
+			"sessionId": "edge-transfer-offline",
+		},
+	})
+	guestAck := mustReadType(t, guestConn, "helloAck")
+	_ = mustReadRoomState(t, guestConn)
+	_ = mustReadRoomState(t, hostConn)
+	guestID := mustNestedString(t, guestAck, "payload", "playerId")
+
+	srv.mu.Lock()
+	room := srv.rooms[roomCode]
+	if room == nil {
+		srv.mu.Unlock()
+		t.Fatalf("room not found")
+	}
+	target := room.Players[guestID]
+	if target == nil {
+		srv.mu.Unlock()
+		t.Fatalf("guest player not found")
+	}
+	target.Connected = false
+	target.Connection = nil
+	srv.mu.Unlock()
+
+	mustSend(t, hostConn, map[string]any{
+		"type": "requestHostTransfer",
+		"payload": map[string]any{
+			"targetPlayerId": guestID,
+		},
+	})
+	msg := mustReadType(t, hostConn, "error")
+	message := mustNestedString(t, msg, "payload", "message")
+	if !strings.Contains(message, "Target player is offline") {
+		t.Fatalf("unexpected offline-target message: %q", message)
+	}
+}
+
+func TestServer_Edge_TransferHost_DevMode_Works(t *testing.T) {
+	_, testServer, hostConn, roomCode, _ := setupTestRoomWithConfig(t, 18097, config{
+		IdentityMode: "dev_tab",
+	})
+	defer testServer.Close()
+	defer hostConn.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http")
+	guestConn, err := dialWS(wsURL)
+	if err != nil {
+		t.Fatalf("guest dial failed: %v", err)
+	}
+	defer guestConn.Close()
+
+	mustSend(t, guestConn, map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"name":      "Guest",
+			"roomCode":  roomCode,
+			"sessionId": "edge-transfer-dev",
+		},
+	})
+	guestAck := mustReadType(t, guestConn, "helloAck")
+	_ = mustReadRoomState(t, guestConn)
+	_ = mustReadRoomState(t, hostConn)
+	guestID := mustNestedString(t, guestAck, "payload", "playerId")
+
+	mustSend(t, hostConn, map[string]any{
+		"type": "requestHostTransfer",
+		"payload": map[string]any{
+			"targetPlayerId": guestID,
+		},
+	})
+	state := mustReadRoomState(t, hostConn)
+	if state.ControlID != guestID || state.HostID != guestID {
+		t.Fatalf("dev transfer failed: host=%s control=%s want=%s", state.HostID, state.ControlID, guestID)
+	}
+}
+
+func TestServer_Edge_TransferHost_RejectSameHostTarget(t *testing.T) {
+	srv, testServer, hostConn, roomCode, _ := setupTestRoom(t, 18091)
+	defer testServer.Close()
+	defer hostConn.Close()
+
+	srv.mu.Lock()
+	room := srv.rooms[roomCode]
+	if room == nil {
+		srv.mu.Unlock()
+		t.Fatalf("room not found")
+	}
+	hostID := room.HostID
+	srv.mu.Unlock()
+
+	if hostID == "" {
+		t.Fatalf("host id must not be empty")
+	}
+
+	mustSend(t, hostConn, map[string]any{
+		"type": "requestHostTransfer",
+		"payload": map[string]any{
+			"targetPlayerId": hostID,
+		},
+	})
+	_ = mustReadType(t, hostConn, "error")
+}
+
+func TestServer_Edge_TransferHost_RejectNonControl(t *testing.T) {
+	_, testServer, hostConn, roomCode, _ := setupTestRoom(t, 18098)
+	defer testServer.Close()
+	defer hostConn.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http")
+	guestConn, err := dialWS(wsURL)
+	if err != nil {
+		t.Fatalf("guest dial failed: %v", err)
+	}
+	defer guestConn.Close()
+
+	mustSend(t, guestConn, map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"name":      "Guest",
+			"roomCode":  roomCode,
+			"sessionId": "edge-transfer-non-control",
+		},
+	})
+	_ = mustReadType(t, guestConn, "helloAck")
+	_ = mustReadRoomState(t, guestConn)
+	_ = mustReadRoomState(t, hostConn)
+
+	mustSend(t, guestConn, map[string]any{
+		"type":    "requestHostTransfer",
+		"payload": map[string]any{},
+	})
+	msg := mustReadType(t, guestConn, "error")
+	message := mustNestedString(t, msg, "payload", "message")
+	if !strings.Contains(message, "Only current control player can transfer host role") {
+		t.Fatalf("unexpected non-control message: %q", message)
+	}
+}
+
+func TestServer_Edge_TransferHost_TargetNotFound_ErrorMessage(t *testing.T) {
+	_, testServer, hostConn, _, _ := setupTestRoom(t, 18099)
+	defer testServer.Close()
+	defer hostConn.Close()
+
+	mustSend(t, hostConn, map[string]any{
+		"type": "requestHostTransfer",
+		"payload": map[string]any{
+			"targetPlayerId": "missing-player-id",
+		},
+	})
+	msg := mustReadType(t, hostConn, "error")
+	message := mustNestedString(t, msg, "payload", "message")
+	if !strings.Contains(message, "Target player was not found") {
+		t.Fatalf("unexpected target-not-found message: %q", message)
+	}
+}
+
+func TestServer_Edge_ControlCompanion_HelloControlToken_NoNewPlayer(t *testing.T) {
+	srv, testServer, hostConn, roomCode, _ := setupTestRoom(t, 18092)
+	defer testServer.Close()
+	defer hostConn.Close()
+
+	srv.mu.Lock()
+	room := srv.rooms[roomCode]
+	if room == nil {
+		srv.mu.Unlock()
+		t.Fatalf("room not found")
+	}
+	controlToken := room.ControlToken
+	hostID := room.HostID
+	playersBefore := len(room.Players)
+	srv.mu.Unlock()
+
+	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http")
+	companionConn, err := dialWS(wsURL)
+	if err != nil {
+		t.Fatalf("companion dial failed: %v", err)
+	}
+	defer companionConn.Close()
+
+	mustSend(t, companionConn, map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"roomCode":     roomCode,
+			"controlToken": controlToken,
+		},
+	})
+	ack := mustReadType(t, companionConn, "helloAck")
+	_ = mustReadRoomState(t, companionConn)
+	if got := mustNestedString(t, ack, "payload", "playerId"); got != hostID {
+		t.Fatalf("companion must bind to current control id: got=%s want=%s", got, hostID)
+	}
+
+	mustSend(t, companionConn, map[string]any{
+		"type": "updateSettings",
+		"payload": map[string]any{
+			"maxPlayers": 5,
+		},
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		srv.mu.Lock()
+		room = srv.rooms[roomCode]
+		ok := room != nil && room.Settings.MaxPlayers == 5 && len(room.Players) == playersBefore
+		srv.mu.Unlock()
+		if ok {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	srv.mu.Lock()
+	room = srv.rooms[roomCode]
+	gotPlayers := 0
+	gotMax := 0
+	if room != nil {
+		gotPlayers = len(room.Players)
+		gotMax = room.Settings.MaxPlayers
+	}
+	srv.mu.Unlock()
+	t.Fatalf("companion action not applied or created player: players=%d want=%d maxPlayers=%d want=5", gotPlayers, playersBefore, gotMax)
+}
+
+func TestServer_Edge_ControlCompanion_HelloEditToken_NoNewPlayer(t *testing.T) {
+	srv, testServer, hostConn, roomCode, _ := setupTestRoom(t, 18093)
+	defer testServer.Close()
+	defer hostConn.Close()
+
+	srv.mu.Lock()
+	room := srv.rooms[roomCode]
+	if room == nil {
+		srv.mu.Unlock()
+		t.Fatalf("room not found")
+	}
+	editToken := room.EditToken
+	hostID := room.HostID
+	playersBefore := len(room.Players)
+	srv.mu.Unlock()
+
+	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http")
+	companionConn, err := dialWS(wsURL)
+	if err != nil {
+		t.Fatalf("companion dial failed: %v", err)
+	}
+	defer companionConn.Close()
+
+	mustSend(t, companionConn, map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"roomCode":  roomCode,
+			"editToken": editToken,
+		},
+	})
+	ack := mustReadType(t, companionConn, "helloAck")
+	_ = mustReadRoomState(t, companionConn)
+	if got := mustNestedString(t, ack, "payload", "playerId"); got != hostID {
+		t.Fatalf("companion must bind to current control id: got=%s want=%s", got, hostID)
+	}
+
+	srv.mu.Lock()
+	room = srv.rooms[roomCode]
+	gotPlayers := 0
+	if room != nil {
+		gotPlayers = len(room.Players)
+	}
+	srv.mu.Unlock()
+	if gotPlayers != playersBefore {
+		t.Fatalf("edit token companion must not create new player: got=%d want=%d", gotPlayers, playersBefore)
+	}
+}
+
+func TestServer_Edge_ControlCompanion_DevMode_AllowsControlPlayerToken(t *testing.T) {
+	srv, testServer, hostConn, roomCode, hostToken := setupTestRoomWithConfig(t, 18094, config{
+		IdentityMode: "dev_tab",
+	})
+	defer testServer.Close()
+	defer hostConn.Close()
+
+	srv.mu.Lock()
+	room := srv.rooms[roomCode]
+	if room == nil {
+		srv.mu.Unlock()
+		t.Fatalf("room not found")
+	}
+	hostID := room.HostID
+	playersBefore := len(room.Players)
+	srv.mu.Unlock()
+
+	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http")
+	companionConn, err := dialWS(wsURL)
+	if err != nil {
+		t.Fatalf("companion dial failed: %v", err)
+	}
+	defer companionConn.Close()
+
+	mustSend(t, companionConn, map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"roomCode":     roomCode,
+			"controlToken": hostToken,
+		},
+	})
+	ack := mustReadType(t, companionConn, "helloAck")
+	_ = mustReadRoomState(t, companionConn)
+	if got := mustNestedString(t, ack, "payload", "playerId"); got != hostID {
+		t.Fatalf("dev companion must bind to control id: got=%s want=%s", got, hostID)
+	}
+
+	srv.mu.Lock()
+	room = srv.rooms[roomCode]
+	gotPlayers := 0
+	if room != nil {
+		gotPlayers = len(room.Players)
+	}
+	srv.mu.Unlock()
+	if gotPlayers != playersBefore {
+		t.Fatalf("dev companion must not create new player: got=%d want=%d", gotPlayers, playersBefore)
+	}
+}
+
+func TestServer_Edge_ControlCompanion_HostChangedContainsNewControlId(t *testing.T) {
+	srv, testServer, hostConn, roomCode, _ := setupTestRoom(t, 18100)
+	defer testServer.Close()
+	defer hostConn.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http")
+
+	srv.mu.Lock()
+	room := srv.rooms[roomCode]
+	if room == nil {
+		srv.mu.Unlock()
+		t.Fatalf("room not found")
+	}
+	controlToken := room.ControlToken
+	srv.mu.Unlock()
+
+	guestConn, err := dialWS(wsURL)
+	if err != nil {
+		t.Fatalf("guest dial failed: %v", err)
+	}
+	defer guestConn.Close()
+
+	mustSend(t, guestConn, map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"name":      "Guest",
+			"roomCode":  roomCode,
+			"sessionId": "edge-companion-host-changed",
+		},
+	})
+	guestAck := mustReadType(t, guestConn, "helloAck")
+	_ = mustReadRoomState(t, guestConn)
+	_ = mustReadRoomState(t, hostConn)
+	guestID := mustNestedString(t, guestAck, "payload", "playerId")
+
+	companionConn, err := dialWS(wsURL)
+	if err != nil {
+		t.Fatalf("companion dial failed: %v", err)
+	}
+	defer companionConn.Close()
+
+	mustSend(t, companionConn, map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"roomCode":     roomCode,
+			"controlToken": controlToken,
+		},
+	})
+	_ = mustReadType(t, companionConn, "helloAck")
+	_ = mustReadRoomState(t, companionConn)
+
+	mustSend(t, hostConn, map[string]any{
+		"type": "requestHostTransfer",
+		"payload": map[string]any{
+			"targetPlayerId": guestID,
+		},
+	})
+	_ = mustReadRoomState(t, hostConn)           // host broadcast
+	_ = mustReadType(t, hostConn, "hostChanged") // host event
+	_ = mustReadRoomState(t, companionConn)      // companion broadcast
+	_ = mustReadType(t, companionConn, "helloAck")
+	hostChangedCompanion := mustReadType(t, companionConn, "hostChanged")
+	if got := mustNestedString(t, hostChangedCompanion, "payload", "newControlId"); got != guestID {
+		t.Fatalf("companion hostChanged newControlId mismatch: got=%s want=%s", got, guestID)
+	}
+}
+
 func setupTestRoom(
 	t *testing.T,
 	port int,
 ) (*server, *httptest.Server, *websocket.Conn, string, string) {
+	return setupTestRoomWithConfig(t, port, config{})
+}
+
+func setupTestRoomWithConfig(
+	t *testing.T,
+	port int,
+	override config,
+) (*server, *httptest.Server, *websocket.Conn, string, string) {
 	t.Helper()
 	assetsRoot, clientRoot := makeTestRoots(t)
-	srv, err := newServer(config{
+	cfg := config{
 		Host:               "127.0.0.1",
 		Port:               port,
 		AssetsRoot:         assetsRoot,
 		ClientDistRoot:     clientRoot,
 		EnableDevScenarios: false,
-	})
+	}
+	if override.Host != "" {
+		cfg.Host = override.Host
+	}
+	if override.Port != 0 {
+		cfg.Port = override.Port
+	}
+	if override.IdentityMode != "" {
+		cfg.IdentityMode = override.IdentityMode
+	}
+	if override.EnableDevScenarios {
+		cfg.EnableDevScenarios = true
+	}
+	srv, err := newServer(cfg)
 	if err != nil {
 		t.Fatalf("newServer failed: %v", err)
 	}

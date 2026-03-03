@@ -21,9 +21,11 @@ interface LobbyPageProps {
     manualConfig?: ManualRulesConfig;
   }) => void;
   onKickPlayer: (targetPlayerId: string) => void;
+  onTransferHost: (targetPlayerId?: string) => void;
 }
 
 const GITHUB_URL = "https://github.com/FHRha";
+const RANDOM_DISASTER_ID = "__random__";
 
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -167,9 +169,11 @@ export default function LobbyPage({
   onUpdateSettings,
   onUpdateRules,
   onKickPlayer,
+  onTransferHost,
 }: LobbyPageProps) {
   const [draft, setDraft] = useState<GameSettings | null>(roomState?.settings ?? null);
   const [kickTargetId, setKickTargetId] = useState("");
+  const [hostTransferTargetId, setHostTransferTargetId] = useState("");
   const [manualTemplatePlayers, setManualTemplatePlayers] = useState(4);
   const [manualVotesInput, setManualVotesInput] = useState("0");
   const [rulesOpen, setRulesOpen] = useState(false);
@@ -213,6 +217,7 @@ export default function LobbyPage({
   }
 
   const settings = draft ?? roomState.settings;
+  const settingsAny = settings as GameSettings & { selectedDisasterId?: string };
   const isClassic = roomState.scenarioMeta.id === "classic";
   const ruleset = roomState.ruleset;
   const rulesMode: "auto" | "manual" = ruleset.rulesetMode === "auto" ? "auto" : "manual";
@@ -246,6 +251,16 @@ export default function LobbyPage({
   const revealPlanText = revealPlan.join("/");
   const manualRevealNotRecommended = manualConfig.targetReveals !== 7;
   const canStart = !isClassic || roomState.players.length >= 4;
+  const disasterOptions = roomState.disasterOptions ?? [];
+  const selectedDisasterIdRaw = (settingsAny.forcedDisasterId ?? settingsAny.selectedDisasterId ?? "").trim();
+  const selectedDisasterId = selectedDisasterIdRaw || RANDOM_DISASTER_ID;
+  const isDisasterSelected = selectedDisasterId.length > 0;
+  const canStartWithDisaster = canStart && isDisasterSelected;
+  const selectedDisasterLabel =
+    selectedDisasterId === RANDOM_DISASTER_ID
+      ? ru.settingsDisasterRandom
+      : disasterOptions.find((option) => option.id === selectedDisasterId)?.title ??
+        ru.settingsDisasterUnknown;
   const minPlayersLimit = Math.max(isClassic ? 4 : 2, roomState.players.length);
   const wsHint = controlsDisabled ? ru.wsActionDisabledHint : null;
   const continueTipText =
@@ -309,7 +324,13 @@ export default function LobbyPage({
   const visiblePlayers = roomState.players.slice(0, maxPlayersVisible);
   const extraPlayers = roomState.players.length - visiblePlayers.length;
   const kickCandidates = roomState.players.filter((player) => player.playerId !== roomState.controlId);
+  const hostTransferCandidates = roomState.players.filter(
+    (player) => player.playerId !== roomState.controlId && player.connected
+  );
   const playerIndexById = new Map(roomState.players.map((player, index) => [player.playerId, index]));
+  const currentHostIndex = playerIndexById.get(roomState.controlId) ?? 0;
+  const currentHostRawName = roomState.players.find((player) => player.playerId === roomState.controlId)?.name ?? "";
+  const currentHostName = getSafePlayerName(currentHostRawName, currentHostIndex);
 
   const applySettings = (next: GameSettings) => {
     if (controlsDisabled) return;
@@ -335,10 +356,20 @@ export default function LobbyPage({
                 {visiblePlayers.map((player) => {
                   const fallbackIndex = playerIndexById.get(player.playerId) ?? 0;
                   const safeName = getSafePlayerName(player.name, fallbackIndex);
+                  const isHostPlayer = player.playerId === roomState.hostId;
+                  const isControlPlayer = player.playerId === roomState.controlId;
+                  const roleMarker =
+                    isHostPlayer && isControlPlayer
+                      ? ru.hostControlMarker
+                      : isControlPlayer
+                        ? ru.controlMarker
+                        : isHostPlayer
+                          ? ru.hostMarker
+                          : "";
                   return (
                     <li key={player.playerId}>
                       {safeName}
-                      {player.playerId === roomState.controlId ? ru.hostMarker : ""}
+                      {roleMarker}
                       {player.connected ? "" : ru.offlineMarker}
                     </li>
                   );
@@ -385,20 +416,62 @@ export default function LobbyPage({
               ) : null}
 
               {canControl ? (
-                <div className="start-row">
-                  <button
-                    className="primary button-small"
-                    disabled={!canStart || controlsDisabled}
-                    onClick={() => {
-                      if (controlsDisabled) return;
-                      onStart();
-                    }}
-                  >
-                    {ru.startButton}
-                  </button>
-                  {!canStart && isClassic ? <span className="muted">{ru.rulesNeedMinPlayers}</span> : null}
-                  {wsHint ? <span className="muted wsDisabledHint">{wsHint}</span> : null}
+                <div className="formRow">
+                  <span>{ru.lobbyHostTransferTitle}</span>
+                  <span className="muted">{ru.lobbyHostCurrent(currentHostName)}</span>
+                  <div className="formControlRow">
+                    <select
+                      value={hostTransferTargetId}
+                      disabled={controlsDisabled || hostTransferCandidates.length === 0}
+                      onChange={(event) => setHostTransferTargetId(event.target.value)}
+                    >
+                      <option value="">{ru.lobbyHostTransferAuto}</option>
+                      {hostTransferCandidates.map((player) => {
+                        const fallbackIndex = playerIndexById.get(player.playerId) ?? 0;
+                        const safeName = getSafePlayerName(player.name, fallbackIndex);
+                        return (
+                          <option key={player.playerId} value={player.playerId}>
+                            {safeName}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    <button
+                      className="ghost button-small"
+                      disabled={controlsDisabled || hostTransferCandidates.length === 0}
+                      onClick={() => {
+                        if (controlsDisabled) return;
+                        onTransferHost(hostTransferTargetId || undefined);
+                        setHostTransferTargetId("");
+                      }}
+                    >
+                      {ru.lobbyHostTransferButton}
+                    </button>
+                  </div>
+                  {hostTransferCandidates.length === 0 ? (
+                    <span className="muted">{ru.lobbyHostTransferNoCandidates}</span>
+                  ) : null}
                 </div>
+              ) : null}
+
+              {canControl ? (
+                <>
+                  <div className="start-row">
+                    <button
+                      className="primary button-small"
+                      disabled={!canStartWithDisaster || controlsDisabled}
+                      onClick={() => {
+                        if (controlsDisabled) return;
+                        onStart();
+                      }}
+                    >
+                      {ru.startButton}
+                    </button>
+                    {!canStart && isClassic ? <span className="muted">{ru.rulesNeedMinPlayers}</span> : null}
+                    {!isDisasterSelected ? <span className="muted">{ru.settingsDisasterRequiredHint}</span> : null}
+                    {wsHint ? <span className="muted wsDisabledHint">{wsHint}</span> : null}
+                  </div>
+                </>
               ) : (
                 <div className="muted playerOnlyHint">{ru.hostOnlyHint}</div>
               )}
@@ -579,6 +652,25 @@ export default function LobbyPage({
                     </select>
                   </label>
                   <label className="formRow">
+                    <span>{ru.settingsDisaster}</span>
+                    <select
+                      value={selectedDisasterId}
+                      onChange={(event) =>
+                        updateField(
+                          "forcedDisasterId",
+                          event.target.value as GameSettings["forcedDisasterId"]
+                        )
+                      }
+                    >
+                      <option value={RANDOM_DISASTER_ID}>{ru.settingsDisasterRandom}</option>
+                      {disasterOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="formRow">
                     <span>{ru.settingsMaxPlayers}</span>
                     <div className="settingsMaxPlayersControl">
                       <input
@@ -631,6 +723,9 @@ export default function LobbyPage({
                   <div>
                     {ru.settingsFinalThreatReveal}:{" "}
                     {settings.finalThreatReveal === "anyone" ? ru.settingsThreatAnyone : ru.settingsThreatHost}
+                  </div>
+                  <div>
+                    {ru.settingsDisaster}: {selectedDisasterLabel}
                   </div>
                   <div>
                     {ru.settingsMaxPlayers}: {settings.maxPlayers}

@@ -2,6 +2,10 @@
 import type { ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 
+let modalLockCount = 0;
+let prevBodyOverflow = "";
+let prevHtmlOverflow = "";
+
 interface ModalProps {
   open: boolean;
   title?: string;
@@ -29,31 +33,27 @@ export default function Modal({
   }, [open]);
 
   useEffect(() => {
-    if (!mounted) return;
+    if (!open) return;
+
     const body = document.body;
     const html = document.documentElement;
-    const previousOverflow = body.style.overflow;
-    const previousPosition = body.style.position;
-    const previousTop = body.style.top;
-    const previousWidth = body.style.width;
-    const previousHtmlOverflow = html.style.overflow;
-    const scrollY = window.scrollY;
 
-    body.style.overflow = "hidden";
-    body.style.position = "fixed";
-    body.style.top = `-${scrollY}px`;
-    body.style.width = "100%";
-    html.style.overflow = "hidden";
+    if (modalLockCount === 0) {
+      prevBodyOverflow = body.style.overflow;
+      prevHtmlOverflow = html.style.overflow;
+      body.style.overflow = "hidden";
+      html.style.overflow = "hidden";
+    }
+    modalLockCount += 1;
 
     return () => {
-      body.style.overflow = previousOverflow;
-      body.style.position = previousPosition;
-      body.style.top = previousTop;
-      body.style.width = previousWidth;
-      html.style.overflow = previousHtmlOverflow;
-      window.scrollTo(0, scrollY);
+      modalLockCount = Math.max(0, modalLockCount - 1);
+      if (modalLockCount === 0) {
+        body.style.overflow = prevBodyOverflow;
+        html.style.overflow = prevHtmlOverflow;
+      }
     };
-  }, [mounted]);
+  }, [open]);
 
   useEffect(() => {
     if (!mounted || !dismissible) return;

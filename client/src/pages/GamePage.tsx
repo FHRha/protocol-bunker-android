@@ -28,14 +28,22 @@ interface GamePageProps {
   onClearMobileDossierError?: () => void;
 }
 
-type SpecialDialogKind = "none" | "player" | "neighbor" | "category";
+type SpecialDialogKind = "none" | "player" | "neighbor" | "category" | "bunker" | "special" | "baggage";
+
+interface SpecialDialogOption {
+  id: string;
+  label: string;
+  detail?: string;
+  payload?: Record<string, string | number | boolean>;
+}
 
 interface SpecialDialogState {
   kind: SpecialDialogKind;
   specialInstanceId: string;
   title: string;
-  options: Array<{ id: string; label: string }>;
+  options: SpecialDialogOption[];
   description?: string;
+  targetPlayerId?: string;
 }
 
 const CATEGORY_KEY_TO_RU: Record<string, string> = {
@@ -97,6 +105,27 @@ const VOTING_ONLY_EFFECTS = new Set([
 
 const REVEAL_ONLY_EFFECTS = new Set(["forceRevealCategoryForAll", "setRoundRule"]);
 
+type WorldPreviewCard = {
+  isRevealed: boolean;
+  imageId?: string;
+};
+
+function pickMobileWorldPreviewCard<T extends WorldPreviewCard>(cards: T[]): T | null {
+  if (!cards || cards.length === 0) return null;
+
+  for (let i = cards.length - 1; i >= 0; i -= 1) {
+    const card = cards[i];
+    if (card.isRevealed && (card.imageId ?? "").trim()) return card;
+  }
+  for (let i = cards.length - 1; i >= 0; i -= 1) {
+    if (cards[i].isRevealed) return cards[i];
+  }
+  for (let i = cards.length - 1; i >= 0; i -= 1) {
+    if ((cards[i].imageId ?? "").trim()) return cards[i];
+  }
+  return cards[cards.length - 1];
+}
+
 function formatPlayerNameShort(name: string, maxLen = 14): string {
   const normalized = (name ?? "").trim();
   if (!normalized) return "";
@@ -138,6 +167,23 @@ function resolveForcedCategoryLabels(raw: string | null | undefined): Set<string
     out.add(trimmed);
   }
   return out;
+}
+
+function pickPreferredPublicCategoryCard(
+  slot: GameView["public"]["players"][number]["categories"][number] | undefined
+) {
+  if (!slot || slot.cards.length === 0) return undefined;
+  const normalizedSlotCategory = normalizeCategoryToken(slot.category);
+  const shiftedBack = slot.cards.find((card) => {
+    const backCategory = normalizeCategoryToken(card.backCategory ?? "");
+    return backCategory !== "" && backCategory !== normalizedSlotCategory;
+  });
+  if (shiftedBack) return shiftedBack;
+
+  const revealedCard = slot.cards.find((card) => !card.hidden && Boolean(card.imgUrl));
+  if (revealedCard) return revealedCard;
+
+  return slot.cards[0];
 }
 
 
@@ -296,6 +342,19 @@ export default function GamePage({
     votePhase === "voting" &&
     youStatus === "alive" &&
     !(gameView?.public.voting?.hasVoted ?? false);
+  const disallowedVoteTargetIds = gameView?.public.disallowedVoteTargetIdsForYou ?? [];
+  const disallowedVoteTargetSet = useMemo(
+    () => new Set(disallowedVoteTargetIds),
+    [disallowedVoteTargetIds]
+  );
+  const selectedVoteTargetDisallowed = voteTargetId ? disallowedVoteTargetSet.has(voteTargetId) : false;
+  const disallowedVoteTargetNames = useMemo(
+    () =>
+      alivePlayers
+        .filter((player) => player.playerId !== you?.playerId && disallowedVoteTargetSet.has(player.playerId))
+        .map((player) => player.name),
+    [alivePlayers, disallowedVoteTargetSet, you?.playerId]
+  );
 
   const currentTurnName = currentTurnPlayerId
     ? publicPlayers.find((player) => player.playerId === currentTurnPlayerId)?.name ?? ""
@@ -348,20 +407,14 @@ export default function GamePage({
     () => (world ? world.threats.slice(0, worldThreatFinalCount) : []),
     [world, worldThreatFinalCount]
   );
-  const mobileBunkerPreview = useMemo(() => {
-    if (!world || world.bunker.length === 0) return null;
-    for (let i = world.bunker.length - 1; i >= 0; i -= 1) {
-      if (world.bunker[i].isRevealed) return world.bunker[i];
-    }
-    return world.bunker[0];
-  }, [world]);
-  const mobileThreatPreview = useMemo(() => {
-    if (visibleWorldThreats.length === 0) return null;
-    for (let i = visibleWorldThreats.length - 1; i >= 0; i -= 1) {
-      if (visibleWorldThreats[i].isRevealed) return visibleWorldThreats[i];
-    }
-    return visibleWorldThreats[0];
-  }, [visibleWorldThreats]);
+  const mobileBunkerPreview = useMemo(
+    () => pickMobileWorldPreviewCard(world?.bunker ?? []),
+    [world]
+  );
+  const mobileThreatPreview = useMemo(
+    () => pickMobileWorldPreviewCard(visibleWorldThreats),
+    [visibleWorldThreats]
+  );
   const showThreatModifier = phase === "ended" && (threatModifier?.delta ?? 0) !== 0;
   const threatModifierText = useMemo(() => {
     if (!showThreatModifier || !threatModifier) return "";
@@ -484,6 +537,11 @@ export default function GamePage({
       setVoteModalOpen(false);
     }
   }, [votePhase]);
+  useEffect(() => {
+    if (voteTargetId && disallowedVoteTargetSet.has(voteTargetId)) {
+      setVoteTargetId(null);
+    }
+  }, [voteTargetId, disallowedVoteTargetSet]);
 
   useEffect(() => {
     if (!worldEvent || worldEvent.type !== "bunker_revealed") return;
@@ -720,11 +778,12 @@ export default function GamePage({
     specialInstanceId: string,
     title: string,
     kind: SpecialDialogKind,
-    options: Array<{ id: string; label: string }> = [],
-    description?: string
+    options: SpecialDialogOption[] = [],
+    description?: string,
+    targetPlayerId?: string
   ) => {
     setDialogSelection("");
-    setSpecialDialog({ kind, specialInstanceId, title, options, description });
+    setSpecialDialog({ kind, specialInstanceId, title, options, description, targetPlayerId });
   };
 
   const closeSpecialDialog = () => {
@@ -739,10 +798,6 @@ export default function GamePage({
     return labels.some((label) => {
       const slot = player.categories.find((entry) => entry.category === label);
       if (!slot || slot.cards.length === 0) return false;
-      const hasRevealedFlag = slot.cards.some((card) => typeof card.revealed === "boolean");
-      if (hasRevealedFlag) {
-        return slot.cards.some((card) => card.revealed === true);
-      }
       return slot.status === "revealed";
     });
   };
@@ -760,14 +815,61 @@ export default function GamePage({
 
   const resolveTargetScope = (special: SpecialConditionInstance): SpecialTargetScope | null => {
     if (special.targetScope) return special.targetScope;
-    if (special.choiceKind === "neighbor") return "neighbors";
-    if (special.choiceKind === "player") return "any_alive";
+    const choiceKind = resolveChoiceKind(special);
+    if (choiceKind === "neighbor") return "neighbors";
+    if (choiceKind === "player") return "any_alive";
     return null;
+  };
+
+  const resolveChoiceKind = (special: SpecialConditionInstance): string => {
+    const explicit = String(special.choiceKind ?? "").trim().toLowerCase();
+    if (
+      explicit === "player" ||
+      explicit === "neighbor" ||
+      explicit === "category" ||
+      explicit === "bunker" ||
+      explicit === "special" ||
+      explicit === "none"
+    ) {
+      return explicit;
+    }
+
+    const effectType = String(special.effect.type ?? "").trim().toLowerCase();
+    switch (effectType) {
+      case "banvoteagainst":
+      case "disablevote":
+      case "doublevotesagainst_and_disableselfvote":
+      case "replacerevealedcard":
+      case "discardrevealedanddealhidden":
+      case "stealbaggage_and_givespecial":
+        return "player";
+      case "swaprevealedwithneighbor":
+        return "neighbor";
+      case "forcerevealcategoryforall":
+        return "category";
+      case "devchoosespecial":
+        return "special";
+      case "replacebunkercard":
+      case "discardbunkercard":
+      case "stealbunkercardtoexiled":
+        return "bunker";
+      default:
+        break;
+    }
+    if (effectType.includes("bunker")) {
+      return "bunker";
+    }
+
+    return special.needsChoice ? "player" : "none";
   };
 
   const hasTargetsForSpecial = (special: SpecialConditionInstance): boolean => {
     if (!you) return false;
-    const choiceKind = special.choiceKind ?? (special.needsChoice ? "player" : "none");
+    const choiceKind = resolveChoiceKind(special);
+    if (choiceKind === "bunker") {
+      if (!world) return false;
+      return isDevScenario ? world.bunker.length > 0 : world.bunker.some((card) => card.isRevealed);
+    }
     if (choiceKind !== "player" && choiceKind !== "neighbor") return true;
     const targetScope = resolveTargetScope(special);
     if (!targetScope) return true;
@@ -800,6 +902,15 @@ export default function GamePage({
         options = options.filter((id) => youHas && hasRevealedCategory(id, categoryKey));
       }
     }
+    if (special.effect.type === "stealBaggage_and_giveSpecial") {
+      const baggageLabels = CATEGORY_KEY_TO_LABELS.baggage ?? ["Багаж"];
+      options = options.filter((id) => {
+        const target = publicPlayers.find((entry) => entry.playerId === id);
+        if (!target) return false;
+        const baggageSlot = target.categories.find((entry) => baggageLabels.includes(entry.category));
+        return Boolean(baggageSlot && baggageSlot.cards.length > 0);
+      });
+    }
     return options.length > 0;
   };
 
@@ -823,7 +934,7 @@ export default function GamePage({
       }
     }
 
-    const choiceKind = special.choiceKind ?? (special.needsChoice ? "player" : "none");
+    const choiceKind = resolveChoiceKind(special);
     const targetScope = resolveTargetScope(special);
     const aliveSet = new Set(alivePlayers.map((player) => player.playerId));
     const orderRing = publicPlayers.map((player) => player.playerId);
@@ -835,6 +946,47 @@ export default function GamePage({
         return;
       }
       openSpecialDialog(special.instanceId, "Выберите категорию", "category", CATEGORY_OPTIONS, special.text);
+      return;
+    }
+
+    if (choiceKind === "bunker") {
+      const options =
+        world?.bunker
+          .map((card, index) =>
+            (isDevScenario || card.isRevealed)
+              ? {
+                  id: String(index),
+                  label: card.title ? `Карта бункера #${index + 1}: ${card.title}` : `Карта бункера #${index + 1}`,
+                }
+              : null
+          )
+          .filter((entry): entry is { id: string; label: string } => Boolean(entry)) ?? [];
+      openSpecialDialog(
+        special.instanceId,
+        "Выберите карту бункера",
+        "bunker",
+        options,
+        special.text
+      );
+      return;
+    }
+
+    if (choiceKind === "special") {
+      const rawOptions = special.effect.params?.specialOptions;
+      const options = Array.isArray(rawOptions)
+        ? rawOptions
+            .map((entry, index) => {
+              if (!entry || typeof entry !== "object") return null;
+              const candidate = entry as { id?: unknown; title?: unknown; label?: unknown };
+              const id = String(candidate.id ?? "").trim();
+              if (!id) return null;
+              const labelRaw = String(candidate.title ?? candidate.label ?? "").trim();
+              const label = labelRaw || `Особое условие #${index + 1}`;
+              return { id, label };
+            })
+            .filter((entry): entry is { id: string; label: string } => Boolean(entry))
+        : [];
+      openSpecialDialog(special.instanceId, "Выберите особое условие", "special", options, special.text);
       return;
     }
 
@@ -894,6 +1046,47 @@ export default function GamePage({
           options = options.filter((option) => youHas && hasRevealedCategory(option.id, categoryKey));
         }
       }
+      if (effectType === "stealBaggage_and_giveSpecial") {
+        const baggageLabels = CATEGORY_KEY_TO_LABELS.baggage ?? ["Багаж"];
+        options = options.filter((option) => {
+          const target = publicPlayers.find((entry) => entry.playerId === option.id);
+          if (!target) return false;
+          const baggageSlot = target.categories.find((entry) => baggageLabels.includes(entry.category));
+          return Boolean(baggageSlot && baggageSlot.cards.length > 0);
+        });
+        const baggageOptions: SpecialDialogOption[] = [];
+        options.forEach((option) => {
+          const target = publicPlayers.find((entry) => entry.playerId === option.id);
+          if (!target) return;
+          const baggageSlot = target.categories.find((entry) => baggageLabels.includes(entry.category));
+          if (!baggageSlot) return;
+          baggageSlot.cards.forEach((card, index) => {
+            const baggageCardId = String(card.instanceId ?? "").trim();
+            if (!baggageCardId) return;
+            const baggageLabelRaw = String(card.labelShort ?? "").trim();
+            const baggageLabel = card.hidden
+              ? `Скрытая карта #${index + 1}`
+              : baggageLabelRaw || `Карта багажа #${index + 1}`;
+            baggageOptions.push({
+              id: `${target.playerId}::${baggageCardId}`,
+              label: `${option.label} - ${baggageLabel}`,
+              detail: `Забрать багаж: ${baggageLabel}`,
+              payload: {
+                targetPlayerId: target.playerId,
+                baggageCardId,
+              },
+            });
+          });
+        });
+        openSpecialDialog(
+          special.instanceId,
+          "Выберите игрока и багаж",
+          "player",
+          baggageOptions,
+          special.text
+        );
+        return;
+      }
       openSpecialDialog(
         special.instanceId,
         targetScope === "neighbors" ? "Выберите соседа" : "Выберите игрока",
@@ -918,13 +1111,39 @@ export default function GamePage({
     if (!wsInteractive) return;
     if (!specialDialog) return;
     if (!dialogSelection) return;
+    const selectedOption = specialDialog.options.find((option) => option.id === dialogSelection);
 
     if (specialDialog.kind === "player") {
-      onApplySpecial(specialDialog.specialInstanceId, { targetPlayerId: dialogSelection });
+      const special = you?.specialConditions.find((item) => item.instanceId === specialDialog.specialInstanceId);
+      if (special?.effect.type === "stealBaggage_and_giveSpecial") {
+        const targetPlayerId = String(selectedOption?.payload?.targetPlayerId ?? "").trim();
+        const baggageCardId = String(selectedOption?.payload?.baggageCardId ?? "").trim();
+        if (!targetPlayerId) return;
+        if (baggageCardId) {
+          onApplySpecial(specialDialog.specialInstanceId, {
+            targetPlayerId,
+            baggageCardId,
+          });
+        } else {
+          onApplySpecial(specialDialog.specialInstanceId, { targetPlayerId });
+        }
+      } else {
+        onApplySpecial(specialDialog.specialInstanceId, { targetPlayerId: dialogSelection });
+      }
     } else if (specialDialog.kind === "neighbor") {
       onApplySpecial(specialDialog.specialInstanceId, { side: dialogSelection });
     } else if (specialDialog.kind === "category") {
       onApplySpecial(specialDialog.specialInstanceId, { category: dialogSelection });
+    } else if (specialDialog.kind === "bunker") {
+      onApplySpecial(specialDialog.specialInstanceId, { bunkerIndex: Number(dialogSelection) });
+    } else if (specialDialog.kind === "special") {
+      onApplySpecial(specialDialog.specialInstanceId, { specialId: dialogSelection });
+    } else if (specialDialog.kind === "baggage") {
+      if (!specialDialog.targetPlayerId) return;
+      onApplySpecial(specialDialog.specialInstanceId, {
+        targetPlayerId: specialDialog.targetPlayerId,
+        baggageCardId: dialogSelection,
+      });
     }
 
     closeSpecialDialog();
@@ -1378,7 +1597,7 @@ export default function GamePage({
                           <CardTile
                             src={
                               mobileBunkerPreview?.isRevealed
-                                ? getWorldImage(mobileBunkerPreview.imageId)
+                                ? getWorldImage(mobileBunkerPreview.imageId) ?? getCardBackUrl("Бункер")
                                 : getCardBackUrl("Бункер")
                             }
                             fallback="Бункер"
@@ -1408,7 +1627,7 @@ export default function GamePage({
                           <CardTile
                             src={
                               mobileThreatPreview?.isRevealed
-                                ? getWorldImage(mobileThreatPreview.imageId)
+                                ? getWorldImage(mobileThreatPreview.imageId) ?? getCardBackUrl("Угроза")
                                 : getCardBackUrl("Угроза")
                             }
                             fallback="Угроза"
@@ -1534,10 +1753,15 @@ export default function GamePage({
                 >
                   {PUBLIC_CATEGORY_ORDER.map((category) => {
                     const slot = selectedBoardPlayer.categories.find((entry) => entry.category === category);
-                    const isRevealed = Boolean(slot && slot.status === "revealed" && slot.cards.length > 0);
-                    const card = slot?.cards[0];
+                    const card = pickPreferredPublicCategoryCard(slot);
+                    const isRevealed = Boolean(slot && slot.status === "revealed" && slot.cards.length > 0 && !card?.hidden);
                     const faceUrl = isRevealed ? getCardFaceUrl(card?.imgUrl) : undefined;
-                    const backUrl = getCardBackUrl(category);
+                    const requestedBackCategory = card?.backCategory?.trim() || "";
+                    const backCategory =
+                      requestedBackCategory && getCardBackUrl(requestedBackCategory)
+                        ? requestedBackCategory
+                        : category;
+                    const backUrl = getCardBackUrl(backCategory);
                     if (isRevealed && !faceUrl) {
                       return (
                         <CardTile
@@ -1786,19 +2010,32 @@ export default function GamePage({
                 {alivePlayers
                   .filter((player) => player.playerId !== you?.playerId)
                   .map((player) => (
-                    <option key={player.playerId} value={player.playerId}>
+                    <option
+                      key={player.playerId}
+                      value={player.playerId}
+                      disabled={disallowedVoteTargetSet.has(player.playerId)}
+                    >
                       {player.name}
                     </option>
                   ))}
               </select>
               <button
                 className="primary"
-                disabled={!canVote || !voteTargetId}
-                onClick={() => voteTargetId && onVote(voteTargetId)}
+                disabled={!canVote || !voteTargetId || selectedVoteTargetDisallowed}
+                onClick={() => {
+                  if (!voteTargetId || disallowedVoteTargetSet.has(voteTargetId)) return;
+                  onVote(voteTargetId);
+                }}
               >
                 {ru.voteButton}
               </button>
               {!canVote ? <div className="muted">{ru.alreadyVoted}</div> : null}
+              {selectedVoteTargetDisallowed ? (
+                <div className="muted">{ru.revoteBlockedSelected}</div>
+              ) : null}
+              {disallowedVoteTargetNames.length > 0 ? (
+                <div className="muted">{ru.revoteBlockedTargets(disallowedVoteTargetNames.join(", "))}</div>
+              ) : null}
             </div>
             <div className="vote-modal-right">
               <div className="panel-subtitle">{ru.voteCandidateTitle}</div>
@@ -2105,98 +2342,48 @@ export default function GamePage({
         </div>
       ) : null}
 
-      {!isMobileNarrow ? (
-        <Modal
-          open={Boolean(specialDialog)}
-          title={specialDialog?.title}
-          onClose={closeSpecialDialog}
-          dismissible={true}
-        >
-          {specialDialog?.description ? <div className="muted">{specialDialog.description}</div> : null}
-          {specialDialog && specialDialog.kind !== "none" ? (
-            <>
-              {specialDialog.options.length === 0 ? (
-                <div className="muted">{ru.noTargetCandidates}</div>
-              ) : null}
-              <select
-                value={dialogSelection}
-                onChange={(event) => setDialogSelection(event.target.value)}
-                disabled={specialDialog.options.length === 0}
-              >
-                <option value="" disabled>
-                  {ru.modalSelect}
-                </option>
-                {specialDialog.options.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </>
-          ) : null}
-          <div className="modal-actions">
-            <button className="ghost" onClick={closeSpecialDialog}>
-              {ru.modalCancel}
-            </button>
-            <button
-              className="primary"
-              disabled={!dialogSelection || (specialDialog?.options.length ?? 0) === 0}
-              onClick={submitSpecialDialog}
-            >
-              {ru.modalApply}
-            </button>
-          </div>
-        </Modal>
-      ) : null}
-
-      {isMobileNarrow && specialDialog ? (
-        <div className="mobile-special-backdrop" onClick={closeSpecialDialog}>
-          <div
-            className="mobile-special-panel"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="mobile-special-header">
-              <div className="mobile-special-title">{specialDialog.title}</div>
-              <button className="icon-button" onClick={closeSpecialDialog}>
-                ✕
-              </button>
-            </div>
-            {specialDialog.description ? (
-              <div className="muted mobile-special-description">{specialDialog.description}</div>
+      <Modal
+        open={Boolean(specialDialog)}
+        title={specialDialog?.title}
+        onClose={closeSpecialDialog}
+        dismissible={true}
+      >
+        {specialDialog?.description ? <div className="muted">{specialDialog.description}</div> : null}
+        {specialDialog && specialDialog.kind !== "none" ? (
+          <>
+            {specialDialog.options.length === 0 ? (
+              <div className="muted">{ru.noTargetCandidates}</div>
             ) : null}
-            <div className="mobile-special-body">
-              {specialDialog.options.length === 0 ? (
-                <div className="muted">{ru.noTargetCandidates}</div>
-              ) : (
-                <div className="mobile-special-options">
-                  {specialDialog.options.map((option) => (
-                    <button
-                      key={option.id}
-                      type="button"
-                      className={`mobile-special-option${dialogSelection === option.id ? " selected" : ""}`}
-                      onClick={() => setDialogSelection(option.id)}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="mobile-special-footer">
-              <button className="ghost" onClick={closeSpecialDialog}>
-                {ru.modalCancel}
-              </button>
-              <button
-                className="primary"
-                disabled={!dialogSelection || specialDialog.options.length === 0}
-                onClick={submitSpecialDialog}
-              >
-                {ru.modalApply}
-              </button>
-            </div>
-          </div>
+            <select
+              value={dialogSelection}
+              onChange={(event) => setDialogSelection(event.target.value)}
+              disabled={specialDialog.options.length === 0}
+            >
+              <option value="" disabled>
+                {ru.modalSelect}
+              </option>
+              {specialDialog.options.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </>
+        ) : null}
+        <div className="modal-actions">
+          <button className="ghost" onClick={closeSpecialDialog}>
+            {ru.modalCancel}
+          </button>
+          <button
+            className="primary"
+            disabled={!dialogSelection || (specialDialog?.options.length ?? 0) === 0}
+            onClick={submitSpecialDialog}
+          >
+            {ru.modalApply}
+          </button>
         </div>
-      ) : null}
+      </Modal>
+
     </div>
   );
 }

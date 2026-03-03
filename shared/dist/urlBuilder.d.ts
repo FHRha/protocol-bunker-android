@@ -29,7 +29,10 @@ export interface BuildLinkSetInput {
     publicBase?: string | null;
     roomCode: string;
     overlayViewToken: string;
-    overlayControlToken: string;
+    controlCompanionToken?: string;
+    editToken?: string;
+    controlToken?: string;
+    overlayControlToken?: string;
 }
 export declare function normalizeBase(base: string): string;
 export declare function buildLinkSet(input: BuildLinkSetInput): BuiltLinkSet;

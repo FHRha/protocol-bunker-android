@@ -13,6 +13,7 @@ const (
 	defaultScenarioID          = scenarioClassic
 	defaultScenarioName        = "Classic Bunker"
 	defaultScenarioDescription = "Базовый сценарий: раунды, голосование и особые условия."
+	randomDisasterID           = "__random__"
 )
 
 var rulesetTable = map[int]struct {
@@ -43,6 +44,7 @@ func defaultSettings() gameSettings {
 		PreVoteDiscussionSeconds:    60,
 		EnablePostVoteDiscussion:    false,
 		PostVoteDiscussionSeconds:   45,
+		AutomationMode:              "manual",
 		EnablePresenterMode:         false,
 		ContinuePermission:          "revealer_only",
 		RevealTimeoutAction:         "random_card",
@@ -50,6 +52,8 @@ func defaultSettings() gameSettings {
 		SpecialUsage:                "anytime",
 		MaxPlayers:                  12,
 		FinalThreatReveal:           "host",
+		ForcedDisasterID:            randomDisasterID,
+		SelectedDisasterID:          "",
 	}
 }
 

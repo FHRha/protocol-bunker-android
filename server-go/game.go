@@ -94,13 +94,14 @@ func healthDeckName() string {
 }
 
 type handCard struct {
-	InstanceID string
-	CardID     string
-	Deck       string
-	SlotKey    string
-	Label      string
-	Revealed   bool
-	Missing    bool
+	InstanceID         string
+	CardID             string
+	Deck               string
+	SlotKey            string
+	Label              string
+	Revealed           bool
+	Missing            bool
+	PublicBackCategory string
 }
 
 type voteRecord struct {
@@ -111,12 +112,13 @@ type voteRecord struct {
 }
 
 type gamePlayer struct {
-	PlayerID string
-	Name     string
-	Status   string
-	Hand     []handCard
-	Specials []specialConditionState
-	IsBot    bool
+	PlayerID                  string
+	Name                      string
+	Status                    string
+	Hand                      []handCard
+	Specials                  []specialConditionState
+	SpecialCategoryProxyCards []publicCategoryCard
+	IsBot                     bool
 
 	BannedAgainst        map[string]bool
 	ForcedWastedVoteNext bool
@@ -152,7 +154,7 @@ type gameSession struct {
 	VoteDisabled          map[string]string
 	VoteWeights           map[string]int
 	AutoWastedVoters      map[string]bool
-	RevoteDisallow        map[string]bool
+	RevoteDisallowByVoter map[string]map[string]bool
 	DoubleAgainst         string
 	TieBreakUsed          bool
 	VotesRemaining        int
@@ -175,6 +177,7 @@ type gameSession struct {
 
 	rng            *rand.Rand
 	specialPool    []specialDefinition
+	specialCatalog []specialDefinition
 	specialCounter int
 }
 
@@ -188,34 +191,35 @@ func newGameSession(roomCode, hostID, scenarioID string, settings gameSettings, 
 	}
 
 	session := &gameSession{
-		RoomCode:         roomCode,
-		HostID:           hostID,
-		Scenario:         scenarioID,
-		IsDev:            scenarioID == scenarioDevTest,
-		Settings:         settings,
-		Ruleset:          ruleset,
-		Players:          make(map[string]*gamePlayer, len(roomPlayers)),
-		Order:            make([]string, 0, len(roomPlayers)),
-		Phase:            scenarioPhaseReveal,
-		Round:            1,
-		RevealedThisRnd:  map[string]bool{},
-		Votes:            map[string]voteRecord{},
-		BaseVotes:        map[string]voteRecord{},
-		VoteResults:      map[string]voteRecord{},
-		VoteCandidates:   map[string]bool{},
-		VoteDisabled:     map[string]string{},
-		VoteWeights:      map[string]int{},
-		AutoWastedVoters: map[string]bool{},
-		RevoteDisallow:   map[string]bool{},
-		FinalThreats:     []string{},
-		rng:              rnd,
-		DeckPools:        pools,
+		RoomCode:              roomCode,
+		HostID:                hostID,
+		Scenario:              scenarioID,
+		IsDev:                 scenarioID == scenarioDevTest,
+		Settings:              settings,
+		Ruleset:               ruleset,
+		Players:               make(map[string]*gamePlayer, len(roomPlayers)),
+		Order:                 make([]string, 0, len(roomPlayers)),
+		Phase:                 scenarioPhaseReveal,
+		Round:                 1,
+		RevealedThisRnd:       map[string]bool{},
+		Votes:                 map[string]voteRecord{},
+		BaseVotes:             map[string]voteRecord{},
+		VoteResults:           map[string]voteRecord{},
+		VoteCandidates:        map[string]bool{},
+		VoteDisabled:          map[string]string{},
+		VoteWeights:           map[string]int{},
+		AutoWastedVoters:      map[string]bool{},
+		RevoteDisallowByVoter: map[string]map[string]bool{},
+		FinalThreats:          []string{},
+		rng:                   rnd,
+		DeckPools:             pools,
 	}
-	session.World = rollWorldFromPools(pools, rnd, len(roomPlayers))
+	session.World = rollWorldFromPools(pools, rnd, len(roomPlayers), settings.ForcedDisasterID)
 	sourceSpecials := specialDefinitions
 	if len(sourceSpecials) == 0 {
 		sourceSpecials = implementedSpecialDefinitions
 	}
+	session.specialCatalog = cloneSpecialDefinitions(sourceSpecials)
 	session.specialPool = make([]specialDefinition, 0, len(sourceSpecials))
 	for _, def := range sourceSpecials {
 		session.specialPool = append(session.specialPool, def)
@@ -259,13 +263,14 @@ func newGameSession(roomCode, hostID, scenarioID string, settings gameSettings, 
 		hand = append(hand, drawFor(factsDeck, "facts1", rp.ID))
 		hand = append(hand, drawFor(factsDeck, "facts2", rp.ID))
 		session.Players[rp.ID] = &gamePlayer{
-			PlayerID:      rp.ID,
-			Name:          rp.Name,
-			Status:        playerAlive,
-			Hand:          hand,
-			Specials:      nil,
-			IsBot:         false,
-			BannedAgainst: map[string]bool{},
+			PlayerID:                  rp.ID,
+			Name:                      rp.Name,
+			Status:                    playerAlive,
+			Hand:                      hand,
+			Specials:                  nil,
+			SpecialCategoryProxyCards: nil,
+			IsBot:                     false,
+			BannedAgainst:             map[string]bool{},
 		}
 		session.Order = append(session.Order, rp.ID)
 	}
@@ -362,7 +367,7 @@ func (g *gameSession) startVoting() {
 	g.VoteDisabled = map[string]string{}
 	g.VoteWeights = map[string]int{}
 	g.AutoWastedVoters = map[string]bool{}
-	g.RevoteDisallow = map[string]bool{}
+	g.RevoteDisallowByVoter = map[string]map[string]bool{}
 	g.DoubleAgainst = ""
 	g.TieBreakUsed = false
 	for _, id := range g.aliveIDs() {
@@ -437,7 +442,7 @@ func (g *gameSession) startNextRoundOrEnd() gameActionResult {
 	g.VoteDisabled = map[string]string{}
 	g.VoteWeights = map[string]int{}
 	g.AutoWastedVoters = map[string]bool{}
-	g.RevoteDisallow = map[string]bool{}
+	g.RevoteDisallowByVoter = map[string]map[string]bool{}
 	g.DoubleAgainst = ""
 	g.TieBreakUsed = false
 	g.RevealedThisRnd = map[string]bool{}
@@ -487,7 +492,7 @@ func (g *gameSession) handleAction(actorID, actionType string, payload map[strin
 		if rawPayload == nil {
 			rawPayload = map[string]any{}
 		}
-		return g.applySpecial(actorID, specialInstanceID, rawPayload)
+		return g.applySpecialWithPending(actorID, specialInstanceID, rawPayload)
 	case "revealWorldThreat":
 		index := asInt(payload["index"], -1)
 		return g.revealWorldThreat(actorID, index)
@@ -667,7 +672,7 @@ func (g *gameSession) vote(actorID, targetID string) gameActionResult {
 	if !g.VoteCandidates[targetID] {
 		return gameActionResult{Error: "Недопустимый кандидат."}
 	}
-	if g.RevoteDisallow[targetID] {
+	if perVoter := g.RevoteDisallowByVoter[actorID]; perVoter != nil && perVoter[targetID] {
 		return gameActionResult{Error: "Нельзя голосовать за этого кандидата."}
 	}
 	if reason, blocked := g.VoteDisabled[actorID]; blocked {
@@ -844,13 +849,14 @@ func (g *gameSession) devAddPlayer(name string) gameActionResult {
 	fallbackName := fmt.Sprintf("DEV Игрок %d", g.DevBotCounter)
 	displayName := sanitizeHumanText(strings.TrimSpace(name), fallbackName)
 	newPlayer := &gamePlayer{
-		PlayerID:      playerID,
-		Name:          displayName,
-		Status:        playerAlive,
-		Hand:          g.drawInitialHandForPlayer(playerID),
-		Specials:      nil,
-		IsBot:         true,
-		BannedAgainst: map[string]bool{},
+		PlayerID:                  playerID,
+		Name:                      displayName,
+		Status:                    playerAlive,
+		Hand:                      g.drawInitialHandForPlayer(playerID),
+		Specials:                  nil,
+		SpecialCategoryProxyCards: nil,
+		IsBot:                     true,
+		BannedAgainst:             map[string]bool{},
 	}
 	g.assignInitialSpecialsForPlayer(newPlayer, g.buildSpecialAssetLookup())
 	g.Players[playerID] = newPlayer
@@ -1055,6 +1061,7 @@ func (g *gameSession) buildGameView(room *room, playerID string) gameView {
 	if g.VotePhase != "" {
 		phase := g.VotePhase
 		view.Public.VotePhase = &phase
+		view.Public.DisallowedVoteTargetIDsForYou = g.disallowedVoteTargetsFor(playerID)
 		view.Public.Voting = &votingView{HasVoted: g.playerHasVoted(playerID)}
 		view.Public.VotingProgress = &votingProgress{
 			Voted: len(g.currentVoteSource()),
@@ -1082,6 +1089,19 @@ func (g *gameSession) currentVoteSource() map[string]voteRecord {
 		return g.VoteResults
 	}
 	return g.Votes
+}
+
+func (g *gameSession) disallowedVoteTargetsFor(playerID string) []string {
+	perVoter := g.RevoteDisallowByVoter[playerID]
+	if len(perVoter) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(perVoter))
+	for targetID := range perVoter {
+		out = append(out, targetID)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (g *gameSession) playerHasVoted(playerID string) bool {
@@ -1208,7 +1228,7 @@ func (g *gameSession) buildPublicCategories(player *gamePlayer) []publicCategory
 	slots := make([]publicCategorySlot, 0, len(categoryOrder))
 	for _, category := range categoryOrder {
 		if len(categoryOrder) > 0 && category == categoryOrder[len(categoryOrder)-1] {
-			cards := make([]publicCategoryCard, 0, len(player.Specials))
+			cards := make([]publicCategoryCard, 0, len(player.Specials)+len(player.SpecialCategoryProxyCards))
 			for _, special := range player.Specials {
 				if !g.IsDev && !special.RevealedPublic {
 					continue
@@ -1219,6 +1239,7 @@ func (g *gameSession) buildPublicCategories(player *gamePlayer) []publicCategory
 					Revealed: special.RevealedPublic,
 				})
 			}
+			cards = append(cards, player.SpecialCategoryProxyCards...)
 			status := "hidden"
 			if len(cards) > 0 {
 				status = "revealed"
@@ -1240,6 +1261,8 @@ func (g *gameSession) buildPublicCategories(player *gamePlayer) []publicCategory
 			continue
 		}
 		cards := make([]publicCategoryCard, 0, 2)
+		hiddenCards := make([]publicCategoryCard, 0, 2)
+		hasRevealed := false
 		for _, card := range player.Hand {
 			if card.Deck != cfg.deck {
 				continue
@@ -1247,21 +1270,36 @@ func (g *gameSession) buildPublicCategories(player *gamePlayer) []publicCategory
 			if cfg.slot != "" && card.SlotKey != cfg.slot {
 				continue
 			}
+			backCategory := category
+			if trimmed := strings.TrimSpace(card.PublicBackCategory); trimmed != "" {
+				backCategory = trimmed
+			}
 			if !g.IsDev && !card.Revealed {
+				hiddenCards = append(hiddenCards, publicCategoryCard{
+					InstanceID:   card.InstanceID,
+					Label:        "Скрытая карта",
+					Revealed:     false,
+					Hidden:       true,
+					BackCategory: backCategory,
+				})
 				continue
 			}
 			imgURL := ""
 			if card.CardID != "" {
 				imgURL = "/assets/" + card.CardID
 			}
+			hasRevealed = hasRevealed || card.Revealed || g.IsDev
 			cards = append(cards, publicCategoryCard{
-				Label:    card.Label,
-				ImgURL:   imgURL,
-				Revealed: card.Revealed,
+				InstanceID:   card.InstanceID,
+				Label:        card.Label,
+				ImgURL:       imgURL,
+				Revealed:     card.Revealed || g.IsDev,
+				BackCategory: backCategory,
 			})
 		}
+		cards = append(cards, hiddenCards...)
 		status := "hidden"
-		if len(cards) > 0 {
+		if hasRevealed {
 			status = "revealed"
 		}
 		slots = append(slots, publicCategorySlot{

@@ -70,6 +70,10 @@ jobs:
           echo "PB_RELEASE_KEY_ALIAS=$SIGNING_KEY_ALIAS" >> "$GITHUB_ENV"
           echo "PB_RELEASE_KEY_PASSWORD=$SIGNING_KEY_PASSWORD" >> "$GITHUB_ENV"
 
+      - name: Validate Encoding (UTF-8 / mojibake)
+        shell: pwsh
+        run: ./scripts/check-encoding.ps1
+
       - name: Run Go Tests
         working-directory: server-go
         run: go test ./...

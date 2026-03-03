@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,9 +24,11 @@ const (
 	pathHealth                = "/health"
 	pathAPIScenarios          = "/api/scenarios"
 	pathAssets                = "/assets/"
-	writeTimeoutSeconds       = 2
+	writeTimeoutSeconds       = 10
 	readLimitBytes      int64 = 1 << 20
 	disconnectGraceMS   int64 = 300000
+	completedRoomTTL          = 30 * time.Minute
+	inactiveRoomTTL           = 6 * time.Hour
 )
 
 func normalizeOutcomeToken(raw string) string {
@@ -174,6 +177,7 @@ func newServer(cfg config) (*server, error) {
 		cfg:                cfg,
 		rooms:              map[string]*room{},
 		connToID:           map[*websocket.Conn]connInfo{},
+		companionConns:     map[*websocket.Conn]companionConnInfo{},
 		assets:             assets,
 		specialDefinitions: specialDefinitions,
 		upgrader: websocket.Upgrader{
@@ -181,6 +185,136 @@ func newServer(cfg config) (*server, error) {
 		},
 	}
 	return srv, nil
+}
+
+func roomGameIsEnded(game roomGame) bool {
+	switch current := game.(type) {
+	case *gameSession:
+		return current != nil && current.Phase == scenarioPhaseEnded
+	case *devTestSession:
+		return current != nil && current.core != nil && current.core.Phase == scenarioPhaseEnded
+	default:
+		return false
+	}
+}
+
+func (s *server) disasterDeckCardsLocked() []assetCard {
+	_, disasterDeck, _ := resolveWorldDeckNames(s.assets.Decks)
+	if disasterDeck == "" {
+		return nil
+	}
+	raw := s.assets.Decks[disasterDeck]
+	if len(raw) == 0 {
+		return nil
+	}
+	cards := make([]assetCard, 0, len(raw))
+	cards = append(cards, raw...)
+	sort.SliceStable(cards, func(i, j int) bool {
+		return strings.ToLower(cards[i].Label) < strings.ToLower(cards[j].Label)
+	})
+	return cards
+}
+
+func (s *server) isValidDisasterIDLocked(disasterID string) bool {
+	target := strings.TrimSpace(disasterID)
+	if target == "" {
+		return false
+	}
+	if target == randomDisasterID {
+		return true
+	}
+	for _, card := range s.disasterDeckCardsLocked() {
+		if card.ID == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *server) buildDisasterOptionsLocked() []worldCardView {
+	cards := s.disasterDeckCardsLocked()
+	if len(cards) == 0 {
+		return nil
+	}
+	options := make([]worldCardView, 0, len(cards))
+	for _, card := range cards {
+		options = append(options, worldCardView{
+			Kind:        "disaster",
+			ID:          card.ID,
+			Title:       card.Label,
+			Description: card.Label,
+			ImageID:     card.ID,
+		})
+	}
+	return options
+}
+
+func (s *server) selectedDisasterCardByIDLocked(disasterID string) (assetCard, bool) {
+	target := strings.TrimSpace(disasterID)
+	if target == "" {
+		return assetCard{}, false
+	}
+	if target == randomDisasterID {
+		return assetCard{}, false
+	}
+	for _, card := range s.disasterDeckCardsLocked() {
+		if card.ID == target {
+			return card, true
+		}
+	}
+	return assetCard{}, false
+}
+
+func (s *server) defaultDisasterIDLocked() string {
+	cards := s.disasterDeckCardsLocked()
+	if len(cards) == 0 {
+		return "disaster_fallback"
+	}
+	return cards[0].ID
+}
+
+func normalizeAutomationMode(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "auto", "semi", "manual":
+		return strings.ToLower(strings.TrimSpace(raw))
+	default:
+		return "manual"
+	}
+}
+
+func (s *server) normalizeSettingsLocked(settings gameSettings) gameSettings {
+	settings.AutomationMode = normalizeAutomationMode(settings.AutomationMode)
+	selected := strings.TrimSpace(settings.ForcedDisasterID)
+	if selected == "" {
+		selected = strings.TrimSpace(settings.SelectedDisasterID)
+	}
+	if selected == "" {
+		selected = randomDisasterID
+	}
+	if !s.isValidDisasterIDLocked(selected) {
+		selected = randomDisasterID
+	}
+	settings.ForcedDisasterID = selected
+	settings.SelectedDisasterID = selected
+	return settings
+}
+
+func forceDisasterOnGame(game roomGame, card assetCard) {
+	view := worldCardView{
+		Kind:        "disaster",
+		ID:          card.ID,
+		Title:       card.Label,
+		Description: card.Label,
+		ImageID:     card.ID,
+	}
+	switch session := game.(type) {
+	case *gameSession:
+		session.World.Disaster = view
+	case *devTestSession:
+		if session.core != nil {
+			session.core.World.Disaster = view
+		}
+	}
 }
 
 func (s *server) routes() http.Handler {
@@ -352,7 +486,7 @@ func (s *server) handleMessage(conn *websocket.Conn, raw map[string]any) {
 	msgType, _ := raw["type"].(string)
 	if msgType == "" {
 		log.Printf("[ws] dropped message without type payload=%s", summarizePayload(raw))
-		s.sendError(conn, "Неверный формат сообщения")
+		s.sendError(conn, "Message type is required.")
 		return
 	}
 
@@ -363,6 +497,15 @@ func (s *server) handleMessage(conn *websocket.Conn, raw map[string]any) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if msgType == "hello" || msgType == "resume" || msgType == "startGame" {
+		if info, ok := s.connToID[conn]; ok {
+			log.Printf("[ws-in] type=%s room=%s player=%s", msgType, info.RoomCode, info.PlayerID)
+		} else if companion, ok := s.companionConns[conn]; ok {
+			log.Printf("[ws-in] type=%s room=%s player=companion", msgType, companion.RoomCode)
+		} else {
+			log.Printf("[ws-in] type=%s room=<none> player=<none>", msgType)
+		}
+	}
 
 	switch msgType {
 	case "hello":
@@ -376,7 +519,9 @@ func (s *server) handleMessage(conn *websocket.Conn, raw map[string]any) {
 	case "updateRules":
 		s.handleUpdateRulesLocked(conn, payload)
 	case "requestHostTransfer":
-		s.handleHostTransferLocked(conn)
+		s.handleHostTransferLocked(conn, payload)
+	case "overlaySubscribe":
+		s.handleOverlaySubscribeLocked(conn, payload)
 	case "kickFromLobby":
 		s.handleKickFromLobbyLocked(conn, payload)
 	case "ping":
@@ -385,23 +530,157 @@ func (s *server) handleMessage(conn *websocket.Conn, raw map[string]any) {
 		s.handleGameActionLocked(conn, msgType, payload)
 	default:
 		log.Printf("[ws] unknown message type=%s payload=%s", msgType, summarizePayload(payload))
-		s.sendErrorLocked(conn, "Неизвестное сообщение")
+		s.sendErrorLocked(conn, "Unknown message type.")
 	}
+}
+
+func resolveControlCompanionTokenFromHello(hello clientHelloPayload) string {
+	if token := strings.TrimSpace(hello.ControlToken); token != "" {
+		return token
+	}
+	if token := strings.TrimSpace(hello.EditToken); token != "" {
+		return token
+	}
+	return ""
+}
+
+func (s *server) isControlCompanionTokenLocked(room *room, rawToken string) bool {
+	if room == nil {
+		return false
+	}
+	token := strings.TrimSpace(rawToken)
+	if token == "" {
+		return false
+	}
+	if token == strings.TrimSpace(room.ControlToken) || token == strings.TrimSpace(room.EditToken) {
+		return true
+	}
+	if s.cfg.IdentityMode != "prod" {
+		control := room.Players[room.ControlID]
+		if control != nil && token == strings.TrimSpace(control.Token) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *server) currentControlPlayerLocked(room *room) (string, *player) {
+	if room == nil {
+		return "", nil
+	}
+	controlID := strings.TrimSpace(room.ControlID)
+	if controlID != "" {
+		if control := room.Players[controlID]; control != nil {
+			return controlID, control
+		}
+	}
+	hostID := strings.TrimSpace(room.HostID)
+	if hostID != "" {
+		if host := room.Players[hostID]; host != nil {
+			return hostID, host
+		}
+	}
+	return "", nil
+}
+
+func (s *server) sendControlCompanionHelloAckLocked(room *room, conn *websocket.Conn) bool {
+	controlID, control := s.currentControlPlayerLocked(room)
+	if controlID == "" || control == nil {
+		return false
+	}
+	s.writeWSLocked(conn, wsServerMessage{
+		Type: "helloAck",
+		Payload: map[string]any{
+			"playerId":     controlID,
+			"playerToken":  control.Token,
+			"controlToken": room.ControlToken,
+			"editToken":    room.EditToken,
+		},
+	})
+	return true
+}
+
+func (s *server) detachControlCompanionLocked(conn *websocket.Conn) {
+	info, ok := s.companionConns[conn]
+	if !ok {
+		return
+	}
+	delete(s.companionConns, conn)
+	if room := s.rooms[info.RoomCode]; room != nil && room.ControlCompanions != nil {
+		delete(room.ControlCompanions, conn)
+		s.rescheduleRoomCleanupTimerLocked(room)
+	}
+}
+
+func (s *server) attachControlCompanionLocked(room *room, conn *websocket.Conn) bool {
+	if room == nil {
+		s.sendErrorLocked(conn, "Room is not found.")
+		return false
+	}
+	controlID, control := s.currentControlPlayerLocked(room)
+	if controlID == "" || control == nil {
+		s.sendErrorLocked(conn, "Control player is not available.")
+		return false
+	}
+
+	if room.ControlCompanions == nil {
+		room.ControlCompanions = map[*websocket.Conn]struct{}{}
+	}
+	room.ControlCompanions[conn] = struct{}{}
+	s.companionConns[conn] = companionConnInfo{RoomCode: room.Code}
+
+	s.sendControlCompanionHelloAckLocked(room, conn)
+	s.writeWSLocked(conn, wsServerMessage{
+		Type:    "roomState",
+		Payload: s.buildRoomStateLocked(room),
+	})
+	if room.Phase == phaseGame && room.Game != nil {
+		view := room.Game.buildGameView(room, controlID)
+		s.writeWSLocked(conn, wsServerMessage{
+			Type:    "gameView",
+			Payload: view,
+		})
+	}
+	s.rescheduleRoomCleanupTimerLocked(room)
+	return true
+}
+func (s *server) handleOverlaySubscribeLocked(conn *websocket.Conn, payload map[string]any) {
+	var request clientOverlaySubscribePayload
+	if !decodePayload(payload, &request) {
+		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р В РІР‚С™Р В Р’В Р В РІР‚В¦Р В Р Р‹Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р Р†РІР‚С›РІР‚вЂњ Р В Р Р‹Р Р†Р вЂљРЎвЂєР В Р’В Р РЋРІР‚СћР В Р Р‹Р В РІР‚С™Р В Р’В Р РЋР’ВР В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ў overlaySubscribe.")
+		return
+	}
+	roomCode := strings.ToUpper(strings.TrimSpace(request.RoomCode))
+	token := strings.TrimSpace(request.Token)
+	if roomCode == "" || token == "" {
+		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р Р‹Р РЋРІР‚СљР В Р’В Р вЂ™Р’В¶Р В Р’В Р В РІР‚В¦Р В Р Р‹Р Р†Р вЂљРІвЂћвЂ“ roomCode Р В Р’В Р РЋРІР‚В token Р В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р РЏ companion-Р В Р’В Р РЋРІР‚вЂќР В Р’В Р РЋРІР‚СћР В Р’В Р СћРІР‚ВР В Р’В Р РЋРІР‚СњР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В РІР‚в„–Р В Р Р‹Р Р†Р вЂљР Р‹Р В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦Р В Р’В Р РЋРІР‚ВР В Р Р‹Р В Р РЏ.")
+		return
+	}
+	room := s.rooms[roomCode]
+	if room == nil {
+		s.sendErrorLocked(conn, "Р В Р’В Р РЋРІвЂћСћР В Р’В Р РЋРІР‚СћР В Р’В Р РЋР’ВР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р вЂ™Р’В° Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р’В Р Р†РІР‚С›РІР‚вЂњР В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°.")
+		return
+	}
+	if !s.isControlCompanionTokenLocked(room, token) {
+		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р В РІР‚С™Р В Р’В Р В РІР‚В¦Р В Р Р‹Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р Р†РІР‚С›РІР‚вЂњ control token.")
+		return
+	}
+	s.attachControlCompanionLocked(room, conn)
 }
 
 func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any) {
 	var hello clientHelloPayload
 	if !decodePayload(payload, &hello) {
-		s.sendErrorLocked(conn, "Неверный формат hello")
-		return
-	}
-	hello.Name = strings.TrimSpace(hello.Name)
-	if hello.Name == "" {
-		s.sendErrorLocked(conn, "Имя игрока обязательно")
+		s.sendErrorLocked(conn, "Р В РЎСљР В Р’ВµР В Р вЂ Р В Р’ВµР РЋР вЂљР В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ Р РЋРІР‚С›Р В РЎвЂўР РЋР вЂљР В РЎВР В Р’В°Р РЋРІР‚С™ hello")
 		return
 	}
 
 	if hello.Create {
+		hello.Name = strings.TrimSpace(hello.Name)
+		if hello.Name == "" {
+			s.sendErrorLocked(conn, "Р В Р’ВР В РЎВР РЋР РЏ Р В РЎвЂР В РЎвЂ“Р РЋР вЂљР В РЎвЂўР В РЎвЂќР В Р’В° Р В РЎвЂўР В Р’В±Р РЋР РЏР В Р’В·Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР Р‰Р В Р вЂ¦Р В РЎвЂў")
+			return
+		}
 		if err := s.createRoomAndAttachLocked(conn, hello); err != nil {
 			s.sendErrorLocked(conn, err.Error())
 		}
@@ -410,12 +689,27 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 
 	roomCode := strings.ToUpper(strings.TrimSpace(hello.RoomCode))
 	if roomCode == "" {
-		s.sendErrorLocked(conn, "Нужен roomCode")
+		s.sendErrorLocked(conn, "Р В РЎСљР РЋРЎвЂњР В Р’В¶Р В Р’ВµР В Р вЂ¦ roomCode")
 		return
 	}
 	room := s.rooms[roomCode]
 	if room == nil {
-		s.sendErrorLocked(conn, "Комната не найдена")
+		s.sendErrorLocked(conn, "Р В РЎв„ўР В РЎвЂўР В РЎВР В Р вЂ¦Р В Р’В°Р РЋРІР‚С™Р В Р’В° Р В Р вЂ¦Р В Р’Вµ Р В Р вЂ¦Р В Р’В°Р В РІвЂћвЂ“Р В РўвЂР В Р’ВµР В Р вЂ¦Р В Р’В°")
+		return
+	}
+
+	if companionToken := resolveControlCompanionTokenFromHello(hello); companionToken != "" {
+		if !s.isControlCompanionTokenLocked(room, companionToken) {
+			s.sendErrorLocked(conn, "Р В РЎСљР В Р’ВµР В Р вЂ Р В Р’ВµР РЋР вЂљР В Р вЂ¦Р РЋРІР‚в„–Р В РІвЂћвЂ“ control token.")
+			return
+		}
+		s.attachControlCompanionLocked(room, conn)
+		return
+	}
+
+	hello.Name = strings.TrimSpace(hello.Name)
+	if hello.Name == "" {
+		s.sendErrorLocked(conn, "Р В Р’ВР В РЎВР РЋР РЏ Р В РЎвЂР В РЎвЂ“Р РЋР вЂљР В РЎвЂўР В РЎвЂќР В Р’В° Р В РЎвЂўР В Р’В±Р РЋР РЏР В Р’В·Р В Р’В°Р РЋРІР‚С™Р В Р’ВµР В Р’В»Р РЋР Р‰Р В Р вЂ¦Р В РЎвЂў")
 		return
 	}
 
@@ -432,7 +726,7 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 	}
 
 	if existing == nil && room.Phase == phaseGame {
-		s.sendErrorLocked(conn, "Не удалось восстановить игрока. Перезайдите в комнату.")
+		s.sendErrorLocked(conn, "Р В РЎСљР В Р’Вµ Р РЋРЎвЂњР В РўвЂР В Р’В°Р В Р’В»Р В РЎвЂўР РЋР С“Р РЋР Р‰ Р В Р вЂ Р В РЎвЂўР РЋР С“Р РЋР С“Р РЋРІР‚С™Р В Р’В°Р В Р вЂ¦Р В РЎвЂўР В Р вЂ Р В РЎвЂР РЋРІР‚С™Р РЋР Р‰ Р В РЎвЂР В РЎвЂ“Р РЋР вЂљР В РЎвЂўР В РЎвЂќР В Р’В°. Р В РЎСџР В Р’ВµР РЋР вЂљР В Р’ВµР В Р’В·Р В Р’В°Р В РІвЂћвЂ“Р В РўвЂР В РЎвЂР РЋРІР‚С™Р В Р’Вµ Р В Р вЂ  Р В РЎвЂќР В РЎвЂўР В РЎВР В Р вЂ¦Р В Р’В°Р РЋРІР‚С™Р РЋРЎвЂњ.")
 		return
 	}
 	if existing == nil && len(room.Players) >= s.effectiveMaxPlayers(room) {
@@ -440,7 +734,7 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 		s.writeWSLocked(conn, wsServerMessage{
 			Type: "error",
 			Payload: map[string]any{
-				"message":    fmt.Sprintf("Комната заполнена (макс %d).", maxPlayers),
+				"message":    fmt.Sprintf("Р В РЎв„ўР В РЎвЂўР В РЎВР В Р вЂ¦Р В Р’В°Р РЋРІР‚С™Р В Р’В° Р В Р’В·Р В Р’В°Р В РЎвЂ”Р В РЎвЂўР В Р’В»Р В Р вЂ¦Р В Р’ВµР В Р вЂ¦Р В Р’В° (Р В РЎВР В Р’В°Р В РЎвЂќР РЋР С“ %d).", maxPlayers),
 				"code":       "ROOM_FULL",
 				"maxPlayers": maxPlayers,
 			},
@@ -450,7 +744,7 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 
 	joined := s.attachPlayerLocked(room, hello, conn, existing)
 	if joined == nil {
-		s.sendErrorLocked(conn, "Не удалось подключить игрока")
+		s.sendErrorLocked(conn, "Р В РЎСљР В Р’Вµ Р РЋРЎвЂњР В РўвЂР В Р’В°Р В Р’В»Р В РЎвЂўР РЋР С“Р РЋР Р‰ Р В РЎвЂ”Р В РЎвЂўР В РўвЂР В РЎвЂќР В Р’В»Р РЋР вЂ№Р РЋРІР‚РЋР В РЎвЂР РЋРІР‚С™Р РЋР Р‰ Р В РЎвЂР В РЎвЂ“Р РЋР вЂљР В РЎвЂўР В РЎвЂќР В Р’В°")
 		return
 	}
 	s.broadcastRoomStateLocked(room)
@@ -462,7 +756,7 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 func (s *server) createRoomAndAttachLocked(conn *websocket.Conn, hello clientHelloPayload) error {
 	scenarioID := strings.TrimSpace(hello.ScenarioID)
 	if scenarioID == "" {
-		return fmt.Errorf("Нужен scenarioId")
+		return fmt.Errorf("Р В Р’В Р РЋРЎС™Р В Р Р‹Р РЋРІР‚СљР В Р’В Р вЂ™Р’В¶Р В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦ scenarioId")
 	}
 
 	var scenario scenarioMeta
@@ -475,24 +769,29 @@ func (s *server) createRoomAndAttachLocked(conn *websocket.Conn, hello clientHel
 		}
 	}
 	if !scenarioFound {
-		return fmt.Errorf("Сценарий не найден")
+		return fmt.Errorf("Р В Р’В Р В Р вЂ№Р В Р Р‹Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р Р‹Р В РІР‚С™Р В Р’В Р РЋРІР‚ВР В Р’В Р Р†РІР‚С›РІР‚вЂњ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р’В Р Р†РІР‚С›РІР‚вЂњР В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦")
 	}
 
 	roomCode := s.generateRoomCodeLocked()
 	initialRuleset := buildAutoRuleset(minClassicPlayers)
+	settings := s.normalizeSettingsLocked(defaultSettingsForScenario(scenario.ID))
 	room := &room{
-		Code:             roomCode,
-		CreatedAtMS:      time.Now().UnixMilli(),
-		Phase:            phaseLobby,
-		Scenario:         scenario,
-		Settings:         defaultSettingsForScenario(scenario.ID),
-		Ruleset:          initialRuleset,
-		RulesOverridden:  false,
-		Players:          map[string]*player{},
-		PlayersByToken:   map[string]string{},
-		PlayersBySession: map[string]string{},
-		JoinOrder:        []string{},
-		IsDev:            scenario.ID == scenarioDevTest,
+		Code:              roomCode,
+		CreatedAtMS:       time.Now().UnixMilli(),
+		Phase:             phaseLobby,
+		Scenario:          scenario,
+		Settings:          settings,
+		Ruleset:           initialRuleset,
+		RulesOverridden:   false,
+		Players:           map[string]*player{},
+		PlayersByToken:    map[string]string{},
+		PlayersBySession:  map[string]string{},
+		JoinOrder:         []string{},
+		IsDev:             scenario.ID == scenarioDevTest,
+		NoConnectedSince:  nil,
+		ControlToken:      randomToken(24),
+		EditToken:         randomToken(24),
+		ControlCompanions: map[*websocket.Conn]struct{}{},
 	}
 	s.rooms[roomCode] = room
 	log.Printf("[room] created room=%s scenario=%s", room.Code, room.Scenario.ID)
@@ -500,7 +799,7 @@ func (s *server) createRoomAndAttachLocked(conn *websocket.Conn, hello clientHel
 	joined := s.attachPlayerLocked(room, hello, conn, nil)
 	if joined == nil {
 		delete(s.rooms, room.Code)
-		return fmt.Errorf("не удалось подключить создателя комнаты")
+		return fmt.Errorf("Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р Р‹Р РЋРІР‚СљР В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’В°Р В Р’В Р вЂ™Р’В»Р В Р’В Р РЋРІР‚СћР В Р Р‹Р В РЎвЂњР В Р Р‹Р В Р вЂ° Р В Р’В Р РЋРІР‚вЂќР В Р’В Р РЋРІР‚СћР В Р’В Р СћРІР‚ВР В Р’В Р РЋРІР‚СњР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В РІР‚в„–Р В Р Р‹Р Р†Р вЂљР Р‹Р В Р’В Р РЋРІР‚ВР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р В Р вЂ° Р В Р Р‹Р В РЎвЂњР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В·Р В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р вЂ™Р’ВµР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р РЏ Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚СћР В Р’В Р РЋР’ВР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†Р вЂљРІвЂћвЂ“")
 	}
 	s.broadcastRoomStateLocked(room)
 	return nil
@@ -510,23 +809,23 @@ func (s *server) handleResumeLocked(conn *websocket.Conn, payload map[string]any
 	roomCode := strings.ToUpper(strings.TrimSpace(asString(payload["roomCode"])))
 	sessionID := strings.TrimSpace(asString(payload["sessionId"]))
 	if roomCode == "" || sessionID == "" {
-		s.sendErrorLocked(conn, "Неверный resume payload")
+		s.sendErrorLocked(conn, "Invalid resume payload.")
 		return
 	}
 	room := s.rooms[roomCode]
 	if room == nil {
-		s.sendErrorLocked(conn, "Комната не найдена")
+		s.sendErrorLocked(conn, "Room is not found.")
 		return
 	}
 
 	playerID, ok := room.PlayersBySession[sessionID]
 	if !ok {
-		s.sendErrorLocked(conn, "Не удалось восстановить игрока.")
+		s.sendErrorLocked(conn, "Session is not attached to this room.")
 		return
 	}
 	existing := room.Players[playerID]
 	if existing == nil {
-		s.sendErrorLocked(conn, "Не удалось восстановить игрока.")
+		s.sendErrorLocked(conn, "Player is not found in room.")
 		return
 	}
 
@@ -539,7 +838,7 @@ func (s *server) handleResumeLocked(conn *websocket.Conn, payload map[string]any
 	}
 	joined := s.attachPlayerLocked(room, hello, conn, existing)
 	if joined == nil {
-		s.sendErrorLocked(conn, "Не удалось восстановить игрока.")
+		s.sendErrorLocked(conn, "Failed to restore player session.")
 		return
 	}
 	s.broadcastRoomStateLocked(room)
@@ -547,30 +846,46 @@ func (s *server) handleResumeLocked(conn *websocket.Conn, payload map[string]any
 		s.broadcastGameViewsLocked(room)
 	}
 }
-
 func (s *server) handleStartGameLocked(conn *websocket.Conn) {
 	room, playerID := s.roomAndPlayerByConnLocked(conn)
+	log.Printf("[startGame] request room=%s player=%s", roomCodeOrUnknown(room), playerID)
 	if room == nil {
-		s.sendErrorLocked(conn, "Вы не в комнате")
-		return
-	}
-	s.pruneLobbyDisconnectedPlayersLocked(room)
-	if s.rooms[room.Code] == nil {
+		log.Printf("[startGame] reject reason=room_not_found")
 		s.sendErrorLocked(conn, "Room not found.")
 		return
 	}
 	if room.Phase != phaseLobby {
-		s.sendErrorLocked(conn, "Игра уже запущена")
+		log.Printf("[startGame] reject room=%s player=%s reason=wrong_phase phase=%s", room.Code, playerID, room.Phase)
+		s.sendErrorLocked(conn, "Game is already started.")
 		return
 	}
 	if playerID != room.ControlID {
-		s.sendErrorLocked(conn, "Только CONTROL может начать игру")
+		log.Printf("[startGame] reject room=%s player=%s control=%s reason=not_control", room.Code, playerID, room.ControlID)
+		s.sendErrorLocked(conn, "Only control player can start the game.")
 		return
 	}
 	if room.Scenario.ID == scenarioClassic && len(room.Players) < minClassicPlayers {
-		s.sendErrorLocked(conn, fmt.Sprintf("Для Classic нужно минимум %d игроков.", minClassicPlayers))
+		log.Printf("[startGame] reject room=%s reason=not_enough_players players=%d min=%d", room.Code, len(room.Players), minClassicPlayers)
+		s.sendErrorLocked(conn, fmt.Sprintf("Classic requires at least %d players.", minClassicPlayers))
 		return
 	}
+	if len(s.disasterDeckCardsLocked()) == 0 {
+		log.Printf("[startGame] reject room=%s reason=missing_disaster_deck", room.Code)
+		s.sendErrorLocked(conn, "Disaster deck is not available.")
+		return
+	}
+
+	selectedDisasterID := strings.TrimSpace(room.Settings.ForcedDisasterID)
+	if selectedDisasterID == "" {
+		selectedDisasterID = randomDisasterID
+	}
+	if !s.isValidDisasterIDLocked(selectedDisasterID) {
+		log.Printf("[startGame] reject room=%s reason=invalid_disaster selected=%q", room.Code, selectedDisasterID)
+		s.sendErrorLocked(conn, "Selected disaster is invalid.")
+		return
+	}
+	room.Settings.ForcedDisasterID = selectedDisasterID
+	room.Settings.SelectedDisasterID = selectedDisasterID
 
 	players := make([]*player, 0, len(room.JoinOrder))
 	for _, id := range room.JoinOrder {
@@ -602,6 +917,9 @@ func (s *server) handleStartGameLocked(conn *websocket.Conn) {
 			time.Now().UnixNano(),
 		)
 	}
+	if selectedCard, ok := s.selectedDisasterCardByIDLocked(selectedDisasterID); ok {
+		forceDisasterOnGame(room.Game, selectedCard)
+	}
 	room.Phase = phaseGame
 	for _, p := range room.Players {
 		p.NeedsFullState = true
@@ -610,35 +928,45 @@ func (s *server) handleStartGameLocked(conn *websocket.Conn) {
 
 	s.broadcastRoomStateLocked(room)
 	s.broadcastGameViewsLocked(room)
+	log.Printf(
+		"[startGame] success room=%s scenario=%s players=%d control=%s selected_disaster=%q",
+		room.Code,
+		room.Scenario.ID,
+		len(room.Players),
+		room.ControlID,
+		selectedDisasterID,
+	)
 	s.broadcastEventLocked(room, gameEvent{
 		ID:        fmt.Sprintf("%s-%d", room.Code, time.Now().UnixMilli()),
 		Kind:      "roundStart",
-		Message:   "Игра началась.",
+		Message:   "Round started.",
 		CreatedAt: time.Now().UnixMilli(),
 	})
 	s.rescheduleRoomGameTimerLocked(room)
+	s.rescheduleRoomCleanupTimerLocked(room)
 }
 
 func (s *server) handleUpdateSettingsLocked(conn *websocket.Conn, payload map[string]any) {
 	room, playerID := s.roomAndPlayerByConnLocked(conn)
 	if room == nil {
-		s.sendErrorLocked(conn, "Вы не в комнате")
+		s.sendErrorLocked(conn, "Room not found.")
 		return
 	}
 	if room.Phase != phaseLobby {
-		s.sendErrorLocked(conn, "Настройки доступны только в лобби.")
+		s.sendErrorLocked(conn, "Settings can be changed only in lobby.")
 		return
 	}
 	if playerID != room.ControlID {
-		s.sendErrorLocked(conn, "Только CONTROL может менять настройки.")
+		s.sendErrorLocked(conn, "Only control player can update settings.")
 		return
 	}
 
 	next := room.Settings
 	if !decodePayload(payload, &next) {
-		s.sendErrorLocked(conn, "Неверный формат настроек")
+		s.sendErrorLocked(conn, "Invalid settings payload.")
 		return
 	}
+	next = s.normalizeSettingsLocked(next)
 
 	minAllowed := 2
 	if room.Scenario.ID == scenarioClassic {
@@ -647,9 +975,19 @@ func (s *server) handleUpdateSettingsLocked(conn *websocket.Conn, payload map[st
 	next.MaxPlayers = clampInt(next.MaxPlayers, minAllowed, maxClassicPlayers)
 	next.EnablePresenterMode = false
 	if next.MaxPlayers < len(room.Players) {
-		s.sendErrorLocked(conn, "Лимит игроков меньше текущего числа.")
+		s.sendErrorLocked(conn, "Max players cannot be lower than current players count.")
 		return
 	}
+	selectedDisasterID := strings.TrimSpace(next.ForcedDisasterID)
+	if selectedDisasterID == "" {
+		selectedDisasterID = randomDisasterID
+	}
+	if !s.isValidDisasterIDLocked(selectedDisasterID) {
+		s.sendErrorLocked(conn, "Selected disaster is invalid.")
+		return
+	}
+	next.ForcedDisasterID = selectedDisasterID
+	next.SelectedDisasterID = selectedDisasterID
 	room.Settings = next
 	s.broadcastRoomStateLocked(room)
 }
@@ -657,19 +995,19 @@ func (s *server) handleUpdateSettingsLocked(conn *websocket.Conn, payload map[st
 func (s *server) handleUpdateRulesLocked(conn *websocket.Conn, payload map[string]any) {
 	room, playerID := s.roomAndPlayerByConnLocked(conn)
 	if room == nil {
-		s.sendErrorLocked(conn, "Вы не в комнате")
+		s.sendErrorLocked(conn, "Р В Р’В Р Р†Р вЂљРІвЂћСћР В Р Р‹Р Р†Р вЂљРІвЂћвЂ“ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р’В Р В РІР‚В  Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚СћР В Р’В Р РЋР’ВР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р вЂ™Р’Вµ")
 		return
 	}
 	if room.Scenario.ID != scenarioClassic {
-		s.sendErrorLocked(conn, "Правила доступны только для Classic.")
+		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎСџР В Р Р‹Р В РІР‚С™Р В Р’В Р вЂ™Р’В°Р В Р’В Р В РІР‚В Р В Р’В Р РЋРІР‚ВР В Р’В Р вЂ™Р’В»Р В Р’В Р вЂ™Р’В° Р В Р’В Р СћРІР‚ВР В Р’В Р РЋРІР‚СћР В Р Р‹Р В РЎвЂњР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРІР‚СљР В Р’В Р РЋРІР‚вЂќР В Р’В Р В РІР‚В¦Р В Р Р‹Р Р†Р вЂљРІвЂћвЂ“ Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р вЂ°Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚Сћ Р В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р РЏ Classic.")
 		return
 	}
 	if room.Phase != phaseLobby {
-		s.sendErrorLocked(conn, "Правила можно менять только в лобби.")
+		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎСџР В Р Р‹Р В РІР‚С™Р В Р’В Р вЂ™Р’В°Р В Р’В Р В РІР‚В Р В Р’В Р РЋРІР‚ВР В Р’В Р вЂ™Р’В»Р В Р’В Р вЂ™Р’В° Р В Р’В Р РЋР’ВР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В¶Р В Р’В Р В РІР‚В¦Р В Р’В Р РЋРІР‚Сћ Р В Р’В Р РЋР’ВР В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦Р В Р Р‹Р В Р РЏР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р В Р вЂ° Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р вЂ°Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚Сћ Р В Р’В Р В РІР‚В  Р В Р’В Р вЂ™Р’В»Р В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В±Р В Р’В Р вЂ™Р’В±Р В Р’В Р РЋРІР‚В.")
 		return
 	}
 	if playerID != room.ControlID {
-		s.sendErrorLocked(conn, "Только CONTROL может менять правила.")
+		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎвЂєР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р вЂ°Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚Сћ CONTROL Р В Р’В Р РЋР’ВР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В¶Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р Р†Р вЂљРЎв„ў Р В Р’В Р РЋР’ВР В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦Р В Р Р‹Р В Р РЏР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р В Р вЂ° Р В Р’В Р РЋРІР‚вЂќР В Р Р‹Р В РІР‚С™Р В Р’В Р вЂ™Р’В°Р В Р’В Р В РІР‚В Р В Р’В Р РЋРІР‚ВР В Р’В Р вЂ™Р’В»Р В Р’В Р вЂ™Р’В°.")
 		return
 	}
 
@@ -692,70 +1030,91 @@ func (s *server) handleUpdateRulesLocked(conn *websocket.Conn, payload map[strin
 		}
 		manualMap, ok := manualRaw.(map[string]any)
 		if !ok {
-			s.sendErrorLocked(conn, "Неверный manualConfig")
+			s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р В РІР‚С™Р В Р’В Р В РІР‚В¦Р В Р Р‹Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р Р†РІР‚С›РІР‚вЂњ manualConfig")
 			return
 		}
 		var manualCfg manualRulesConfig
 		if !decodePayload(manualMap, &manualCfg) {
-			s.sendErrorLocked(conn, "Неверный manualConfig")
+			s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р В РІР‚С™Р В Р’В Р В РІР‚В¦Р В Р Р‹Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р Р†РІР‚С›РІР‚вЂњ manualConfig")
 			return
 		}
 		manualCfg = normalizeManualConfig(manualCfg, presetCount)
 		room.Ruleset = buildManualRuleset(manualCfg, len(room.Players))
 		room.RulesPresetCount = manualCfg.SeedTemplatePlayer
 	default:
-		s.sendErrorLocked(conn, "Неизвестный режим правил.")
+		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р’В Р вЂ™Р’ВµР В Р’В Р РЋРІР‚ВР В Р’В Р вЂ™Р’В·Р В Р’В Р В РІР‚В Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р В РЎвЂњР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р В РІР‚В¦Р В Р Р‹Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р Р†РІР‚С›РІР‚вЂњ Р В Р Р‹Р В РІР‚С™Р В Р’В Р вЂ™Р’ВµР В Р’В Р вЂ™Р’В¶Р В Р’В Р РЋРІР‚ВР В Р’В Р РЋР’В Р В Р’В Р РЋРІР‚вЂќР В Р Р‹Р В РІР‚С™Р В Р’В Р вЂ™Р’В°Р В Р’В Р В РІР‚В Р В Р’В Р РЋРІР‚ВР В Р’В Р вЂ™Р’В».")
 		return
 	}
 
 	s.broadcastRoomStateLocked(room)
 }
 
-func (s *server) handleHostTransferLocked(conn *websocket.Conn) {
+func (s *server) handleHostTransferLocked(conn *websocket.Conn, payload map[string]any) {
 	room, playerID := s.roomAndPlayerByConnLocked(conn)
 	if room == nil {
-		s.sendErrorLocked(conn, "Вы не в комнате")
+		s.sendErrorLocked(conn, "Room is not found.")
 		return
 	}
 	if playerID != room.ControlID {
-		s.sendErrorLocked(conn, "Только CONTROL может передать роль.")
-		return
-	}
-	next := s.pickNextHostLocked(room, room.HostID)
-	if next == "" {
-		s.sendErrorLocked(conn, "Нет другого игрока для передачи роли.")
-		return
-	}
-	s.transferHostLocked(room, next, "manual")
-}
-
-func (s *server) handleKickFromLobbyLocked(conn *websocket.Conn, payload map[string]any) {
-	room, playerID := s.roomAndPlayerByConnLocked(conn)
-	if room == nil {
-		s.sendErrorLocked(conn, "Вы не в комнате")
-		return
-	}
-	if room.Phase != phaseLobby {
-		s.sendErrorLocked(conn, "Команда доступна только в лобби.")
-		return
-	}
-	if playerID != room.ControlID {
-		s.sendErrorLocked(conn, "Только CONTROL может кикать игроков.")
+		s.sendErrorLocked(conn, "Only current control player can transfer host role.")
 		return
 	}
 
 	targetID := strings.TrimSpace(asString(payload["targetPlayerId"]))
 	if targetID == "" {
-		s.sendErrorLocked(conn, "Нужно указать targetPlayerId.")
+		next := s.pickNextOnlineHostLocked(room, room.ControlID)
+		if next == "" {
+			s.sendErrorLocked(conn, "No online players available for host transfer.")
+			return
+		}
+		s.transferHostLocked(room, next, "manual")
+		return
+	}
+	if targetID == room.ControlID {
+		s.sendErrorLocked(conn, "Cannot transfer host role to the current host.")
+		return
+	}
+
+	target := room.Players[targetID]
+	if target == nil {
+		s.sendErrorLocked(conn, "Target player was not found.")
+		return
+	}
+	if !s.playerIsOnlineLocked(target) {
+		s.sendErrorLocked(conn, "Target player is offline.")
+		return
+	}
+
+	s.transferHostLocked(room, targetID, "manual")
+}
+
+func (s *server) handleKickFromLobbyLocked(conn *websocket.Conn, payload map[string]any) {
+	room, playerID := s.roomAndPlayerByConnLocked(conn)
+	if room == nil {
+		s.sendErrorLocked(conn, "Р В Р’В Р Р†Р вЂљРІвЂћСћР В Р Р‹Р Р†Р вЂљРІвЂћвЂ“ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р’В Р В РІР‚В  Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚СћР В Р’В Р РЋР’ВР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р вЂ™Р’Вµ")
+		return
+	}
+	if room.Phase != phaseLobby {
+		s.sendErrorLocked(conn, "Р В Р’В Р РЋРІвЂћСћР В Р’В Р РЋРІР‚СћР В Р’В Р РЋР’ВР В Р’В Р вЂ™Р’В°Р В Р’В Р В РІР‚В¦Р В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’В° Р В Р’В Р СћРІР‚ВР В Р’В Р РЋРІР‚СћР В Р Р‹Р В РЎвЂњР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРІР‚СљР В Р’В Р РЋРІР‚вЂќР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В° Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р вЂ°Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚Сћ Р В Р’В Р В РІР‚В  Р В Р’В Р вЂ™Р’В»Р В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В±Р В Р’В Р вЂ™Р’В±Р В Р’В Р РЋРІР‚В.")
+		return
+	}
+	if playerID != room.ControlID {
+		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎвЂєР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р вЂ°Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚Сћ CONTROL Р В Р’В Р РЋР’ВР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В¶Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р Р†Р вЂљРЎв„ў Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚ВР В Р’В Р РЋРІР‚СњР В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р В Р вЂ° Р В Р’В Р РЋРІР‚ВР В Р’В Р РЋРІР‚вЂњР В Р Р‹Р В РІР‚С™Р В Р’В Р РЋРІР‚СћР В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚СћР В Р’В Р В РІР‚В .")
+		return
+	}
+
+	targetID := strings.TrimSpace(asString(payload["targetPlayerId"]))
+	if targetID == "" {
+		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р Р‹Р РЋРІР‚СљР В Р’В Р вЂ™Р’В¶Р В Р’В Р В РІР‚В¦Р В Р’В Р РЋРІР‚Сћ Р В Р Р‹Р РЋРІР‚СљР В Р’В Р РЋРІР‚СњР В Р’В Р вЂ™Р’В°Р В Р’В Р вЂ™Р’В·Р В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р В Р вЂ° targetPlayerId.")
 		return
 	}
 	if targetID == room.HostID {
-		s.sendErrorLocked(conn, "Нельзя кикнуть хоста.")
+		s.sendErrorLocked(conn, "Р В Р’В Р РЋРЎС™Р В Р’В Р вЂ™Р’ВµР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р вЂ°Р В Р’В Р вЂ™Р’В·Р В Р Р‹Р В Р РЏ Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚ВР В Р’В Р РЋРІР‚СњР В Р’В Р В РІР‚В¦Р В Р Р‹Р РЋРІР‚СљР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р В Р вЂ° Р В Р Р‹Р Р†Р вЂљР’В¦Р В Р’В Р РЋРІР‚СћР В Р Р‹Р В РЎвЂњР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р вЂ™Р’В°.")
 		return
 	}
 	target := room.Players[targetID]
 	if target == nil {
-		s.sendErrorLocked(conn, "Игрок не найден.")
+		s.sendErrorLocked(conn, "Р В Р’В Р вЂ™Р’ВР В Р’В Р РЋРІР‚вЂњР В Р Р‹Р В РІР‚С™Р В Р’В Р РЋРІР‚СћР В Р’В Р РЋРІР‚Сњ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р’В Р Р†РІР‚С›РІР‚вЂњР В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦.")
 		return
 	}
 	if target.Connection != nil {
@@ -770,11 +1129,11 @@ func (s *server) handleKickFromLobbyLocked(conn *websocket.Conn, payload map[str
 func (s *server) handleGameActionLocked(conn *websocket.Conn, actionType string, payload map[string]any) {
 	room, playerID := s.roomAndPlayerByConnLocked(conn)
 	if room == nil {
-		s.sendErrorLocked(conn, "Вы не в комнате")
+		s.sendErrorLocked(conn, "Р В Р’В Р Р†Р вЂљРІвЂћСћР В Р Р‹Р Р†Р вЂљРІвЂћвЂ“ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р’В Р В РІР‚В  Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚СћР В Р’В Р РЋР’ВР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р вЂ™Р’Вµ")
 		return
 	}
 	if room.Phase != phaseGame || room.Game == nil {
-		s.sendErrorLocked(conn, "Игра не найдена")
+		s.sendErrorLocked(conn, "Р В Р’В Р вЂ™Р’ВР В Р’В Р РЋРІР‚вЂњР В Р Р‹Р В РІР‚С™Р В Р’В Р вЂ™Р’В° Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’Вµ Р В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°Р В Р’В Р Р†РІР‚С›РІР‚вЂњР В Р’В Р СћРІР‚ВР В Р’В Р вЂ™Р’ВµР В Р’В Р В РІР‚В¦Р В Р’В Р вЂ™Р’В°")
 		return
 	}
 	actionType, payload = normalizeIncomingGameAction(actionType, payload)
@@ -790,7 +1149,7 @@ func (s *server) handleGameActionLocked(conn *websocket.Conn, actionType string,
 		"markLeftBunker":   true,
 	}
 	if controlOnly[actionType] && playerID != room.ControlID {
-		s.sendErrorLocked(conn, "Действие доступно только роли CONTROL.")
+		s.sendErrorLocked(conn, "Р В Р’В Р Р†Р вЂљРЎСљР В Р’В Р вЂ™Р’ВµР В Р’В Р Р†РІР‚С›РІР‚вЂњР В Р Р‹Р В РЎвЂњР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р В РІР‚В Р В Р’В Р РЋРІР‚ВР В Р’В Р вЂ™Р’Вµ Р В Р’В Р СћРІР‚ВР В Р’В Р РЋРІР‚СћР В Р Р‹Р В РЎвЂњР В Р Р‹Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРІР‚СљР В Р’В Р РЋРІР‚вЂќР В Р’В Р В РІР‚В¦Р В Р’В Р РЋРІР‚Сћ Р В Р Р‹Р Р†Р вЂљРЎв„ўР В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В»Р В Р Р‹Р В Р вЂ°Р В Р’В Р РЋРІР‚СњР В Р’В Р РЋРІР‚Сћ Р В Р Р‹Р В РІР‚С™Р В Р’В Р РЋРІР‚СћР В Р’В Р вЂ™Р’В»Р В Р’В Р РЋРІР‚В CONTROL.")
 		return
 	}
 	log.Printf(
@@ -841,6 +1200,7 @@ func (s *server) handleGameActionLocked(conn *websocket.Conn, actionType string,
 		s.broadcastEventLocked(room, event)
 	}
 	s.rescheduleRoomGameTimerLocked(room)
+	s.rescheduleRoomCleanupTimerLocked(room)
 }
 
 func (s *server) attachPlayerLocked(room *room, hello clientHelloPayload, conn *websocket.Conn, existing *player) *player {
@@ -892,31 +1252,51 @@ func (s *server) attachPlayerLocked(room *room, hello clientHelloPayload, conn *
 		existing.NeedsFullGameView = true
 	}
 
+	s.detachControlCompanionLocked(conn)
 	s.connToID[conn] = connInfo{RoomCode: room.Code, PlayerID: existing.ID}
+	helloPayload := map[string]any{
+		"playerId":    existing.ID,
+		"playerToken": existing.Token,
+	}
+	if existing.ID == room.ControlID {
+		helloPayload["controlToken"] = room.ControlToken
+		helloPayload["editToken"] = room.EditToken
+	}
 	s.writeWSLocked(conn, wsServerMessage{
-		Type: "helloAck",
-		Payload: map[string]any{
-			"playerId":    existing.ID,
-			"playerToken": existing.Token,
-		},
+		Type:    "helloAck",
+		Payload: helloPayload,
 	})
+	s.rescheduleRoomCleanupTimerLocked(room)
 
 	return existing
 }
 
 func (s *server) roomAndPlayerByConnLocked(conn *websocket.Conn) (*room, string) {
 	info, ok := s.connToID[conn]
+	if ok {
+		room := s.rooms[info.RoomCode]
+		if room == nil {
+			return nil, ""
+		}
+		if room.Players[info.PlayerID] == nil {
+			return nil, ""
+		}
+		return room, info.PlayerID
+	}
+	companion, ok := s.companionConns[conn]
 	if !ok {
 		return nil, ""
 	}
-	room := s.rooms[info.RoomCode]
+	room := s.rooms[companion.RoomCode]
 	if room == nil {
+		delete(s.companionConns, conn)
 		return nil, ""
 	}
-	if room.Players[info.PlayerID] == nil {
+	controlID, _ := s.currentControlPlayerLocked(room)
+	if controlID == "" {
 		return nil, ""
 	}
-	return room, info.PlayerID
+	return room, controlID
 }
 
 func (s *server) newPlayerIDLocked(room *room) string {
@@ -952,6 +1332,130 @@ func (s *server) effectiveMaxPlayers(room *room) int {
 	return clampInt(maxPlayers, 2, 64)
 }
 
+func (s *server) roomHasConnectedPlayersLocked(room *room) bool {
+	if room == nil {
+		return false
+	}
+	for _, player := range room.Players {
+		if player == nil {
+			continue
+		}
+		if player.Connected && player.Connection != nil {
+			return true
+		}
+	}
+	for conn := range room.ControlCompanions {
+		if conn != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *server) cancelRoomCleanupTimerLocked(room *room) {
+	if room == nil || room.CleanupTimer == nil {
+		return
+	}
+	room.CleanupTimer.Stop()
+	room.CleanupTimer = nil
+}
+
+func (s *server) deleteRoomLocked(room *room, reason string) {
+	if room == nil {
+		return
+	}
+	if _, exists := s.rooms[room.Code]; !exists {
+		return
+	}
+	s.cancelRoomGameTimerLocked(room)
+	s.cancelRoomCleanupTimerLocked(room)
+	for _, player := range room.Players {
+		if player == nil {
+			continue
+		}
+		s.clearDisconnectTimerLocked(player)
+		if player.Connection != nil {
+			delete(s.connToID, player.Connection)
+		}
+	}
+	for conn := range room.ControlCompanions {
+		if conn == nil {
+			continue
+		}
+		delete(s.companionConns, conn)
+		_ = conn.Close()
+	}
+	delete(s.rooms, room.Code)
+	log.Printf("[room] removed room=%s reason=%s", room.Code, reason)
+}
+
+func (s *server) roomCleanupDelayLocked(room *room) time.Duration {
+	if room == nil {
+		return inactiveRoomTTL
+	}
+	if room.Phase == phaseGame && room.Game != nil && roomGameIsEnded(room.Game) {
+		return completedRoomTTL
+	}
+	return inactiveRoomTTL
+}
+
+func (s *server) rescheduleRoomCleanupTimerLocked(room *room) {
+	if room == nil {
+		return
+	}
+	s.cancelRoomCleanupTimerLocked(room)
+
+	if s.roomHasConnectedPlayersLocked(room) {
+		room.NoConnectedSince = nil
+		return
+	}
+
+	now := time.Now().UnixMilli()
+	if room.NoConnectedSince == nil {
+		started := now
+		room.NoConnectedSince = &started
+	}
+
+	if len(room.Players) == 0 {
+		s.deleteRoomLocked(room, "empty")
+		return
+	}
+
+	delay := s.roomCleanupDelayLocked(room)
+	elapsed := time.Duration(maxInt64(0, now-*room.NoConnectedSince)) * time.Millisecond
+	remaining := delay - elapsed
+	if remaining <= 0 {
+		reason := "inactive"
+		if room.Phase == phaseGame && room.Game != nil && roomGameIsEnded(room.Game) {
+			reason = "completed_inactive"
+		}
+		s.deleteRoomLocked(room, reason)
+		return
+	}
+
+	room.CleanupVersion++
+	version := room.CleanupVersion
+	roomCode := room.Code
+	room.CleanupTimer = time.AfterFunc(remaining, func() {
+		s.handleRoomCleanupTimer(roomCode, version)
+	})
+}
+
+func (s *server) handleRoomCleanupTimer(roomCode string, version int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	room := s.rooms[roomCode]
+	if room == nil {
+		return
+	}
+	if room.CleanupVersion != version {
+		return
+	}
+	room.CleanupTimer = nil
+	s.rescheduleRoomCleanupTimerLocked(room)
+}
+
 func (s *server) removeLobbyPlayerLocked(room *room, playerID string) {
 	player := room.Players[playerID]
 	if player == nil {
@@ -970,8 +1474,7 @@ func (s *server) removeLobbyPlayerLocked(room *room, playerID string) {
 	room.JoinOrder = slices.DeleteFunc(room.JoinOrder, func(id string) bool { return id == playerID })
 
 	if len(room.Players) == 0 {
-		s.cancelRoomGameTimerLocked(room)
-		delete(s.rooms, room.Code)
+		s.deleteRoomLocked(room, "lobby_empty")
 		return
 	}
 
@@ -990,6 +1493,7 @@ func (s *server) removeLobbyPlayerLocked(room *room, playerID string) {
 	if room.Scenario.ID == scenarioClassic && !room.RulesOverridden {
 		room.Ruleset = buildAutoRuleset(len(room.Players))
 	}
+	s.rescheduleRoomCleanupTimerLocked(room)
 }
 
 func (s *server) pruneLobbyDisconnectedPlayersLocked(room *room) {
@@ -1021,7 +1525,26 @@ func (s *server) pruneLobbyDisconnectedPlayersLocked(room *room) {
 	}
 }
 
+func (s *server) playerIsOnlineLocked(player *player) bool {
+	return player != nil && player.Connected && player.Connection != nil
+}
+
+func (s *server) pickNextOnlineHostLocked(room *room, excludeID string) string {
+	for _, id := range room.JoinOrder {
+		if id == excludeID {
+			continue
+		}
+		if s.playerIsOnlineLocked(room.Players[id]) {
+			return id
+		}
+	}
+	return ""
+}
+
 func (s *server) pickNextHostLocked(room *room, excludeID string) string {
+	if next := s.pickNextOnlineHostLocked(room, excludeID); next != "" {
+		return next
+	}
 	for _, id := range room.JoinOrder {
 		if id == excludeID {
 			continue
@@ -1050,8 +1573,20 @@ func (s *server) transferHostLocked(room *room, newHostID string, reason string)
 		s.writeWSLocked(p.Connection, wsServerMessage{
 			Type: "hostChanged",
 			Payload: map[string]any{
-				"newHostId": newHostID,
-				"reason":    reason,
+				"newHostId":    newHostID,
+				"newControlId": room.ControlID,
+				"reason":       reason,
+			},
+		})
+	}
+	for companionConn := range room.ControlCompanions {
+		s.sendControlCompanionHelloAckLocked(room, companionConn)
+		s.writeWSLocked(companionConn, wsServerMessage{
+			Type: "hostChanged",
+			Payload: map[string]any{
+				"newHostId":    newHostID,
+				"newControlId": room.ControlID,
+				"reason":       reason,
 			},
 		})
 	}
@@ -1131,6 +1666,7 @@ func (s *server) markLeftBunkerByDisconnectLocked(room *room, targetID string) {
 			s.broadcastEventLocked(room, event)
 		}
 		s.rescheduleRoomGameTimerLocked(room)
+		s.rescheduleRoomCleanupTimerLocked(room)
 	}
 }
 
@@ -1171,6 +1707,7 @@ func (s *server) scheduleDisconnectKickLocked(room *room, player *player) {
 			return
 		}
 		s.markLeftBunkerByDisconnectLocked(room, playerID)
+		s.rescheduleRoomCleanupTimerLocked(room)
 		s.broadcastRoomStateLocked(room)
 	})
 }
@@ -1181,6 +1718,7 @@ func (s *server) handleDisconnect(conn *websocket.Conn) {
 
 	info, ok := s.connToID[conn]
 	if !ok {
+		s.detachControlCompanionLocked(conn)
 		return
 	}
 	delete(s.connToID, conn)
@@ -1224,6 +1762,7 @@ func (s *server) handlePlayerConnectionLostLocked(room *room, player *player, co
 			s.transferHostLocked(room, next, "disconnect_timeout")
 		}
 	}
+	s.rescheduleRoomCleanupTimerLocked(room)
 	s.broadcastRoomStateLocked(room)
 	if room.Game != nil {
 		s.broadcastGameViewsLocked(room)
@@ -1272,6 +1811,7 @@ func (s *server) buildRoomStateLocked(room *room) roomState {
 		Phase:               room.Phase,
 		ScenarioMeta:        room.Scenario,
 		Settings:            room.Settings,
+		DisasterOptions:     s.buildDisasterOptionsLocked(),
 		Ruleset:             room.Ruleset,
 		RulesOverriddenHost: room.RulesOverridden,
 		RulesPresetCount:    room.RulesPresetCount,
@@ -1305,6 +1845,10 @@ func (s *server) broadcastRoomStateLocked(room *room) {
 		}
 		p.NeedsFullState = false
 	}
+	for companionConn := range room.ControlCompanions {
+		s.sendControlCompanionHelloAckLocked(room, companionConn)
+		s.writeWSLocked(companionConn, wsServerMessage{Type: "roomState", Payload: state})
+	}
 	room.LastRoomStateSent = true
 }
 
@@ -1330,6 +1874,14 @@ func (s *server) broadcastGameViewsLocked(room *room) {
 		}
 		player.NeedsFullGameView = false
 	}
+	controlID, _ := s.currentControlPlayerLocked(room)
+	if controlID == "" {
+		return
+	}
+	companionView := room.Game.buildGameView(room, controlID)
+	for companionConn := range room.ControlCompanions {
+		s.writeWSLocked(companionConn, wsServerMessage{Type: "gameView", Payload: companionView})
+	}
 }
 
 func (s *server) broadcastEventLocked(room *room, event gameEvent) {
@@ -1338,6 +1890,12 @@ func (s *server) broadcastEventLocked(room *room, event gameEvent) {
 			continue
 		}
 		s.writeWSLocked(player.Connection, wsServerMessage{
+			Type:    "gameEvent",
+			Payload: event,
+		})
+	}
+	for companionConn := range room.ControlCompanions {
+		s.writeWSLocked(companionConn, wsServerMessage{
 			Type:    "gameEvent",
 			Payload: event,
 		})
@@ -1396,6 +1954,7 @@ func (s *server) handleRoomGameTimer(roomCode string, version int64) {
 	if result.Error != "" {
 		log.Printf("[timer] room=%s timer action failed: %s", room.Code, result.Error)
 		s.rescheduleRoomGameTimerLocked(room)
+		s.rescheduleRoomCleanupTimerLocked(room)
 		return
 	}
 	if result.StateChanged {
@@ -1405,6 +1964,7 @@ func (s *server) handleRoomGameTimer(roomCode string, version int64) {
 		}
 	}
 	s.rescheduleRoomGameTimerLocked(room)
+	s.rescheduleRoomCleanupTimerLocked(room)
 }
 
 func (s *server) writeWSLocked(conn *websocket.Conn, message wsServerMessage) {
@@ -1421,6 +1981,8 @@ func (s *server) writeWSLocked(conn *websocket.Conn, message wsServerMessage) {
 					s.handlePlayerConnectionLostLocked(room, player, conn)
 				}
 			}
+		} else {
+			s.detachControlCompanionLocked(conn)
 		}
 		_ = conn.Close()
 	}
@@ -1434,12 +1996,23 @@ func (s *server) sendError(conn *websocket.Conn, message string) {
 
 func (s *server) sendErrorLocked(conn *websocket.Conn, message string) {
 	safeMessage := sanitizeHumanText(message, "Server error.")
+	if looksSuspiciousForClient(safeMessage) {
+		safeMessage = "Server error."
+	}
+	log.Printf("[ws-error] raw=%q sanitized=%q", message, safeMessage)
 	s.writeWSLocked(conn, wsServerMessage{
 		Type: "error",
 		Payload: map[string]any{
 			"message": safeMessage,
 		},
 	})
+}
+
+func roomCodeOrUnknown(room *room) string {
+	if room == nil {
+		return "<nil>"
+	}
+	return room.Code
 }
 
 func decodePayload(payload any, out any) bool {

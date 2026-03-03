@@ -24,6 +24,7 @@ type specialConditionState struct {
 	Definition     specialDefinition
 	RevealedPublic bool
 	Used           bool
+	PendingActivation bool
 }
 
 var implementedSpecialDefinitions = []specialDefinition{

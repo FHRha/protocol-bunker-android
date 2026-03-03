@@ -32,7 +32,13 @@ export interface BuildLinkSetInput {
   publicBase?: string | null;
   roomCode: string;
   overlayViewToken: string;
-  overlayControlToken: string;
+  // Stable companion token for control links.
+  // Prefer `editToken`, fallback to `controlToken` when needed.
+  controlCompanionToken?: string;
+  editToken?: string;
+  controlToken?: string;
+  // Backward-compat: legacy name.
+  overlayControlToken?: string;
 }
 
 export function normalizeBase(base: string): string {
@@ -89,7 +95,16 @@ export function buildLinkSet(input: BuildLinkSetInput): BuiltLinkSet {
 
   const encodedRoom = encodeURIComponent(input.roomCode);
   const encodedViewToken = encodeURIComponent(input.overlayViewToken);
-  const encodedControlToken = encodeURIComponent(input.overlayControlToken);
+  const rawControlToken =
+    input.controlCompanionToken?.trim() ||
+    input.editToken?.trim() ||
+    input.controlToken?.trim() ||
+    input.overlayControlToken?.trim() ||
+    "";
+  if (!rawControlToken) {
+    throw new Error("buildLinkSet: control/edit token is required for control URL");
+  }
+  const encodedControlToken = encodeURIComponent(rawControlToken);
 
   const appPath = `${LINK_PATHS.app}?room=${encodedRoom}`;
   const overlayViewPath = `${LINK_PATHS.overlayView}?room=${encodedRoom}&token=${encodedViewToken}`;

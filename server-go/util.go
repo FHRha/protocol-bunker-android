@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -250,6 +251,34 @@ func sanitizeHumanText(text string, fallback string) string {
 		return fixed
 	}
 	return value
+}
+
+var suspiciousClientLabelPattern = regexp.MustCompile(`(?:Р\S{0,2}С|С\S{0,2}Р)`)
+
+func looksSuspiciousForClient(text string) bool {
+	value := strings.TrimSpace(text)
+	if value == "" {
+		return true
+	}
+	if strings.Contains(value, "\uFFFD") {
+		return true
+	}
+	if suspiciousClientLabelPattern.MatchString(value) {
+		return true
+	}
+	rsCount := strings.Count(value, "Р") + strings.Count(value, "С")
+	if rsCount >= 4 {
+		letters := 0
+		for _, r := range value {
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= 'А' && r <= 'я') || r == 'Ё' || r == 'ё' {
+				letters++
+			}
+		}
+		if letters > 0 && float64(rsCount)/float64(letters) >= 0.22 {
+			return true
+		}
+	}
+	return looksLikeMojibake(value)
 }
 
 func defaultEventMessage(kind string) string {

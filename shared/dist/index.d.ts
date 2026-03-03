@@ -11,6 +11,7 @@ export type ContinuePermission = "host_only" | "revealer_only" | "anyone";
 export type RevealTimeoutAction = "random_card" | "skip_player";
 export type SpecialUsageMode = "anytime" | "only_during_voting";
 export type FinalThreatReveal = "host" | "anyone";
+export type AutomationMode = "auto" | "semi" | "manual";
 export type SpecialTargetScope = "neighbors" | "any_alive" | "self" | "any_including_self";
 export type WorldCardKind = "bunker" | "disaster" | "threat";
 export type PostGameOutcome = "survived" | "failed";
@@ -176,6 +177,7 @@ export interface GameSettings {
     preVoteDiscussionSeconds: number;
     enablePostVoteDiscussionTimer: boolean;
     postVoteDiscussionSeconds: number;
+    automationMode: AutomationMode;
     enablePresenterMode: boolean;
     continuePermission: ContinuePermission;
     revealTimeoutAction: RevealTimeoutAction;
@@ -183,6 +185,7 @@ export interface GameSettings {
     specialUsage: SpecialUsageMode;
     maxPlayers: number;
     finalThreatReveal: FinalThreatReveal;
+    forcedDisasterId: string;
 }
 export interface ScenarioMeta {
     id: string;
@@ -217,7 +220,8 @@ export interface SpecialConditionInstance {
     used: boolean;
     imgUrl?: string;
     needsChoice?: boolean;
-    choiceKind?: "player" | "neighbor" | "category" | "none";
+    choiceKind?: "player" | "neighbor" | "category" | "bunker" | "special" | "none";
+    pendingActivation?: boolean;
     allowSelfTarget?: boolean;
     targetScope?: SpecialTargetScope;
 }
@@ -229,6 +233,9 @@ export interface PublicSpecialConditionView {
 export interface PublicCategoryCard {
     labelShort: string;
     imgUrl?: string;
+    instanceId?: string;
+    hidden?: boolean;
+    backCategory?: string;
 }
 export interface YouCategoryCard {
     instanceId: string;
@@ -258,6 +265,10 @@ export interface RoomState {
     rulesPresetCount?: number;
     world?: WorldState30;
     isDev?: boolean;
+    disasterOptions?: Array<{
+        id: string;
+        title: string;
+    }>;
 }
 export interface StatePatchPayload {
     roomState?: Partial<RoomState>;
@@ -345,6 +356,7 @@ export interface GameView {
         votePhase?: VotePhase | null;
         votesPublic?: VotePublic[];
         votingProgress?: VotingProgress;
+        disallowedVoteTargetIdsForYou?: string[];
         threatModifier?: ThreatModifierView;
         canOpenVotingModal?: boolean;
         canContinue?: boolean;
@@ -438,14 +450,64 @@ export type ScenarioAction = {
     payload: {
         targetPlayerId?: string;
     };
+} | {
+    type: "adminReplacePlayerCard";
+    payload: {
+        targetPlayerId: string;
+        cardInstanceId: string;
+        targetArea?: "hand" | "special";
+        replacementMode: "random" | "specific";
+        replacementCardId?: string;
+    };
+} | {
+    type: "adminSetWorldCardReveal";
+    payload: {
+        kind: "bunker" | "threat";
+        index: number;
+        revealed: boolean;
+    };
+} | {
+    type: "adminReplaceWorldCard";
+    payload: {
+        kind: "bunker" | "threat" | "disaster";
+        index?: number;
+        replacementMode: "random" | "specific";
+        replacementCardId?: string;
+    };
+} | {
+    type: "adminSetWorldCount";
+    payload: {
+        kind: "bunker" | "threat";
+        count: number;
+    };
+} | {
+    type: "adminApplySpecial";
+    payload: {
+        actorPlayerId: string;
+        specialInstanceId?: string;
+        specialId?: string;
+        payload?: Record<string, unknown>;
+    };
 };
 export interface ScenarioActionResult {
     error?: string;
     stateChanged?: boolean;
 }
+export interface ControlSpecialCatalogEntry {
+    id: string;
+    title: string;
+    text: string;
+    implemented?: boolean;
+    choiceKind?: "player" | "neighbor" | "category" | "bunker" | "special" | "none";
+    targetScope?: SpecialTargetScope;
+    allowSelfTarget?: boolean;
+    effectType?: string;
+    requires?: string[];
+}
 export interface ScenarioSession {
     getGameView(playerId: string): GameView;
     handleAction(playerId: string, action: ScenarioAction): ScenarioActionResult;
+    getSpecialCatalog?(): ControlSpecialCatalogEntry[];
 }
 export interface ScenarioModule {
     meta: ScenarioMeta;
@@ -2068,6 +2130,7 @@ export declare const GameSettingsSchema: z.ZodObject<{
     preVoteDiscussionSeconds: z.ZodNumber;
     enablePostVoteDiscussionTimer: z.ZodBoolean;
     postVoteDiscussionSeconds: z.ZodNumber;
+    automationMode: z.ZodUnion<[z.ZodLiteral<"auto">, z.ZodLiteral<"semi">, z.ZodLiteral<"manual">]>;
     enablePresenterMode: z.ZodBoolean;
     continuePermission: z.ZodUnion<[z.ZodLiteral<"host_only">, z.ZodLiteral<"revealer_only">, z.ZodLiteral<"anyone">]>;
     revealTimeoutAction: z.ZodUnion<[z.ZodLiteral<"random_card">, z.ZodLiteral<"skip_player">]>;
@@ -2075,6 +2138,7 @@ export declare const GameSettingsSchema: z.ZodObject<{
     specialUsage: z.ZodUnion<[z.ZodLiteral<"anytime">, z.ZodLiteral<"only_during_voting">]>;
     maxPlayers: z.ZodNumber;
     finalThreatReveal: z.ZodUnion<[z.ZodLiteral<"host">, z.ZodLiteral<"anyone">]>;
+    forcedDisasterId: z.ZodString;
 }, "strip", z.ZodTypeAny, {
     enableRevealDiscussionTimer: boolean;
     revealDiscussionSeconds: number;
@@ -2082,6 +2146,7 @@ export declare const GameSettingsSchema: z.ZodObject<{
     preVoteDiscussionSeconds: number;
     enablePostVoteDiscussionTimer: boolean;
     postVoteDiscussionSeconds: number;
+    automationMode: "auto" | "manual" | "semi";
     enablePresenterMode: boolean;
     continuePermission: "host_only" | "revealer_only" | "anyone";
     revealTimeoutAction: "random_card" | "skip_player";
@@ -2089,6 +2154,7 @@ export declare const GameSettingsSchema: z.ZodObject<{
     specialUsage: "anytime" | "only_during_voting";
     maxPlayers: number;
     finalThreatReveal: "anyone" | "host";
+    forcedDisasterId: string;
 }, {
     enableRevealDiscussionTimer: boolean;
     revealDiscussionSeconds: number;
@@ -2096,6 +2162,7 @@ export declare const GameSettingsSchema: z.ZodObject<{
     preVoteDiscussionSeconds: number;
     enablePostVoteDiscussionTimer: boolean;
     postVoteDiscussionSeconds: number;
+    automationMode: "auto" | "manual" | "semi";
     enablePresenterMode: boolean;
     continuePermission: "host_only" | "revealer_only" | "anyone";
     revealTimeoutAction: "random_card" | "skip_player";
@@ -2103,6 +2170,7 @@ export declare const GameSettingsSchema: z.ZodObject<{
     specialUsage: "anytime" | "only_during_voting";
     maxPlayers: number;
     finalThreatReveal: "anyone" | "host";
+    forcedDisasterId: string;
 }>;
 export declare const CardRefSchema: z.ZodObject<{
     id: z.ZodString;
@@ -2183,7 +2251,8 @@ export declare const SpecialConditionInstanceSchema: z.ZodObject<{
     used: z.ZodBoolean;
     imgUrl: z.ZodOptional<z.ZodString>;
     needsChoice: z.ZodOptional<z.ZodBoolean>;
-    choiceKind: z.ZodOptional<z.ZodUnion<[z.ZodLiteral<"player">, z.ZodLiteral<"neighbor">, z.ZodLiteral<"category">, z.ZodLiteral<"none">]>>;
+    choiceKind: z.ZodOptional<z.ZodUnion<[z.ZodLiteral<"player">, z.ZodLiteral<"neighbor">, z.ZodLiteral<"category">, z.ZodLiteral<"bunker">, z.ZodLiteral<"special">, z.ZodLiteral<"none">]>>;
+    pendingActivation: z.ZodOptional<z.ZodBoolean>;
     allowSelfTarget: z.ZodOptional<z.ZodBoolean>;
     targetScope: z.ZodOptional<z.ZodUnion<[z.ZodLiteral<"neighbors">, z.ZodLiteral<"any_alive">, z.ZodLiteral<"self">, z.ZodLiteral<"any_including_self">]>>;
 }, "strip", z.ZodTypeAny, {
@@ -2201,7 +2270,8 @@ export declare const SpecialConditionInstanceSchema: z.ZodObject<{
     used: boolean;
     imgUrl?: string | undefined;
     needsChoice?: boolean | undefined;
-    choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+    choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+    pendingActivation?: boolean | undefined;
     allowSelfTarget?: boolean | undefined;
     targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
 }, {
@@ -2219,19 +2289,29 @@ export declare const SpecialConditionInstanceSchema: z.ZodObject<{
     used: boolean;
     imgUrl?: string | undefined;
     needsChoice?: boolean | undefined;
-    choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+    choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+    pendingActivation?: boolean | undefined;
     allowSelfTarget?: boolean | undefined;
     targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
 }>;
 export declare const PublicCategoryCardSchema: z.ZodObject<{
     labelShort: z.ZodString;
     imgUrl: z.ZodOptional<z.ZodString>;
+    instanceId: z.ZodOptional<z.ZodString>;
+    hidden: z.ZodOptional<z.ZodBoolean>;
+    backCategory: z.ZodOptional<z.ZodString>;
 }, "strip", z.ZodTypeAny, {
     labelShort: string;
+    hidden?: boolean | undefined;
     imgUrl?: string | undefined;
+    instanceId?: string | undefined;
+    backCategory?: string | undefined;
 }, {
     labelShort: string;
+    hidden?: boolean | undefined;
     imgUrl?: string | undefined;
+    instanceId?: string | undefined;
+    backCategory?: string | undefined;
 }>;
 export declare const YouCategoryCardSchema: z.ZodObject<{
     instanceId: z.ZodString;
@@ -2252,26 +2332,41 @@ export declare const PublicCategorySlotSchema: z.ZodObject<{
     cards: z.ZodArray<z.ZodObject<{
         labelShort: z.ZodString;
         imgUrl: z.ZodOptional<z.ZodString>;
+        instanceId: z.ZodOptional<z.ZodString>;
+        hidden: z.ZodOptional<z.ZodBoolean>;
+        backCategory: z.ZodOptional<z.ZodString>;
     }, "strip", z.ZodTypeAny, {
         labelShort: string;
+        hidden?: boolean | undefined;
         imgUrl?: string | undefined;
+        instanceId?: string | undefined;
+        backCategory?: string | undefined;
     }, {
         labelShort: string;
+        hidden?: boolean | undefined;
         imgUrl?: string | undefined;
+        instanceId?: string | undefined;
+        backCategory?: string | undefined;
     }>, "many">;
 }, "strip", z.ZodTypeAny, {
     category: string;
     status: "hidden" | "revealed";
     cards: {
         labelShort: string;
+        hidden?: boolean | undefined;
         imgUrl?: string | undefined;
+        instanceId?: string | undefined;
+        backCategory?: string | undefined;
     }[];
 }, {
     category: string;
     status: "hidden" | "revealed";
     cards: {
         labelShort: string;
+        hidden?: boolean | undefined;
         imgUrl?: string | undefined;
+        instanceId?: string | undefined;
+        backCategory?: string | undefined;
     }[];
 }>;
 export declare const YouCategorySlotSchema: z.ZodObject<{
@@ -2303,6 +2398,16 @@ export declare const YouCategorySlotSchema: z.ZodObject<{
         instanceId: string;
         labelShort: string;
     }[];
+}>;
+export declare const DisasterOptionSchema: z.ZodObject<{
+    id: z.ZodString;
+    title: z.ZodString;
+}, "strip", z.ZodTypeAny, {
+    id: string;
+    title: string;
+}, {
+    id: string;
+    title: string;
 }>;
 export declare const PublicPlayerViewSchema: z.ZodObject<{
     playerId: z.ZodString;
@@ -2345,26 +2450,41 @@ export declare const PublicPlayerViewSchema: z.ZodObject<{
         cards: z.ZodArray<z.ZodObject<{
             labelShort: z.ZodString;
             imgUrl: z.ZodOptional<z.ZodString>;
+            instanceId: z.ZodOptional<z.ZodString>;
+            hidden: z.ZodOptional<z.ZodBoolean>;
+            backCategory: z.ZodOptional<z.ZodString>;
         }, "strip", z.ZodTypeAny, {
             labelShort: string;
+            hidden?: boolean | undefined;
             imgUrl?: string | undefined;
+            instanceId?: string | undefined;
+            backCategory?: string | undefined;
         }, {
             labelShort: string;
+            hidden?: boolean | undefined;
             imgUrl?: string | undefined;
+            instanceId?: string | undefined;
+            backCategory?: string | undefined;
         }>, "many">;
     }, "strip", z.ZodTypeAny, {
         category: string;
         status: "hidden" | "revealed";
         cards: {
             labelShort: string;
+            hidden?: boolean | undefined;
             imgUrl?: string | undefined;
+            instanceId?: string | undefined;
+            backCategory?: string | undefined;
         }[];
     }, {
         category: string;
         status: "hidden" | "revealed";
         cards: {
             labelShort: string;
+            hidden?: boolean | undefined;
             imgUrl?: string | undefined;
+            instanceId?: string | undefined;
+            backCategory?: string | undefined;
         }[];
     }>, "many">;
 }, "strip", z.ZodTypeAny, {
@@ -2377,7 +2497,10 @@ export declare const PublicPlayerViewSchema: z.ZodObject<{
         status: "hidden" | "revealed";
         cards: {
             labelShort: string;
+            hidden?: boolean | undefined;
             imgUrl?: string | undefined;
+            instanceId?: string | undefined;
+            backCategory?: string | undefined;
         }[];
     }[];
     revealedCards: {
@@ -2406,7 +2529,10 @@ export declare const PublicPlayerViewSchema: z.ZodObject<{
         status: "hidden" | "revealed";
         cards: {
             labelShort: string;
+            hidden?: boolean | undefined;
             imgUrl?: string | undefined;
+            instanceId?: string | undefined;
+            backCategory?: string | undefined;
         }[];
     }[];
     revealedCards: {
@@ -2482,6 +2608,7 @@ export declare const RoomStateSchema: z.ZodObject<{
         preVoteDiscussionSeconds: z.ZodNumber;
         enablePostVoteDiscussionTimer: z.ZodBoolean;
         postVoteDiscussionSeconds: z.ZodNumber;
+        automationMode: z.ZodUnion<[z.ZodLiteral<"auto">, z.ZodLiteral<"semi">, z.ZodLiteral<"manual">]>;
         enablePresenterMode: z.ZodBoolean;
         continuePermission: z.ZodUnion<[z.ZodLiteral<"host_only">, z.ZodLiteral<"revealer_only">, z.ZodLiteral<"anyone">]>;
         revealTimeoutAction: z.ZodUnion<[z.ZodLiteral<"random_card">, z.ZodLiteral<"skip_player">]>;
@@ -2489,6 +2616,7 @@ export declare const RoomStateSchema: z.ZodObject<{
         specialUsage: z.ZodUnion<[z.ZodLiteral<"anytime">, z.ZodLiteral<"only_during_voting">]>;
         maxPlayers: z.ZodNumber;
         finalThreatReveal: z.ZodUnion<[z.ZodLiteral<"host">, z.ZodLiteral<"anyone">]>;
+        forcedDisasterId: z.ZodString;
     }, "strip", z.ZodTypeAny, {
         enableRevealDiscussionTimer: boolean;
         revealDiscussionSeconds: number;
@@ -2496,6 +2624,7 @@ export declare const RoomStateSchema: z.ZodObject<{
         preVoteDiscussionSeconds: number;
         enablePostVoteDiscussionTimer: boolean;
         postVoteDiscussionSeconds: number;
+        automationMode: "auto" | "manual" | "semi";
         enablePresenterMode: boolean;
         continuePermission: "host_only" | "revealer_only" | "anyone";
         revealTimeoutAction: "random_card" | "skip_player";
@@ -2503,6 +2632,7 @@ export declare const RoomStateSchema: z.ZodObject<{
         specialUsage: "anytime" | "only_during_voting";
         maxPlayers: number;
         finalThreatReveal: "anyone" | "host";
+        forcedDisasterId: string;
     }, {
         enableRevealDiscussionTimer: boolean;
         revealDiscussionSeconds: number;
@@ -2510,6 +2640,7 @@ export declare const RoomStateSchema: z.ZodObject<{
         preVoteDiscussionSeconds: number;
         enablePostVoteDiscussionTimer: boolean;
         postVoteDiscussionSeconds: number;
+        automationMode: "auto" | "manual" | "semi";
         enablePresenterMode: boolean;
         continuePermission: "host_only" | "revealer_only" | "anyone";
         revealTimeoutAction: "random_card" | "skip_player";
@@ -2517,6 +2648,7 @@ export declare const RoomStateSchema: z.ZodObject<{
         specialUsage: "anytime" | "only_during_voting";
         maxPlayers: number;
         finalThreatReveal: "anyone" | "host";
+        forcedDisasterId: string;
     }>;
     ruleset: z.ZodObject<{
         playerCount: z.ZodNumber;
@@ -2736,6 +2868,16 @@ export declare const RoomStateSchema: z.ZodObject<{
         };
     }>>;
     isDev: z.ZodOptional<z.ZodBoolean>;
+    disasterOptions: z.ZodOptional<z.ZodArray<z.ZodObject<{
+        id: z.ZodString;
+        title: z.ZodString;
+    }, "strip", z.ZodTypeAny, {
+        id: string;
+        title: string;
+    }, {
+        id: string;
+        title: string;
+    }>, "many">>;
 }, "strip", z.ZodTypeAny, {
     players: {
         playerId: string;
@@ -2764,6 +2906,7 @@ export declare const RoomStateSchema: z.ZodObject<{
         preVoteDiscussionSeconds: number;
         enablePostVoteDiscussionTimer: boolean;
         postVoteDiscussionSeconds: number;
+        automationMode: "auto" | "manual" | "semi";
         enablePresenterMode: boolean;
         continuePermission: "host_only" | "revealer_only" | "anyone";
         revealTimeoutAction: "random_card" | "skip_player";
@@ -2771,6 +2914,7 @@ export declare const RoomStateSchema: z.ZodObject<{
         specialUsage: "anytime" | "only_during_voting";
         maxPlayers: number;
         finalThreatReveal: "anyone" | "host";
+        forcedDisasterId: string;
     };
     ruleset: {
         playerCount: number;
@@ -2824,6 +2968,10 @@ export declare const RoomStateSchema: z.ZodObject<{
         };
     } | undefined;
     isDev?: boolean | undefined;
+    disasterOptions?: {
+        id: string;
+        title: string;
+    }[] | undefined;
 }, {
     players: {
         playerId: string;
@@ -2852,6 +3000,7 @@ export declare const RoomStateSchema: z.ZodObject<{
         preVoteDiscussionSeconds: number;
         enablePostVoteDiscussionTimer: boolean;
         postVoteDiscussionSeconds: number;
+        automationMode: "auto" | "manual" | "semi";
         enablePresenterMode: boolean;
         continuePermission: "host_only" | "revealer_only" | "anyone";
         revealTimeoutAction: "random_card" | "skip_player";
@@ -2859,6 +3008,7 @@ export declare const RoomStateSchema: z.ZodObject<{
         specialUsage: "anytime" | "only_during_voting";
         maxPlayers: number;
         finalThreatReveal: "anyone" | "host";
+        forcedDisasterId: string;
     };
     ruleset: {
         playerCount: number;
@@ -2912,6 +3062,10 @@ export declare const RoomStateSchema: z.ZodObject<{
         };
     } | undefined;
     isDev?: boolean | undefined;
+    disasterOptions?: {
+        id: string;
+        title: string;
+    }[] | undefined;
 }>;
 export declare const VotingViewSchema: z.ZodObject<{
     hasVoted: z.ZodBoolean;
@@ -3320,7 +3474,8 @@ export declare const GameViewSchema: z.ZodObject<{
             used: z.ZodBoolean;
             imgUrl: z.ZodOptional<z.ZodString>;
             needsChoice: z.ZodOptional<z.ZodBoolean>;
-            choiceKind: z.ZodOptional<z.ZodUnion<[z.ZodLiteral<"player">, z.ZodLiteral<"neighbor">, z.ZodLiteral<"category">, z.ZodLiteral<"none">]>>;
+            choiceKind: z.ZodOptional<z.ZodUnion<[z.ZodLiteral<"player">, z.ZodLiteral<"neighbor">, z.ZodLiteral<"category">, z.ZodLiteral<"bunker">, z.ZodLiteral<"special">, z.ZodLiteral<"none">]>>;
+            pendingActivation: z.ZodOptional<z.ZodBoolean>;
             allowSelfTarget: z.ZodOptional<z.ZodBoolean>;
             targetScope: z.ZodOptional<z.ZodUnion<[z.ZodLiteral<"neighbors">, z.ZodLiteral<"any_alive">, z.ZodLiteral<"self">, z.ZodLiteral<"any_including_self">]>>;
         }, "strip", z.ZodTypeAny, {
@@ -3338,7 +3493,8 @@ export declare const GameViewSchema: z.ZodObject<{
             used: boolean;
             imgUrl?: string | undefined;
             needsChoice?: boolean | undefined;
-            choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+            choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+            pendingActivation?: boolean | undefined;
             allowSelfTarget?: boolean | undefined;
             targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
         }, {
@@ -3356,11 +3512,21 @@ export declare const GameViewSchema: z.ZodObject<{
             used: boolean;
             imgUrl?: string | undefined;
             needsChoice?: boolean | undefined;
-            choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+            choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+            pendingActivation?: boolean | undefined;
             allowSelfTarget?: boolean | undefined;
             targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
         }>, "many">;
     }, "strip", z.ZodTypeAny, {
+        hand: {
+            revealed: boolean;
+            id: string;
+            deck: string;
+            instanceId?: string | undefined;
+            labelShort?: string | undefined;
+            secret?: boolean | undefined;
+            missing?: boolean | undefined;
+        }[];
         playerId: string;
         name: string;
         categories: {
@@ -3370,15 +3536,6 @@ export declare const GameViewSchema: z.ZodObject<{
                 instanceId: string;
                 labelShort: string;
             }[];
-        }[];
-        hand: {
-            revealed: boolean;
-            id: string;
-            deck: string;
-            instanceId?: string | undefined;
-            labelShort?: string | undefined;
-            secret?: boolean | undefined;
-            missing?: boolean | undefined;
         }[];
         specialConditions: {
             id: string;
@@ -3395,11 +3552,21 @@ export declare const GameViewSchema: z.ZodObject<{
             used: boolean;
             imgUrl?: string | undefined;
             needsChoice?: boolean | undefined;
-            choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+            choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+            pendingActivation?: boolean | undefined;
             allowSelfTarget?: boolean | undefined;
             targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
         }[];
     }, {
+        hand: {
+            revealed: boolean;
+            id: string;
+            deck: string;
+            instanceId?: string | undefined;
+            labelShort?: string | undefined;
+            secret?: boolean | undefined;
+            missing?: boolean | undefined;
+        }[];
         playerId: string;
         name: string;
         categories: {
@@ -3409,15 +3576,6 @@ export declare const GameViewSchema: z.ZodObject<{
                 instanceId: string;
                 labelShort: string;
             }[];
-        }[];
-        hand: {
-            revealed: boolean;
-            id: string;
-            deck: string;
-            instanceId?: string | undefined;
-            labelShort?: string | undefined;
-            secret?: boolean | undefined;
-            missing?: boolean | undefined;
         }[];
         specialConditions: {
             id: string;
@@ -3434,7 +3592,8 @@ export declare const GameViewSchema: z.ZodObject<{
             used: boolean;
             imgUrl?: string | undefined;
             needsChoice?: boolean | undefined;
-            choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+            choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+            pendingActivation?: boolean | undefined;
             allowSelfTarget?: boolean | undefined;
             targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
         }[];
@@ -3481,26 +3640,41 @@ export declare const GameViewSchema: z.ZodObject<{
                 cards: z.ZodArray<z.ZodObject<{
                     labelShort: z.ZodString;
                     imgUrl: z.ZodOptional<z.ZodString>;
+                    instanceId: z.ZodOptional<z.ZodString>;
+                    hidden: z.ZodOptional<z.ZodBoolean>;
+                    backCategory: z.ZodOptional<z.ZodString>;
                 }, "strip", z.ZodTypeAny, {
                     labelShort: string;
+                    hidden?: boolean | undefined;
                     imgUrl?: string | undefined;
+                    instanceId?: string | undefined;
+                    backCategory?: string | undefined;
                 }, {
                     labelShort: string;
+                    hidden?: boolean | undefined;
                     imgUrl?: string | undefined;
+                    instanceId?: string | undefined;
+                    backCategory?: string | undefined;
                 }>, "many">;
             }, "strip", z.ZodTypeAny, {
                 category: string;
                 status: "hidden" | "revealed";
                 cards: {
                     labelShort: string;
+                    hidden?: boolean | undefined;
                     imgUrl?: string | undefined;
+                    instanceId?: string | undefined;
+                    backCategory?: string | undefined;
                 }[];
             }, {
                 category: string;
                 status: "hidden" | "revealed";
                 cards: {
                     labelShort: string;
+                    hidden?: boolean | undefined;
                     imgUrl?: string | undefined;
+                    instanceId?: string | undefined;
+                    backCategory?: string | undefined;
                 }[];
             }>, "many">;
         }, "strip", z.ZodTypeAny, {
@@ -3513,7 +3687,10 @@ export declare const GameViewSchema: z.ZodObject<{
                 status: "hidden" | "revealed";
                 cards: {
                     labelShort: string;
+                    hidden?: boolean | undefined;
                     imgUrl?: string | undefined;
+                    instanceId?: string | undefined;
+                    backCategory?: string | undefined;
                 }[];
             }[];
             revealedCards: {
@@ -3542,7 +3719,10 @@ export declare const GameViewSchema: z.ZodObject<{
                 status: "hidden" | "revealed";
                 cards: {
                     labelShort: string;
+                    hidden?: boolean | undefined;
                     imgUrl?: string | undefined;
+                    instanceId?: string | undefined;
+                    backCategory?: string | undefined;
                 }[];
             }[];
             revealedCards: {
@@ -3612,6 +3792,7 @@ export declare const GameViewSchema: z.ZodObject<{
             voted: number;
             total: number;
         }>>;
+        disallowedVoteTargetIdsForYou: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
         threatModifier: z.ZodOptional<z.ZodObject<{
             delta: z.ZodNumber;
             reasons: z.ZodArray<z.ZodString, "many">;
@@ -3665,7 +3846,10 @@ export declare const GameViewSchema: z.ZodObject<{
                 status: "hidden" | "revealed";
                 cards: {
                     labelShort: string;
+                    hidden?: boolean | undefined;
                     imgUrl?: string | undefined;
+                    instanceId?: string | undefined;
+                    backCategory?: string | undefined;
                 }[];
             }[];
             revealedCards: {
@@ -3709,6 +3893,7 @@ export declare const GameViewSchema: z.ZodObject<{
             voted: number;
             total: number;
         } | undefined;
+        disallowedVoteTargetIdsForYou?: string[] | undefined;
         threatModifier?: {
             delta: number;
             reasons: string[];
@@ -3740,7 +3925,10 @@ export declare const GameViewSchema: z.ZodObject<{
                 status: "hidden" | "revealed";
                 cards: {
                     labelShort: string;
+                    hidden?: boolean | undefined;
                     imgUrl?: string | undefined;
+                    instanceId?: string | undefined;
+                    backCategory?: string | undefined;
                 }[];
             }[];
             revealedCards: {
@@ -3784,6 +3972,7 @@ export declare const GameViewSchema: z.ZodObject<{
             voted: number;
             total: number;
         } | undefined;
+        disallowedVoteTargetIdsForYou?: string[] | undefined;
         threatModifier?: {
             delta: number;
             reasons: string[];
@@ -3823,6 +4012,15 @@ export declare const GameViewSchema: z.ZodObject<{
     };
     categoryOrder: string[];
     you: {
+        hand: {
+            revealed: boolean;
+            id: string;
+            deck: string;
+            instanceId?: string | undefined;
+            labelShort?: string | undefined;
+            secret?: boolean | undefined;
+            missing?: boolean | undefined;
+        }[];
         playerId: string;
         name: string;
         categories: {
@@ -3832,15 +4030,6 @@ export declare const GameViewSchema: z.ZodObject<{
                 instanceId: string;
                 labelShort: string;
             }[];
-        }[];
-        hand: {
-            revealed: boolean;
-            id: string;
-            deck: string;
-            instanceId?: string | undefined;
-            labelShort?: string | undefined;
-            secret?: boolean | undefined;
-            missing?: boolean | undefined;
         }[];
         specialConditions: {
             id: string;
@@ -3857,7 +4046,8 @@ export declare const GameViewSchema: z.ZodObject<{
             used: boolean;
             imgUrl?: string | undefined;
             needsChoice?: boolean | undefined;
-            choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+            choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+            pendingActivation?: boolean | undefined;
             allowSelfTarget?: boolean | undefined;
             targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
         }[];
@@ -3873,7 +4063,10 @@ export declare const GameViewSchema: z.ZodObject<{
                 status: "hidden" | "revealed";
                 cards: {
                     labelShort: string;
+                    hidden?: boolean | undefined;
                     imgUrl?: string | undefined;
+                    instanceId?: string | undefined;
+                    backCategory?: string | undefined;
                 }[];
             }[];
             revealedCards: {
@@ -3917,6 +4110,7 @@ export declare const GameViewSchema: z.ZodObject<{
             voted: number;
             total: number;
         } | undefined;
+        disallowedVoteTargetIdsForYou?: string[] | undefined;
         threatModifier?: {
             delta: number;
             reasons: string[];
@@ -4005,6 +4199,15 @@ export declare const GameViewSchema: z.ZodObject<{
     };
     categoryOrder: string[];
     you: {
+        hand: {
+            revealed: boolean;
+            id: string;
+            deck: string;
+            instanceId?: string | undefined;
+            labelShort?: string | undefined;
+            secret?: boolean | undefined;
+            missing?: boolean | undefined;
+        }[];
         playerId: string;
         name: string;
         categories: {
@@ -4014,15 +4217,6 @@ export declare const GameViewSchema: z.ZodObject<{
                 instanceId: string;
                 labelShort: string;
             }[];
-        }[];
-        hand: {
-            revealed: boolean;
-            id: string;
-            deck: string;
-            instanceId?: string | undefined;
-            labelShort?: string | undefined;
-            secret?: boolean | undefined;
-            missing?: boolean | undefined;
         }[];
         specialConditions: {
             id: string;
@@ -4039,7 +4233,8 @@ export declare const GameViewSchema: z.ZodObject<{
             used: boolean;
             imgUrl?: string | undefined;
             needsChoice?: boolean | undefined;
-            choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+            choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+            pendingActivation?: boolean | undefined;
             allowSelfTarget?: boolean | undefined;
             targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
         }[];
@@ -4055,7 +4250,10 @@ export declare const GameViewSchema: z.ZodObject<{
                 status: "hidden" | "revealed";
                 cards: {
                     labelShort: string;
+                    hidden?: boolean | undefined;
                     imgUrl?: string | undefined;
+                    instanceId?: string | undefined;
+                    backCategory?: string | undefined;
                 }[];
             }[];
             revealedCards: {
@@ -4099,6 +4297,7 @@ export declare const GameViewSchema: z.ZodObject<{
             voted: number;
             total: number;
         } | undefined;
+        disallowedVoteTargetIdsForYou?: string[] | undefined;
         threatModifier?: {
             delta: number;
             reasons: string[];
@@ -4460,6 +4659,7 @@ export declare const ClientMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
         preVoteDiscussionSeconds: z.ZodNumber;
         enablePostVoteDiscussionTimer: z.ZodBoolean;
         postVoteDiscussionSeconds: z.ZodNumber;
+        automationMode: z.ZodUnion<[z.ZodLiteral<"auto">, z.ZodLiteral<"semi">, z.ZodLiteral<"manual">]>;
         enablePresenterMode: z.ZodBoolean;
         continuePermission: z.ZodUnion<[z.ZodLiteral<"host_only">, z.ZodLiteral<"revealer_only">, z.ZodLiteral<"anyone">]>;
         revealTimeoutAction: z.ZodUnion<[z.ZodLiteral<"random_card">, z.ZodLiteral<"skip_player">]>;
@@ -4467,6 +4667,7 @@ export declare const ClientMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
         specialUsage: z.ZodUnion<[z.ZodLiteral<"anytime">, z.ZodLiteral<"only_during_voting">]>;
         maxPlayers: z.ZodNumber;
         finalThreatReveal: z.ZodUnion<[z.ZodLiteral<"host">, z.ZodLiteral<"anyone">]>;
+        forcedDisasterId: z.ZodString;
     }, "strip", z.ZodTypeAny, {
         enableRevealDiscussionTimer: boolean;
         revealDiscussionSeconds: number;
@@ -4474,6 +4675,7 @@ export declare const ClientMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
         preVoteDiscussionSeconds: number;
         enablePostVoteDiscussionTimer: boolean;
         postVoteDiscussionSeconds: number;
+        automationMode: "auto" | "manual" | "semi";
         enablePresenterMode: boolean;
         continuePermission: "host_only" | "revealer_only" | "anyone";
         revealTimeoutAction: "random_card" | "skip_player";
@@ -4481,6 +4683,7 @@ export declare const ClientMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
         specialUsage: "anytime" | "only_during_voting";
         maxPlayers: number;
         finalThreatReveal: "anyone" | "host";
+        forcedDisasterId: string;
     }, {
         enableRevealDiscussionTimer: boolean;
         revealDiscussionSeconds: number;
@@ -4488,6 +4691,7 @@ export declare const ClientMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
         preVoteDiscussionSeconds: number;
         enablePostVoteDiscussionTimer: boolean;
         postVoteDiscussionSeconds: number;
+        automationMode: "auto" | "manual" | "semi";
         enablePresenterMode: boolean;
         continuePermission: "host_only" | "revealer_only" | "anyone";
         revealTimeoutAction: "random_card" | "skip_player";
@@ -4495,6 +4699,7 @@ export declare const ClientMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
         specialUsage: "anytime" | "only_during_voting";
         maxPlayers: number;
         finalThreatReveal: "anyone" | "host";
+        forcedDisasterId: string;
     }>;
 }, "strip", z.ZodTypeAny, {
     type: "updateSettings";
@@ -4505,6 +4710,7 @@ export declare const ClientMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
         preVoteDiscussionSeconds: number;
         enablePostVoteDiscussionTimer: boolean;
         postVoteDiscussionSeconds: number;
+        automationMode: "auto" | "manual" | "semi";
         enablePresenterMode: boolean;
         continuePermission: "host_only" | "revealer_only" | "anyone";
         revealTimeoutAction: "random_card" | "skip_player";
@@ -4512,6 +4718,7 @@ export declare const ClientMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
         specialUsage: "anytime" | "only_during_voting";
         maxPlayers: number;
         finalThreatReveal: "anyone" | "host";
+        forcedDisasterId: string;
     };
 }, {
     type: "updateSettings";
@@ -4522,6 +4729,7 @@ export declare const ClientMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
         preVoteDiscussionSeconds: number;
         enablePostVoteDiscussionTimer: boolean;
         postVoteDiscussionSeconds: number;
+        automationMode: "auto" | "manual" | "semi";
         enablePresenterMode: boolean;
         continuePermission: "host_only" | "revealer_only" | "anyone";
         revealTimeoutAction: "random_card" | "skip_player";
@@ -4529,6 +4737,7 @@ export declare const ClientMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
         specialUsage: "anytime" | "only_during_voting";
         maxPlayers: number;
         finalThreatReveal: "anyone" | "host";
+        forcedDisasterId: string;
     };
 }>, z.ZodObject<{
     type: z.ZodLiteral<"updateRules">;
@@ -4634,13 +4843,23 @@ export declare const ClientMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
     };
 }>, z.ZodObject<{
     type: z.ZodLiteral<"requestHostTransfer">;
-    payload: z.ZodObject<{}, "strip", z.ZodTypeAny, {}, {}>;
+    payload: z.ZodObject<{
+        targetPlayerId: z.ZodOptional<z.ZodString>;
+    }, "strip", z.ZodTypeAny, {
+        targetPlayerId?: string | undefined;
+    }, {
+        targetPlayerId?: string | undefined;
+    }>;
 }, "strip", z.ZodTypeAny, {
     type: "requestHostTransfer";
-    payload: {};
+    payload: {
+        targetPlayerId?: string | undefined;
+    };
 }, {
     type: "requestHostTransfer";
-    payload: {};
+    payload: {
+        targetPlayerId?: string | undefined;
+    };
 }>, z.ZodObject<{
     type: z.ZodLiteral<"overlaySubscribe">;
     payload: z.ZodObject<{
@@ -4724,6 +4943,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             preVoteDiscussionSeconds: z.ZodNumber;
             enablePostVoteDiscussionTimer: z.ZodBoolean;
             postVoteDiscussionSeconds: z.ZodNumber;
+            automationMode: z.ZodUnion<[z.ZodLiteral<"auto">, z.ZodLiteral<"semi">, z.ZodLiteral<"manual">]>;
             enablePresenterMode: z.ZodBoolean;
             continuePermission: z.ZodUnion<[z.ZodLiteral<"host_only">, z.ZodLiteral<"revealer_only">, z.ZodLiteral<"anyone">]>;
             revealTimeoutAction: z.ZodUnion<[z.ZodLiteral<"random_card">, z.ZodLiteral<"skip_player">]>;
@@ -4731,6 +4951,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             specialUsage: z.ZodUnion<[z.ZodLiteral<"anytime">, z.ZodLiteral<"only_during_voting">]>;
             maxPlayers: z.ZodNumber;
             finalThreatReveal: z.ZodUnion<[z.ZodLiteral<"host">, z.ZodLiteral<"anyone">]>;
+            forcedDisasterId: z.ZodString;
         }, "strip", z.ZodTypeAny, {
             enableRevealDiscussionTimer: boolean;
             revealDiscussionSeconds: number;
@@ -4738,6 +4959,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             preVoteDiscussionSeconds: number;
             enablePostVoteDiscussionTimer: boolean;
             postVoteDiscussionSeconds: number;
+            automationMode: "auto" | "manual" | "semi";
             enablePresenterMode: boolean;
             continuePermission: "host_only" | "revealer_only" | "anyone";
             revealTimeoutAction: "random_card" | "skip_player";
@@ -4745,6 +4967,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             specialUsage: "anytime" | "only_during_voting";
             maxPlayers: number;
             finalThreatReveal: "anyone" | "host";
+            forcedDisasterId: string;
         }, {
             enableRevealDiscussionTimer: boolean;
             revealDiscussionSeconds: number;
@@ -4752,6 +4975,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             preVoteDiscussionSeconds: number;
             enablePostVoteDiscussionTimer: boolean;
             postVoteDiscussionSeconds: number;
+            automationMode: "auto" | "manual" | "semi";
             enablePresenterMode: boolean;
             continuePermission: "host_only" | "revealer_only" | "anyone";
             revealTimeoutAction: "random_card" | "skip_player";
@@ -4759,6 +4983,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             specialUsage: "anytime" | "only_during_voting";
             maxPlayers: number;
             finalThreatReveal: "anyone" | "host";
+            forcedDisasterId: string;
         }>;
         ruleset: z.ZodObject<{
             playerCount: z.ZodNumber;
@@ -4978,6 +5203,16 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             };
         }>>;
         isDev: z.ZodOptional<z.ZodBoolean>;
+        disasterOptions: z.ZodOptional<z.ZodArray<z.ZodObject<{
+            id: z.ZodString;
+            title: z.ZodString;
+        }, "strip", z.ZodTypeAny, {
+            id: string;
+            title: string;
+        }, {
+            id: string;
+            title: string;
+        }>, "many">>;
     }, "strip", z.ZodTypeAny, {
         players: {
             playerId: string;
@@ -5006,6 +5241,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             preVoteDiscussionSeconds: number;
             enablePostVoteDiscussionTimer: boolean;
             postVoteDiscussionSeconds: number;
+            automationMode: "auto" | "manual" | "semi";
             enablePresenterMode: boolean;
             continuePermission: "host_only" | "revealer_only" | "anyone";
             revealTimeoutAction: "random_card" | "skip_player";
@@ -5013,6 +5249,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             specialUsage: "anytime" | "only_during_voting";
             maxPlayers: number;
             finalThreatReveal: "anyone" | "host";
+            forcedDisasterId: string;
         };
         ruleset: {
             playerCount: number;
@@ -5066,6 +5303,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             };
         } | undefined;
         isDev?: boolean | undefined;
+        disasterOptions?: {
+            id: string;
+            title: string;
+        }[] | undefined;
     }, {
         players: {
             playerId: string;
@@ -5094,6 +5335,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             preVoteDiscussionSeconds: number;
             enablePostVoteDiscussionTimer: boolean;
             postVoteDiscussionSeconds: number;
+            automationMode: "auto" | "manual" | "semi";
             enablePresenterMode: boolean;
             continuePermission: "host_only" | "revealer_only" | "anyone";
             revealTimeoutAction: "random_card" | "skip_player";
@@ -5101,6 +5343,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             specialUsage: "anytime" | "only_during_voting";
             maxPlayers: number;
             finalThreatReveal: "anyone" | "host";
+            forcedDisasterId: string;
         };
         ruleset: {
             playerCount: number;
@@ -5154,6 +5397,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             };
         } | undefined;
         isDev?: boolean | undefined;
+        disasterOptions?: {
+            id: string;
+            title: string;
+        }[] | undefined;
     }>;
 }, "strip", z.ZodTypeAny, {
     type: "roomState";
@@ -5185,6 +5432,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             preVoteDiscussionSeconds: number;
             enablePostVoteDiscussionTimer: boolean;
             postVoteDiscussionSeconds: number;
+            automationMode: "auto" | "manual" | "semi";
             enablePresenterMode: boolean;
             continuePermission: "host_only" | "revealer_only" | "anyone";
             revealTimeoutAction: "random_card" | "skip_player";
@@ -5192,6 +5440,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             specialUsage: "anytime" | "only_during_voting";
             maxPlayers: number;
             finalThreatReveal: "anyone" | "host";
+            forcedDisasterId: string;
         };
         ruleset: {
             playerCount: number;
@@ -5245,6 +5494,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             };
         } | undefined;
         isDev?: boolean | undefined;
+        disasterOptions?: {
+            id: string;
+            title: string;
+        }[] | undefined;
     };
 }, {
     type: "roomState";
@@ -5276,6 +5529,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             preVoteDiscussionSeconds: number;
             enablePostVoteDiscussionTimer: boolean;
             postVoteDiscussionSeconds: number;
+            automationMode: "auto" | "manual" | "semi";
             enablePresenterMode: boolean;
             continuePermission: "host_only" | "revealer_only" | "anyone";
             revealTimeoutAction: "random_card" | "skip_player";
@@ -5283,6 +5537,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             specialUsage: "anytime" | "only_during_voting";
             maxPlayers: number;
             finalThreatReveal: "anyone" | "host";
+            forcedDisasterId: string;
         };
         ruleset: {
             playerCount: number;
@@ -5336,6 +5591,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             };
         } | undefined;
         isDev?: boolean | undefined;
+        disasterOptions?: {
+            id: string;
+            title: string;
+        }[] | undefined;
     };
 }>, z.ZodObject<{
     type: z.ZodLiteral<"gameView">;
@@ -5671,7 +5930,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 used: z.ZodBoolean;
                 imgUrl: z.ZodOptional<z.ZodString>;
                 needsChoice: z.ZodOptional<z.ZodBoolean>;
-                choiceKind: z.ZodOptional<z.ZodUnion<[z.ZodLiteral<"player">, z.ZodLiteral<"neighbor">, z.ZodLiteral<"category">, z.ZodLiteral<"none">]>>;
+                choiceKind: z.ZodOptional<z.ZodUnion<[z.ZodLiteral<"player">, z.ZodLiteral<"neighbor">, z.ZodLiteral<"category">, z.ZodLiteral<"bunker">, z.ZodLiteral<"special">, z.ZodLiteral<"none">]>>;
+                pendingActivation: z.ZodOptional<z.ZodBoolean>;
                 allowSelfTarget: z.ZodOptional<z.ZodBoolean>;
                 targetScope: z.ZodOptional<z.ZodUnion<[z.ZodLiteral<"neighbors">, z.ZodLiteral<"any_alive">, z.ZodLiteral<"self">, z.ZodLiteral<"any_including_self">]>>;
             }, "strip", z.ZodTypeAny, {
@@ -5689,7 +5949,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 used: boolean;
                 imgUrl?: string | undefined;
                 needsChoice?: boolean | undefined;
-                choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                pendingActivation?: boolean | undefined;
                 allowSelfTarget?: boolean | undefined;
                 targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
             }, {
@@ -5707,11 +5968,21 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 used: boolean;
                 imgUrl?: string | undefined;
                 needsChoice?: boolean | undefined;
-                choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                pendingActivation?: boolean | undefined;
                 allowSelfTarget?: boolean | undefined;
                 targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
             }>, "many">;
         }, "strip", z.ZodTypeAny, {
+            hand: {
+                revealed: boolean;
+                id: string;
+                deck: string;
+                instanceId?: string | undefined;
+                labelShort?: string | undefined;
+                secret?: boolean | undefined;
+                missing?: boolean | undefined;
+            }[];
             playerId: string;
             name: string;
             categories: {
@@ -5721,15 +5992,6 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     instanceId: string;
                     labelShort: string;
                 }[];
-            }[];
-            hand: {
-                revealed: boolean;
-                id: string;
-                deck: string;
-                instanceId?: string | undefined;
-                labelShort?: string | undefined;
-                secret?: boolean | undefined;
-                missing?: boolean | undefined;
             }[];
             specialConditions: {
                 id: string;
@@ -5746,11 +6008,21 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 used: boolean;
                 imgUrl?: string | undefined;
                 needsChoice?: boolean | undefined;
-                choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                pendingActivation?: boolean | undefined;
                 allowSelfTarget?: boolean | undefined;
                 targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
             }[];
         }, {
+            hand: {
+                revealed: boolean;
+                id: string;
+                deck: string;
+                instanceId?: string | undefined;
+                labelShort?: string | undefined;
+                secret?: boolean | undefined;
+                missing?: boolean | undefined;
+            }[];
             playerId: string;
             name: string;
             categories: {
@@ -5760,15 +6032,6 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     instanceId: string;
                     labelShort: string;
                 }[];
-            }[];
-            hand: {
-                revealed: boolean;
-                id: string;
-                deck: string;
-                instanceId?: string | undefined;
-                labelShort?: string | undefined;
-                secret?: boolean | undefined;
-                missing?: boolean | undefined;
             }[];
             specialConditions: {
                 id: string;
@@ -5785,7 +6048,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 used: boolean;
                 imgUrl?: string | undefined;
                 needsChoice?: boolean | undefined;
-                choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                pendingActivation?: boolean | undefined;
                 allowSelfTarget?: boolean | undefined;
                 targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
             }[];
@@ -5832,26 +6096,41 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     cards: z.ZodArray<z.ZodObject<{
                         labelShort: z.ZodString;
                         imgUrl: z.ZodOptional<z.ZodString>;
+                        instanceId: z.ZodOptional<z.ZodString>;
+                        hidden: z.ZodOptional<z.ZodBoolean>;
+                        backCategory: z.ZodOptional<z.ZodString>;
                     }, "strip", z.ZodTypeAny, {
                         labelShort: string;
+                        hidden?: boolean | undefined;
                         imgUrl?: string | undefined;
+                        instanceId?: string | undefined;
+                        backCategory?: string | undefined;
                     }, {
                         labelShort: string;
+                        hidden?: boolean | undefined;
                         imgUrl?: string | undefined;
+                        instanceId?: string | undefined;
+                        backCategory?: string | undefined;
                     }>, "many">;
                 }, "strip", z.ZodTypeAny, {
                     category: string;
                     status: "hidden" | "revealed";
                     cards: {
                         labelShort: string;
+                        hidden?: boolean | undefined;
                         imgUrl?: string | undefined;
+                        instanceId?: string | undefined;
+                        backCategory?: string | undefined;
                     }[];
                 }, {
                     category: string;
                     status: "hidden" | "revealed";
                     cards: {
                         labelShort: string;
+                        hidden?: boolean | undefined;
                         imgUrl?: string | undefined;
+                        instanceId?: string | undefined;
+                        backCategory?: string | undefined;
                     }[];
                 }>, "many">;
             }, "strip", z.ZodTypeAny, {
@@ -5864,7 +6143,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     status: "hidden" | "revealed";
                     cards: {
                         labelShort: string;
+                        hidden?: boolean | undefined;
                         imgUrl?: string | undefined;
+                        instanceId?: string | undefined;
+                        backCategory?: string | undefined;
                     }[];
                 }[];
                 revealedCards: {
@@ -5893,7 +6175,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     status: "hidden" | "revealed";
                     cards: {
                         labelShort: string;
+                        hidden?: boolean | undefined;
                         imgUrl?: string | undefined;
+                        instanceId?: string | undefined;
+                        backCategory?: string | undefined;
                     }[];
                 }[];
                 revealedCards: {
@@ -5963,6 +6248,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 voted: number;
                 total: number;
             }>>;
+            disallowedVoteTargetIdsForYou: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
             threatModifier: z.ZodOptional<z.ZodObject<{
                 delta: z.ZodNumber;
                 reasons: z.ZodArray<z.ZodString, "many">;
@@ -6016,7 +6302,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     status: "hidden" | "revealed";
                     cards: {
                         labelShort: string;
+                        hidden?: boolean | undefined;
                         imgUrl?: string | undefined;
+                        instanceId?: string | undefined;
+                        backCategory?: string | undefined;
                     }[];
                 }[];
                 revealedCards: {
@@ -6060,6 +6349,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 voted: number;
                 total: number;
             } | undefined;
+            disallowedVoteTargetIdsForYou?: string[] | undefined;
             threatModifier?: {
                 delta: number;
                 reasons: string[];
@@ -6091,7 +6381,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     status: "hidden" | "revealed";
                     cards: {
                         labelShort: string;
+                        hidden?: boolean | undefined;
                         imgUrl?: string | undefined;
+                        instanceId?: string | undefined;
+                        backCategory?: string | undefined;
                     }[];
                 }[];
                 revealedCards: {
@@ -6135,6 +6428,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 voted: number;
                 total: number;
             } | undefined;
+            disallowedVoteTargetIdsForYou?: string[] | undefined;
             threatModifier?: {
                 delta: number;
                 reasons: string[];
@@ -6174,6 +6468,15 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
         };
         categoryOrder: string[];
         you: {
+            hand: {
+                revealed: boolean;
+                id: string;
+                deck: string;
+                instanceId?: string | undefined;
+                labelShort?: string | undefined;
+                secret?: boolean | undefined;
+                missing?: boolean | undefined;
+            }[];
             playerId: string;
             name: string;
             categories: {
@@ -6183,15 +6486,6 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     instanceId: string;
                     labelShort: string;
                 }[];
-            }[];
-            hand: {
-                revealed: boolean;
-                id: string;
-                deck: string;
-                instanceId?: string | undefined;
-                labelShort?: string | undefined;
-                secret?: boolean | undefined;
-                missing?: boolean | undefined;
             }[];
             specialConditions: {
                 id: string;
@@ -6208,7 +6502,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 used: boolean;
                 imgUrl?: string | undefined;
                 needsChoice?: boolean | undefined;
-                choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                pendingActivation?: boolean | undefined;
                 allowSelfTarget?: boolean | undefined;
                 targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
             }[];
@@ -6224,7 +6519,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     status: "hidden" | "revealed";
                     cards: {
                         labelShort: string;
+                        hidden?: boolean | undefined;
                         imgUrl?: string | undefined;
+                        instanceId?: string | undefined;
+                        backCategory?: string | undefined;
                     }[];
                 }[];
                 revealedCards: {
@@ -6268,6 +6566,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 voted: number;
                 total: number;
             } | undefined;
+            disallowedVoteTargetIdsForYou?: string[] | undefined;
             threatModifier?: {
                 delta: number;
                 reasons: string[];
@@ -6356,6 +6655,15 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
         };
         categoryOrder: string[];
         you: {
+            hand: {
+                revealed: boolean;
+                id: string;
+                deck: string;
+                instanceId?: string | undefined;
+                labelShort?: string | undefined;
+                secret?: boolean | undefined;
+                missing?: boolean | undefined;
+            }[];
             playerId: string;
             name: string;
             categories: {
@@ -6365,15 +6673,6 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     instanceId: string;
                     labelShort: string;
                 }[];
-            }[];
-            hand: {
-                revealed: boolean;
-                id: string;
-                deck: string;
-                instanceId?: string | undefined;
-                labelShort?: string | undefined;
-                secret?: boolean | undefined;
-                missing?: boolean | undefined;
             }[];
             specialConditions: {
                 id: string;
@@ -6390,7 +6689,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 used: boolean;
                 imgUrl?: string | undefined;
                 needsChoice?: boolean | undefined;
-                choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                pendingActivation?: boolean | undefined;
                 allowSelfTarget?: boolean | undefined;
                 targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
             }[];
@@ -6406,7 +6706,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     status: "hidden" | "revealed";
                     cards: {
                         labelShort: string;
+                        hidden?: boolean | undefined;
                         imgUrl?: string | undefined;
+                        instanceId?: string | undefined;
+                        backCategory?: string | undefined;
                     }[];
                 }[];
                 revealedCards: {
@@ -6450,6 +6753,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 voted: number;
                 total: number;
             } | undefined;
+            disallowedVoteTargetIdsForYou?: string[] | undefined;
             threatModifier?: {
                 delta: number;
                 reasons: string[];
@@ -6541,6 +6845,15 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
         };
         categoryOrder: string[];
         you: {
+            hand: {
+                revealed: boolean;
+                id: string;
+                deck: string;
+                instanceId?: string | undefined;
+                labelShort?: string | undefined;
+                secret?: boolean | undefined;
+                missing?: boolean | undefined;
+            }[];
             playerId: string;
             name: string;
             categories: {
@@ -6550,15 +6863,6 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     instanceId: string;
                     labelShort: string;
                 }[];
-            }[];
-            hand: {
-                revealed: boolean;
-                id: string;
-                deck: string;
-                instanceId?: string | undefined;
-                labelShort?: string | undefined;
-                secret?: boolean | undefined;
-                missing?: boolean | undefined;
             }[];
             specialConditions: {
                 id: string;
@@ -6575,7 +6879,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 used: boolean;
                 imgUrl?: string | undefined;
                 needsChoice?: boolean | undefined;
-                choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                pendingActivation?: boolean | undefined;
                 allowSelfTarget?: boolean | undefined;
                 targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
             }[];
@@ -6591,7 +6896,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     status: "hidden" | "revealed";
                     cards: {
                         labelShort: string;
+                        hidden?: boolean | undefined;
                         imgUrl?: string | undefined;
+                        instanceId?: string | undefined;
+                        backCategory?: string | undefined;
                     }[];
                 }[];
                 revealedCards: {
@@ -6635,6 +6943,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 voted: number;
                 total: number;
             } | undefined;
+            disallowedVoteTargetIdsForYou?: string[] | undefined;
             threatModifier?: {
                 delta: number;
                 reasons: string[];
@@ -6726,6 +7035,15 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
         };
         categoryOrder: string[];
         you: {
+            hand: {
+                revealed: boolean;
+                id: string;
+                deck: string;
+                instanceId?: string | undefined;
+                labelShort?: string | undefined;
+                secret?: boolean | undefined;
+                missing?: boolean | undefined;
+            }[];
             playerId: string;
             name: string;
             categories: {
@@ -6735,15 +7053,6 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     instanceId: string;
                     labelShort: string;
                 }[];
-            }[];
-            hand: {
-                revealed: boolean;
-                id: string;
-                deck: string;
-                instanceId?: string | undefined;
-                labelShort?: string | undefined;
-                secret?: boolean | undefined;
-                missing?: boolean | undefined;
             }[];
             specialConditions: {
                 id: string;
@@ -6760,7 +7069,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 used: boolean;
                 imgUrl?: string | undefined;
                 needsChoice?: boolean | undefined;
-                choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                pendingActivation?: boolean | undefined;
                 allowSelfTarget?: boolean | undefined;
                 targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
             }[];
@@ -6776,7 +7086,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     status: "hidden" | "revealed";
                     cards: {
                         labelShort: string;
+                        hidden?: boolean | undefined;
                         imgUrl?: string | undefined;
+                        instanceId?: string | undefined;
+                        backCategory?: string | undefined;
                     }[];
                 }[];
                 revealedCards: {
@@ -6820,6 +7133,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 voted: number;
                 total: number;
             } | undefined;
+            disallowedVoteTargetIdsForYou?: string[] | undefined;
             threatModifier?: {
                 delta: number;
                 reasons: string[];
@@ -6950,6 +7264,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 preVoteDiscussionSeconds: z.ZodNumber;
                 enablePostVoteDiscussionTimer: z.ZodBoolean;
                 postVoteDiscussionSeconds: z.ZodNumber;
+                automationMode: z.ZodUnion<[z.ZodLiteral<"auto">, z.ZodLiteral<"semi">, z.ZodLiteral<"manual">]>;
                 enablePresenterMode: z.ZodBoolean;
                 continuePermission: z.ZodUnion<[z.ZodLiteral<"host_only">, z.ZodLiteral<"revealer_only">, z.ZodLiteral<"anyone">]>;
                 revealTimeoutAction: z.ZodUnion<[z.ZodLiteral<"random_card">, z.ZodLiteral<"skip_player">]>;
@@ -6957,6 +7272,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 specialUsage: z.ZodUnion<[z.ZodLiteral<"anytime">, z.ZodLiteral<"only_during_voting">]>;
                 maxPlayers: z.ZodNumber;
                 finalThreatReveal: z.ZodUnion<[z.ZodLiteral<"host">, z.ZodLiteral<"anyone">]>;
+                forcedDisasterId: z.ZodString;
             }, "strip", z.ZodTypeAny, {
                 enableRevealDiscussionTimer: boolean;
                 revealDiscussionSeconds: number;
@@ -6964,6 +7280,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 preVoteDiscussionSeconds: number;
                 enablePostVoteDiscussionTimer: boolean;
                 postVoteDiscussionSeconds: number;
+                automationMode: "auto" | "manual" | "semi";
                 enablePresenterMode: boolean;
                 continuePermission: "host_only" | "revealer_only" | "anyone";
                 revealTimeoutAction: "random_card" | "skip_player";
@@ -6971,6 +7288,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 specialUsage: "anytime" | "only_during_voting";
                 maxPlayers: number;
                 finalThreatReveal: "anyone" | "host";
+                forcedDisasterId: string;
             }, {
                 enableRevealDiscussionTimer: boolean;
                 revealDiscussionSeconds: number;
@@ -6978,6 +7296,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 preVoteDiscussionSeconds: number;
                 enablePostVoteDiscussionTimer: boolean;
                 postVoteDiscussionSeconds: number;
+                automationMode: "auto" | "manual" | "semi";
                 enablePresenterMode: boolean;
                 continuePermission: "host_only" | "revealer_only" | "anyone";
                 revealTimeoutAction: "random_card" | "skip_player";
@@ -6985,6 +7304,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 specialUsage: "anytime" | "only_during_voting";
                 maxPlayers: number;
                 finalThreatReveal: "anyone" | "host";
+                forcedDisasterId: string;
             }>>;
             ruleset: z.ZodOptional<z.ZodObject<{
                 playerCount: z.ZodNumber;
@@ -7204,6 +7524,16 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 };
             }>>>;
             isDev: z.ZodOptional<z.ZodOptional<z.ZodBoolean>>;
+            disasterOptions: z.ZodOptional<z.ZodOptional<z.ZodArray<z.ZodObject<{
+                id: z.ZodString;
+                title: z.ZodString;
+            }, "strip", z.ZodTypeAny, {
+                id: string;
+                title: string;
+            }, {
+                id: string;
+                title: string;
+            }>, "many">>>;
         }, "strip", z.ZodTypeAny, {
             players?: {
                 playerId: string;
@@ -7232,6 +7562,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 preVoteDiscussionSeconds: number;
                 enablePostVoteDiscussionTimer: boolean;
                 postVoteDiscussionSeconds: number;
+                automationMode: "auto" | "manual" | "semi";
                 enablePresenterMode: boolean;
                 continuePermission: "host_only" | "revealer_only" | "anyone";
                 revealTimeoutAction: "random_card" | "skip_player";
@@ -7239,6 +7570,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 specialUsage: "anytime" | "only_during_voting";
                 maxPlayers: number;
                 finalThreatReveal: "anyone" | "host";
+                forcedDisasterId: string;
             } | undefined;
             ruleset?: {
                 playerCount: number;
@@ -7292,6 +7624,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 };
             } | undefined;
             isDev?: boolean | undefined;
+            disasterOptions?: {
+                id: string;
+                title: string;
+            }[] | undefined;
         }, {
             players?: {
                 playerId: string;
@@ -7320,6 +7656,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 preVoteDiscussionSeconds: number;
                 enablePostVoteDiscussionTimer: boolean;
                 postVoteDiscussionSeconds: number;
+                automationMode: "auto" | "manual" | "semi";
                 enablePresenterMode: boolean;
                 continuePermission: "host_only" | "revealer_only" | "anyone";
                 revealTimeoutAction: "random_card" | "skip_player";
@@ -7327,6 +7664,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 specialUsage: "anytime" | "only_during_voting";
                 maxPlayers: number;
                 finalThreatReveal: "anyone" | "host";
+                forcedDisasterId: string;
             } | undefined;
             ruleset?: {
                 playerCount: number;
@@ -7380,6 +7718,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 };
             } | undefined;
             isDev?: boolean | undefined;
+            disasterOptions?: {
+                id: string;
+                title: string;
+            }[] | undefined;
         }>>;
         gameView: z.ZodOptional<z.ZodObject<{
             phase: z.ZodOptional<z.ZodUnion<[z.ZodLiteral<"reveal">, z.ZodLiteral<"reveal_discussion">, z.ZodLiteral<"voting">, z.ZodLiteral<"resolution">, z.ZodLiteral<"ended">]>>;
@@ -7713,7 +8055,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     used: z.ZodBoolean;
                     imgUrl: z.ZodOptional<z.ZodString>;
                     needsChoice: z.ZodOptional<z.ZodBoolean>;
-                    choiceKind: z.ZodOptional<z.ZodUnion<[z.ZodLiteral<"player">, z.ZodLiteral<"neighbor">, z.ZodLiteral<"category">, z.ZodLiteral<"none">]>>;
+                    choiceKind: z.ZodOptional<z.ZodUnion<[z.ZodLiteral<"player">, z.ZodLiteral<"neighbor">, z.ZodLiteral<"category">, z.ZodLiteral<"bunker">, z.ZodLiteral<"special">, z.ZodLiteral<"none">]>>;
+                    pendingActivation: z.ZodOptional<z.ZodBoolean>;
                     allowSelfTarget: z.ZodOptional<z.ZodBoolean>;
                     targetScope: z.ZodOptional<z.ZodUnion<[z.ZodLiteral<"neighbors">, z.ZodLiteral<"any_alive">, z.ZodLiteral<"self">, z.ZodLiteral<"any_including_self">]>>;
                 }, "strip", z.ZodTypeAny, {
@@ -7731,7 +8074,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     used: boolean;
                     imgUrl?: string | undefined;
                     needsChoice?: boolean | undefined;
-                    choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                    choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                    pendingActivation?: boolean | undefined;
                     allowSelfTarget?: boolean | undefined;
                     targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
                 }, {
@@ -7749,11 +8093,21 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     used: boolean;
                     imgUrl?: string | undefined;
                     needsChoice?: boolean | undefined;
-                    choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                    choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                    pendingActivation?: boolean | undefined;
                     allowSelfTarget?: boolean | undefined;
                     targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
                 }>, "many">;
             }, "strip", z.ZodTypeAny, {
+                hand: {
+                    revealed: boolean;
+                    id: string;
+                    deck: string;
+                    instanceId?: string | undefined;
+                    labelShort?: string | undefined;
+                    secret?: boolean | undefined;
+                    missing?: boolean | undefined;
+                }[];
                 playerId: string;
                 name: string;
                 categories: {
@@ -7763,15 +8117,6 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         instanceId: string;
                         labelShort: string;
                     }[];
-                }[];
-                hand: {
-                    revealed: boolean;
-                    id: string;
-                    deck: string;
-                    instanceId?: string | undefined;
-                    labelShort?: string | undefined;
-                    secret?: boolean | undefined;
-                    missing?: boolean | undefined;
                 }[];
                 specialConditions: {
                     id: string;
@@ -7788,11 +8133,21 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     used: boolean;
                     imgUrl?: string | undefined;
                     needsChoice?: boolean | undefined;
-                    choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                    choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                    pendingActivation?: boolean | undefined;
                     allowSelfTarget?: boolean | undefined;
                     targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
                 }[];
             }, {
+                hand: {
+                    revealed: boolean;
+                    id: string;
+                    deck: string;
+                    instanceId?: string | undefined;
+                    labelShort?: string | undefined;
+                    secret?: boolean | undefined;
+                    missing?: boolean | undefined;
+                }[];
                 playerId: string;
                 name: string;
                 categories: {
@@ -7802,15 +8157,6 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         instanceId: string;
                         labelShort: string;
                     }[];
-                }[];
-                hand: {
-                    revealed: boolean;
-                    id: string;
-                    deck: string;
-                    instanceId?: string | undefined;
-                    labelShort?: string | undefined;
-                    secret?: boolean | undefined;
-                    missing?: boolean | undefined;
                 }[];
                 specialConditions: {
                     id: string;
@@ -7827,7 +8173,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     used: boolean;
                     imgUrl?: string | undefined;
                     needsChoice?: boolean | undefined;
-                    choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                    choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                    pendingActivation?: boolean | undefined;
                     allowSelfTarget?: boolean | undefined;
                     targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
                 }[];
@@ -7874,26 +8221,41 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         cards: z.ZodArray<z.ZodObject<{
                             labelShort: z.ZodString;
                             imgUrl: z.ZodOptional<z.ZodString>;
+                            instanceId: z.ZodOptional<z.ZodString>;
+                            hidden: z.ZodOptional<z.ZodBoolean>;
+                            backCategory: z.ZodOptional<z.ZodString>;
                         }, "strip", z.ZodTypeAny, {
                             labelShort: string;
+                            hidden?: boolean | undefined;
                             imgUrl?: string | undefined;
+                            instanceId?: string | undefined;
+                            backCategory?: string | undefined;
                         }, {
                             labelShort: string;
+                            hidden?: boolean | undefined;
                             imgUrl?: string | undefined;
+                            instanceId?: string | undefined;
+                            backCategory?: string | undefined;
                         }>, "many">;
                     }, "strip", z.ZodTypeAny, {
                         category: string;
                         status: "hidden" | "revealed";
                         cards: {
                             labelShort: string;
+                            hidden?: boolean | undefined;
                             imgUrl?: string | undefined;
+                            instanceId?: string | undefined;
+                            backCategory?: string | undefined;
                         }[];
                     }, {
                         category: string;
                         status: "hidden" | "revealed";
                         cards: {
                             labelShort: string;
+                            hidden?: boolean | undefined;
                             imgUrl?: string | undefined;
+                            instanceId?: string | undefined;
+                            backCategory?: string | undefined;
                         }[];
                     }>, "many">;
                 }, "strip", z.ZodTypeAny, {
@@ -7906,7 +8268,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         status: "hidden" | "revealed";
                         cards: {
                             labelShort: string;
+                            hidden?: boolean | undefined;
                             imgUrl?: string | undefined;
+                            instanceId?: string | undefined;
+                            backCategory?: string | undefined;
                         }[];
                     }[];
                     revealedCards: {
@@ -7935,7 +8300,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         status: "hidden" | "revealed";
                         cards: {
                             labelShort: string;
+                            hidden?: boolean | undefined;
                             imgUrl?: string | undefined;
+                            instanceId?: string | undefined;
+                            backCategory?: string | undefined;
                         }[];
                     }[];
                     revealedCards: {
@@ -8005,6 +8373,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     voted: number;
                     total: number;
                 }>>;
+                disallowedVoteTargetIdsForYou: z.ZodOptional<z.ZodArray<z.ZodString, "many">>;
                 threatModifier: z.ZodOptional<z.ZodObject<{
                     delta: z.ZodNumber;
                     reasons: z.ZodArray<z.ZodString, "many">;
@@ -8058,7 +8427,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         status: "hidden" | "revealed";
                         cards: {
                             labelShort: string;
+                            hidden?: boolean | undefined;
                             imgUrl?: string | undefined;
+                            instanceId?: string | undefined;
+                            backCategory?: string | undefined;
                         }[];
                     }[];
                     revealedCards: {
@@ -8102,6 +8474,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     voted: number;
                     total: number;
                 } | undefined;
+                disallowedVoteTargetIdsForYou?: string[] | undefined;
                 threatModifier?: {
                     delta: number;
                     reasons: string[];
@@ -8133,7 +8506,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         status: "hidden" | "revealed";
                         cards: {
                             labelShort: string;
+                            hidden?: boolean | undefined;
                             imgUrl?: string | undefined;
+                            instanceId?: string | undefined;
+                            backCategory?: string | undefined;
                         }[];
                     }[];
                     revealedCards: {
@@ -8177,6 +8553,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     voted: number;
                     total: number;
                 } | undefined;
+                disallowedVoteTargetIdsForYou?: string[] | undefined;
                 threatModifier?: {
                     delta: number;
                     reasons: string[];
@@ -8265,6 +8642,15 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 decidedAt?: number | undefined;
             } | undefined;
             you?: {
+                hand: {
+                    revealed: boolean;
+                    id: string;
+                    deck: string;
+                    instanceId?: string | undefined;
+                    labelShort?: string | undefined;
+                    secret?: boolean | undefined;
+                    missing?: boolean | undefined;
+                }[];
                 playerId: string;
                 name: string;
                 categories: {
@@ -8274,15 +8660,6 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         instanceId: string;
                         labelShort: string;
                     }[];
-                }[];
-                hand: {
-                    revealed: boolean;
-                    id: string;
-                    deck: string;
-                    instanceId?: string | undefined;
-                    labelShort?: string | undefined;
-                    secret?: boolean | undefined;
-                    missing?: boolean | undefined;
                 }[];
                 specialConditions: {
                     id: string;
@@ -8299,7 +8676,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     used: boolean;
                     imgUrl?: string | undefined;
                     needsChoice?: boolean | undefined;
-                    choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                    choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                    pendingActivation?: boolean | undefined;
                     allowSelfTarget?: boolean | undefined;
                     targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
                 }[];
@@ -8315,7 +8693,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         status: "hidden" | "revealed";
                         cards: {
                             labelShort: string;
+                            hidden?: boolean | undefined;
                             imgUrl?: string | undefined;
+                            instanceId?: string | undefined;
+                            backCategory?: string | undefined;
                         }[];
                     }[];
                     revealedCards: {
@@ -8359,6 +8740,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     voted: number;
                     total: number;
                 } | undefined;
+                disallowedVoteTargetIdsForYou?: string[] | undefined;
                 threatModifier?: {
                     delta: number;
                     reasons: string[];
@@ -8447,6 +8829,15 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 decidedAt?: number | undefined;
             } | undefined;
             you?: {
+                hand: {
+                    revealed: boolean;
+                    id: string;
+                    deck: string;
+                    instanceId?: string | undefined;
+                    labelShort?: string | undefined;
+                    secret?: boolean | undefined;
+                    missing?: boolean | undefined;
+                }[];
                 playerId: string;
                 name: string;
                 categories: {
@@ -8456,15 +8847,6 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         instanceId: string;
                         labelShort: string;
                     }[];
-                }[];
-                hand: {
-                    revealed: boolean;
-                    id: string;
-                    deck: string;
-                    instanceId?: string | undefined;
-                    labelShort?: string | undefined;
-                    secret?: boolean | undefined;
-                    missing?: boolean | undefined;
                 }[];
                 specialConditions: {
                     id: string;
@@ -8481,7 +8863,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     used: boolean;
                     imgUrl?: string | undefined;
                     needsChoice?: boolean | undefined;
-                    choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                    choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                    pendingActivation?: boolean | undefined;
                     allowSelfTarget?: boolean | undefined;
                     targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
                 }[];
@@ -8497,7 +8880,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         status: "hidden" | "revealed";
                         cards: {
                             labelShort: string;
+                            hidden?: boolean | undefined;
                             imgUrl?: string | undefined;
+                            instanceId?: string | undefined;
+                            backCategory?: string | undefined;
                         }[];
                     }[];
                     revealedCards: {
@@ -8541,6 +8927,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     voted: number;
                     total: number;
                 } | undefined;
+                disallowedVoteTargetIdsForYou?: string[] | undefined;
                 threatModifier?: {
                     delta: number;
                     reasons: string[];
@@ -8592,6 +8979,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 preVoteDiscussionSeconds: number;
                 enablePostVoteDiscussionTimer: boolean;
                 postVoteDiscussionSeconds: number;
+                automationMode: "auto" | "manual" | "semi";
                 enablePresenterMode: boolean;
                 continuePermission: "host_only" | "revealer_only" | "anyone";
                 revealTimeoutAction: "random_card" | "skip_player";
@@ -8599,6 +8987,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 specialUsage: "anytime" | "only_during_voting";
                 maxPlayers: number;
                 finalThreatReveal: "anyone" | "host";
+                forcedDisasterId: string;
             } | undefined;
             ruleset?: {
                 playerCount: number;
@@ -8652,6 +9041,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 };
             } | undefined;
             isDev?: boolean | undefined;
+            disasterOptions?: {
+                id: string;
+                title: string;
+            }[] | undefined;
         } | undefined;
         gameView?: {
             round?: number | undefined;
@@ -8720,6 +9113,15 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 decidedAt?: number | undefined;
             } | undefined;
             you?: {
+                hand: {
+                    revealed: boolean;
+                    id: string;
+                    deck: string;
+                    instanceId?: string | undefined;
+                    labelShort?: string | undefined;
+                    secret?: boolean | undefined;
+                    missing?: boolean | undefined;
+                }[];
                 playerId: string;
                 name: string;
                 categories: {
@@ -8729,15 +9131,6 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         instanceId: string;
                         labelShort: string;
                     }[];
-                }[];
-                hand: {
-                    revealed: boolean;
-                    id: string;
-                    deck: string;
-                    instanceId?: string | undefined;
-                    labelShort?: string | undefined;
-                    secret?: boolean | undefined;
-                    missing?: boolean | undefined;
                 }[];
                 specialConditions: {
                     id: string;
@@ -8754,7 +9147,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     used: boolean;
                     imgUrl?: string | undefined;
                     needsChoice?: boolean | undefined;
-                    choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                    choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                    pendingActivation?: boolean | undefined;
                     allowSelfTarget?: boolean | undefined;
                     targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
                 }[];
@@ -8770,7 +9164,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         status: "hidden" | "revealed";
                         cards: {
                             labelShort: string;
+                            hidden?: boolean | undefined;
                             imgUrl?: string | undefined;
+                            instanceId?: string | undefined;
+                            backCategory?: string | undefined;
                         }[];
                     }[];
                     revealedCards: {
@@ -8814,6 +9211,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     voted: number;
                     total: number;
                 } | undefined;
+                disallowedVoteTargetIdsForYou?: string[] | undefined;
                 threatModifier?: {
                     delta: number;
                     reasons: string[];
@@ -8865,6 +9263,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 preVoteDiscussionSeconds: number;
                 enablePostVoteDiscussionTimer: boolean;
                 postVoteDiscussionSeconds: number;
+                automationMode: "auto" | "manual" | "semi";
                 enablePresenterMode: boolean;
                 continuePermission: "host_only" | "revealer_only" | "anyone";
                 revealTimeoutAction: "random_card" | "skip_player";
@@ -8872,6 +9271,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 specialUsage: "anytime" | "only_during_voting";
                 maxPlayers: number;
                 finalThreatReveal: "anyone" | "host";
+                forcedDisasterId: string;
             } | undefined;
             ruleset?: {
                 playerCount: number;
@@ -8925,6 +9325,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 };
             } | undefined;
             isDev?: boolean | undefined;
+            disasterOptions?: {
+                id: string;
+                title: string;
+            }[] | undefined;
         } | undefined;
         gameView?: {
             round?: number | undefined;
@@ -8993,6 +9397,15 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 decidedAt?: number | undefined;
             } | undefined;
             you?: {
+                hand: {
+                    revealed: boolean;
+                    id: string;
+                    deck: string;
+                    instanceId?: string | undefined;
+                    labelShort?: string | undefined;
+                    secret?: boolean | undefined;
+                    missing?: boolean | undefined;
+                }[];
                 playerId: string;
                 name: string;
                 categories: {
@@ -9002,15 +9415,6 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         instanceId: string;
                         labelShort: string;
                     }[];
-                }[];
-                hand: {
-                    revealed: boolean;
-                    id: string;
-                    deck: string;
-                    instanceId?: string | undefined;
-                    labelShort?: string | undefined;
-                    secret?: boolean | undefined;
-                    missing?: boolean | undefined;
                 }[];
                 specialConditions: {
                     id: string;
@@ -9027,7 +9431,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     used: boolean;
                     imgUrl?: string | undefined;
                     needsChoice?: boolean | undefined;
-                    choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                    choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                    pendingActivation?: boolean | undefined;
                     allowSelfTarget?: boolean | undefined;
                     targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
                 }[];
@@ -9043,7 +9448,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         status: "hidden" | "revealed";
                         cards: {
                             labelShort: string;
+                            hidden?: boolean | undefined;
                             imgUrl?: string | undefined;
+                            instanceId?: string | undefined;
+                            backCategory?: string | undefined;
                         }[];
                     }[];
                     revealedCards: {
@@ -9087,6 +9495,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     voted: number;
                     total: number;
                 } | undefined;
+                disallowedVoteTargetIdsForYou?: string[] | undefined;
                 threatModifier?: {
                     delta: number;
                     reasons: string[];
@@ -9141,6 +9550,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 preVoteDiscussionSeconds: number;
                 enablePostVoteDiscussionTimer: boolean;
                 postVoteDiscussionSeconds: number;
+                automationMode: "auto" | "manual" | "semi";
                 enablePresenterMode: boolean;
                 continuePermission: "host_only" | "revealer_only" | "anyone";
                 revealTimeoutAction: "random_card" | "skip_player";
@@ -9148,6 +9558,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 specialUsage: "anytime" | "only_during_voting";
                 maxPlayers: number;
                 finalThreatReveal: "anyone" | "host";
+                forcedDisasterId: string;
             } | undefined;
             ruleset?: {
                 playerCount: number;
@@ -9201,6 +9612,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 };
             } | undefined;
             isDev?: boolean | undefined;
+            disasterOptions?: {
+                id: string;
+                title: string;
+            }[] | undefined;
         } | undefined;
         gameView?: {
             round?: number | undefined;
@@ -9269,6 +9684,15 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 decidedAt?: number | undefined;
             } | undefined;
             you?: {
+                hand: {
+                    revealed: boolean;
+                    id: string;
+                    deck: string;
+                    instanceId?: string | undefined;
+                    labelShort?: string | undefined;
+                    secret?: boolean | undefined;
+                    missing?: boolean | undefined;
+                }[];
                 playerId: string;
                 name: string;
                 categories: {
@@ -9278,15 +9702,6 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         instanceId: string;
                         labelShort: string;
                     }[];
-                }[];
-                hand: {
-                    revealed: boolean;
-                    id: string;
-                    deck: string;
-                    instanceId?: string | undefined;
-                    labelShort?: string | undefined;
-                    secret?: boolean | undefined;
-                    missing?: boolean | undefined;
                 }[];
                 specialConditions: {
                     id: string;
@@ -9303,7 +9718,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     used: boolean;
                     imgUrl?: string | undefined;
                     needsChoice?: boolean | undefined;
-                    choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                    choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                    pendingActivation?: boolean | undefined;
                     allowSelfTarget?: boolean | undefined;
                     targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
                 }[];
@@ -9319,7 +9735,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         status: "hidden" | "revealed";
                         cards: {
                             labelShort: string;
+                            hidden?: boolean | undefined;
                             imgUrl?: string | undefined;
+                            instanceId?: string | undefined;
+                            backCategory?: string | undefined;
                         }[];
                     }[];
                     revealedCards: {
@@ -9363,6 +9782,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     voted: number;
                     total: number;
                 } | undefined;
+                disallowedVoteTargetIdsForYou?: string[] | undefined;
                 threatModifier?: {
                     delta: number;
                     reasons: string[];
@@ -9417,6 +9837,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 preVoteDiscussionSeconds: number;
                 enablePostVoteDiscussionTimer: boolean;
                 postVoteDiscussionSeconds: number;
+                automationMode: "auto" | "manual" | "semi";
                 enablePresenterMode: boolean;
                 continuePermission: "host_only" | "revealer_only" | "anyone";
                 revealTimeoutAction: "random_card" | "skip_player";
@@ -9424,6 +9845,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 specialUsage: "anytime" | "only_during_voting";
                 maxPlayers: number;
                 finalThreatReveal: "anyone" | "host";
+                forcedDisasterId: string;
             } | undefined;
             ruleset?: {
                 playerCount: number;
@@ -9477,6 +9899,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 };
             } | undefined;
             isDev?: boolean | undefined;
+            disasterOptions?: {
+                id: string;
+                title: string;
+            }[] | undefined;
         } | undefined;
         gameView?: {
             round?: number | undefined;
@@ -9545,6 +9971,15 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 decidedAt?: number | undefined;
             } | undefined;
             you?: {
+                hand: {
+                    revealed: boolean;
+                    id: string;
+                    deck: string;
+                    instanceId?: string | undefined;
+                    labelShort?: string | undefined;
+                    secret?: boolean | undefined;
+                    missing?: boolean | undefined;
+                }[];
                 playerId: string;
                 name: string;
                 categories: {
@@ -9554,15 +9989,6 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         instanceId: string;
                         labelShort: string;
                     }[];
-                }[];
-                hand: {
-                    revealed: boolean;
-                    id: string;
-                    deck: string;
-                    instanceId?: string | undefined;
-                    labelShort?: string | undefined;
-                    secret?: boolean | undefined;
-                    missing?: boolean | undefined;
                 }[];
                 specialConditions: {
                     id: string;
@@ -9579,7 +10005,8 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     used: boolean;
                     imgUrl?: string | undefined;
                     needsChoice?: boolean | undefined;
-                    choiceKind?: "neighbor" | "player" | "category" | "none" | undefined;
+                    choiceKind?: "neighbor" | "bunker" | "player" | "category" | "special" | "none" | undefined;
+                    pendingActivation?: boolean | undefined;
                     allowSelfTarget?: boolean | undefined;
                     targetScope?: "neighbors" | "any_alive" | "self" | "any_including_self" | undefined;
                 }[];
@@ -9595,7 +10022,10 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                         status: "hidden" | "revealed";
                         cards: {
                             labelShort: string;
+                            hidden?: boolean | undefined;
                             imgUrl?: string | undefined;
+                            instanceId?: string | undefined;
+                            backCategory?: string | undefined;
                         }[];
                     }[];
                     revealedCards: {
@@ -9639,6 +10069,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                     voted: number;
                     total: number;
                 } | undefined;
+                disallowedVoteTargetIdsForYou?: string[] | undefined;
                 threatModifier?: {
                     delta: number;
                     reasons: string[];
@@ -9730,48 +10161,63 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
     payload: z.ZodObject<{
         playerId: z.ZodString;
         playerToken: z.ZodString;
+        controlToken: z.ZodOptional<z.ZodString>;
+        editToken: z.ZodOptional<z.ZodString>;
     }, "strip", z.ZodTypeAny, {
         playerId: string;
         playerToken: string;
+        controlToken?: string | undefined;
+        editToken?: string | undefined;
     }, {
         playerId: string;
         playerToken: string;
+        controlToken?: string | undefined;
+        editToken?: string | undefined;
     }>;
 }, "strip", z.ZodTypeAny, {
     type: "helloAck";
     payload: {
         playerId: string;
         playerToken: string;
+        controlToken?: string | undefined;
+        editToken?: string | undefined;
     };
 }, {
     type: "helloAck";
     payload: {
         playerId: string;
         playerToken: string;
+        controlToken?: string | undefined;
+        editToken?: string | undefined;
     };
 }>, z.ZodObject<{
     type: z.ZodLiteral<"hostChanged">;
     payload: z.ZodObject<{
         newHostId: z.ZodString;
+        newControlId: z.ZodOptional<z.ZodString>;
         reason: z.ZodUnion<[z.ZodLiteral<"disconnect_timeout">, z.ZodLiteral<"left_bunker">, z.ZodLiteral<"eliminated">, z.ZodLiteral<"manual">]>;
     }, "strip", z.ZodTypeAny, {
         reason: "manual" | "eliminated" | "left_bunker" | "disconnect_timeout";
         newHostId: string;
+        newControlId?: string | undefined;
     }, {
         reason: "manual" | "eliminated" | "left_bunker" | "disconnect_timeout";
         newHostId: string;
+        newControlId?: string | undefined;
     }>;
 }, "strip", z.ZodTypeAny, {
     type: "hostChanged";
     payload: {
         reason: "manual" | "eliminated" | "left_bunker" | "disconnect_timeout";
         newHostId: string;
+        newControlId?: string | undefined;
     };
 }, {
     type: "hostChanged";
     payload: {
         reason: "manual" | "eliminated" | "left_bunker" | "disconnect_timeout";
         newHostId: string;
+        newControlId?: string | undefined;
     };
 }>, z.ZodObject<{
     type: z.ZodLiteral<"pong">;

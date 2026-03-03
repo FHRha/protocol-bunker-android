@@ -178,6 +178,7 @@ export const GameSettingsSchema = z.object({
     preVoteDiscussionSeconds: z.number().int().min(5).max(600),
     enablePostVoteDiscussionTimer: z.boolean(),
     postVoteDiscussionSeconds: z.number().int().min(5).max(600),
+    automationMode: z.union([z.literal("auto"), z.literal("semi"), z.literal("manual")]),
     enablePresenterMode: z.boolean(),
     continuePermission: z.union([
         z.literal("host_only"),
@@ -189,6 +190,7 @@ export const GameSettingsSchema = z.object({
     specialUsage: z.union([z.literal("anytime"), z.literal("only_during_voting")]),
     maxPlayers: z.number().int().min(2),
     finalThreatReveal: z.union([z.literal("host"), z.literal("anyone")]),
+    forcedDisasterId: z.string().max(256),
 });
 export const CardRefSchema = z.object({
     id: z.string(),
@@ -223,7 +225,17 @@ export const SpecialConditionInstanceSchema = z.object({
     used: z.boolean(),
     imgUrl: z.string().optional(),
     needsChoice: z.boolean().optional(),
-    choiceKind: z.union([z.literal("player"), z.literal("neighbor"), z.literal("category"), z.literal("none")]).optional(),
+    choiceKind: z
+        .union([
+        z.literal("player"),
+        z.literal("neighbor"),
+        z.literal("category"),
+        z.literal("bunker"),
+        z.literal("special"),
+        z.literal("none"),
+    ])
+        .optional(),
+    pendingActivation: z.boolean().optional(),
     allowSelfTarget: z.boolean().optional(),
     targetScope: z
         .union([
@@ -237,6 +249,9 @@ export const SpecialConditionInstanceSchema = z.object({
 export const PublicCategoryCardSchema = z.object({
     labelShort: z.string(),
     imgUrl: z.string().optional(),
+    instanceId: z.string().optional(),
+    hidden: z.boolean().optional(),
+    backCategory: z.string().optional(),
 });
 export const YouCategoryCardSchema = z.object({
     instanceId: z.string(),
@@ -251,6 +266,10 @@ export const PublicCategorySlotSchema = z.object({
 export const YouCategorySlotSchema = z.object({
     category: z.string(),
     cards: z.array(YouCategoryCardSchema),
+});
+export const DisasterOptionSchema = z.object({
+    id: z.string().min(1),
+    title: z.string().min(1),
 });
 export const PublicPlayerViewSchema = z.object({
     playerId: z.string(),
@@ -281,6 +300,7 @@ export const RoomStateSchema = z.object({
     rulesPresetCount: z.number().int().min(4).max(16).optional(),
     world: WorldState30Schema.optional(),
     isDev: z.boolean().optional(),
+    disasterOptions: z.array(DisasterOptionSchema).optional(),
 });
 export const VotingViewSchema = z.object({
     hasVoted: z.boolean(),
@@ -359,6 +379,7 @@ export const GameViewSchema = z.object({
         votePhase: VotePhaseSchema.nullable().optional(),
         votesPublic: z.array(VotePublicSchema).optional(),
         votingProgress: VotingProgressSchema.optional(),
+        disallowedVoteTargetIdsForYou: z.array(z.string()).optional(),
         threatModifier: ThreatModifierViewSchema.optional(),
         canOpenVotingModal: z.boolean().optional(),
         canContinue: z.boolean().optional(),
@@ -481,7 +502,9 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
     }),
     z.object({
         type: z.literal("requestHostTransfer"),
-        payload: z.object({}),
+        payload: z.object({
+            targetPlayerId: z.string().min(1).optional(),
+        }),
     }),
     z.object({
         type: z.literal("overlaySubscribe"),
@@ -521,12 +544,18 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
     }),
     z.object({
         type: z.literal("helloAck"),
-        payload: z.object({ playerId: z.string(), playerToken: z.string() }),
+        payload: z.object({
+            playerId: z.string(),
+            playerToken: z.string(),
+            controlToken: z.string().optional(),
+            editToken: z.string().optional(),
+        }),
     }),
     z.object({
         type: z.literal("hostChanged"),
         payload: z.object({
             newHostId: z.string(),
+            newControlId: z.string().optional(),
             reason: z.union([
                 z.literal("disconnect_timeout"),
                 z.literal("left_bunker"),

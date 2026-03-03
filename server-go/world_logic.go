@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"math/rand"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type worldCountRow struct {
@@ -34,8 +36,15 @@ func worldCounts(playerCount int) (int, int) {
 func normalizeDeckKey(raw string) string {
 	key := strings.TrimSpace(strings.ToLower(raw))
 	key = strings.ReplaceAll(key, "ё", "е")
-	key = strings.NewReplacer(" ", "", "_", "", "-", "").Replace(key)
-	return key
+
+	var b strings.Builder
+	b.Grow(len(key))
+	for _, r := range key {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func findDeckByKeyword(decks map[string][]assetCard, keyword string) string {
@@ -46,6 +55,21 @@ func findDeckByKeyword(decks map[string][]assetCard, keyword string) string {
 		}
 	}
 	return ""
+}
+
+func findDeckByAliases(decks map[string][]assetCard, aliases ...string) string {
+	for _, alias := range aliases {
+		if deckName := findDeckByKeyword(decks, alias); deckName != "" {
+			return deckName
+		}
+	}
+	return ""
+}
+
+func resolveWorldDeckNames(decks map[string][]assetCard) (bunkerDeck, disasterDeck, threatDeck string) {
+	return findDeckByAliases(decks, "бункер", "bunker"),
+		findDeckByAliases(decks, "катастроф", "disaster", "catastroph", "apocalypse"),
+		findDeckByAliases(decks, "угроз", "threat")
 }
 
 func drawWorldMany(
@@ -85,8 +109,34 @@ func drawWorldDisaster(
 	pools map[string][]assetCard,
 	deckName string,
 	rnd *rand.Rand,
+	selectedDisasterID string,
 ) worldCardView {
-	card, next, ok := drawRandomCard(pools[deckName], rnd)
+	selectedID := strings.TrimSpace(selectedDisasterID)
+	if selectedID == randomDisasterID {
+		selectedID = ""
+	}
+	deck := pools[deckName]
+	if selectedID != "" {
+		for idx, card := range deck {
+			if card.ID != selectedID {
+				continue
+			}
+			last := len(deck) - 1
+			deck[idx] = deck[last]
+			deck[last] = assetCard{}
+			pools[deckName] = deck[:last]
+			return worldCardView{
+				Kind:        "disaster",
+				ID:          card.ID,
+				Title:       card.Label,
+				Description: card.Label,
+				ImageID:     card.ID,
+			}
+		}
+		log.Printf("[world] selected disaster %q not found in deck %q, falling back to random", selectedID, deckName)
+	}
+
+	card, next, ok := drawRandomCard(deck, rnd)
 	pools[deckName] = next
 	if !ok {
 		return worldCardView{
@@ -105,18 +155,21 @@ func drawWorldDisaster(
 	}
 }
 
-func rollWorldFromPools(pools map[string][]assetCard, rnd *rand.Rand, playerCount int) worldStateView {
+func rollWorldFromPools(
+	pools map[string][]assetCard,
+	rnd *rand.Rand,
+	playerCount int,
+	selectedDisasterID string,
+) worldStateView {
 	bunkerCount, threatCount := worldCounts(playerCount)
 
-	bunkerDeck := findDeckByKeyword(pools, "бункер")
-	disasterDeck := findDeckByKeyword(pools, "катастроф")
-	threatDeck := findDeckByKeyword(pools, "угроз")
+	bunkerDeck, disasterDeck, threatDeck := resolveWorldDeckNames(pools)
 
 	world := worldStateView{}
 	world.Counts.Bunker = bunkerCount
 	world.Counts.Threats = threatCount
 
-	world.Disaster = drawWorldDisaster(pools, disasterDeck, rnd)
+	world.Disaster = drawWorldDisaster(pools, disasterDeck, rnd, selectedDisasterID)
 	world.Bunker = drawWorldMany(pools, bunkerDeck, "bunker", bunkerCount, rnd)
 	world.Threats = drawWorldMany(pools, threatDeck, "threat", threatCount+1, rnd)
 	return world
@@ -145,6 +198,20 @@ func (g *gameSession) buildWorldView() *worldStateView {
 	}
 	world.Counts.Bunker = g.World.Counts.Bunker
 	world.Counts.Threats = g.World.Counts.Threats
+
+	if g.IsDev {
+		for _, card := range g.World.Bunker {
+			revealed := card
+			revealed.IsRevealed = true
+			world.Bunker = append(world.Bunker, revealed)
+		}
+		for _, card := range g.World.Threats {
+			revealed := card
+			revealed.IsRevealed = true
+			world.Threats = append(world.Threats, revealed)
+		}
+		return &world
+	}
 
 	for _, card := range g.World.Bunker {
 		world.Bunker = append(world.Bunker, maskWorldCard(card))
@@ -189,26 +256,55 @@ func normalizeThreatTitle(value string) string {
 	return strings.Join(strings.Fields(upper), " ")
 }
 
+type bunkerThreatModifierRule struct {
+	delta         int
+	titleKey      string
+	idContainsKey string
+}
+
+var bunkerThreatModifierRules = []bunkerThreatModifierRule{
+	{
+		delta:         1,
+		titleKey:      normalizeThreatTitle("ВМЕСТЕ НА 10 ЛЕТ"),
+		idContainsKey: normalizeSpecialAssetRef("бункер/вместе на 10 лет"),
+	},
+	{
+		delta:         -1,
+		titleKey:      normalizeThreatTitle("ЗАГАДОЧНЫЙ ЖУРНАЛ"),
+		idContainsKey: normalizeSpecialAssetRef("бункер/загадочный журнал"),
+	},
+}
+
+func threatModifierFromBunkerCard(card worldFacedCardView) int {
+	title := normalizeThreatTitle(sanitizeHumanText(card.Title, card.Title))
+	idRef := normalizeSpecialAssetRef(card.ID)
+	for _, rule := range bunkerThreatModifierRules {
+		if rule.titleKey != "" && title == rule.titleKey {
+			return rule.delta
+		}
+		if rule.idContainsKey != "" && idRef != "" && strings.Contains(idRef, rule.idContainsKey) {
+			return rule.delta
+		}
+	}
+	return 0
+}
+
 func (g *gameSession) currentThreatModifier() threatModifierView {
 	baseCount := g.World.Counts.Threats
 	delta := 0
 	reasons := make([]string, 0, 2)
 
-	// Parity hook from web scenarios (can be extended if more title rules appear).
-	modifierByTitle := map[string]int{
-		"ВМЕСТЕ НА 10 ЛЕТ":  1,
-		"ЗАГАДОЧНЫЙ ЖУРНАЛ": -1,
-	}
 	for _, card := range g.World.Bunker {
 		if !card.IsRevealed {
 			continue
 		}
-		modifier := modifierByTitle[normalizeThreatTitle(card.Title)]
+		modifier := threatModifierFromBunkerCard(card)
 		if modifier == 0 {
 			continue
 		}
 		delta += modifier
-		reasons = append(reasons, card.Title)
+		reasonTitle := sanitizeHumanText(card.Title, "Карта бункера")
+		reasons = append(reasons, reasonTitle)
 	}
 
 	finalCount := baseCount + delta
