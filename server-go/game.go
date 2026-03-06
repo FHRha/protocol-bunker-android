@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1253,18 +1254,23 @@ func (g *gameSession) buildPublicCategories(player *gamePlayer) []publicCategory
 		if len(categoryOrder) > 0 && category == categoryOrder[len(categoryOrder)-1] {
 			cards := make([]publicCategoryCard, 0, len(player.Specials)+len(player.SpecialCategoryProxyCards))
 			for _, special := range player.Specials {
-				if !g.IsDev && !special.RevealedPublic {
-					continue
+				revealed := special.RevealedPublic || g.IsDev
+				imgURL := ""
+				if revealed {
+					imgURL = specialImageURL(special.Definition)
 				}
 				cards = append(cards, publicCategoryCard{
-					Label:    special.Definition.Title,
-					ImgURL:   specialImageURL(special.Definition),
-					Revealed: special.RevealedPublic,
+					InstanceID:   special.InstanceID,
+					Label:        special.Definition.Title,
+					ImgURL:       imgURL,
+					Revealed:     revealed,
+					Hidden:       !revealed,
+					BackCategory: specialDeckCategoryName,
 				})
 			}
 			cards = append(cards, player.SpecialCategoryProxyCards...)
 			status := "hidden"
-			if len(cards) > 0 {
+			if slices.ContainsFunc(cards, func(card publicCategoryCard) bool { return !card.Hidden }) {
 				status = "revealed"
 			}
 			slots = append(slots, publicCategorySlot{

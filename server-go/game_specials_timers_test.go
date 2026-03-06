@@ -924,3 +924,95 @@ func TestGameSession_SecretOnEliminate_AutoSelfVoteOnlyForOneVoting(t *testing.T
 		t.Fatalf("expected self auto vote to apply only for the first voting attempt, not revote")
 	}
 }
+
+func TestBuildPublicCategories_SpecialHiddenCardUsesSpecialBack(t *testing.T) {
+	g := newTestGameSession()
+	g.IsDev = false
+	g.Players["p1"].Specials = []specialConditionState{
+		{
+			InstanceID: "sp-hidden",
+			Definition: specialDefinition{
+				ID:          "sp-hidden",
+				Title:       "Скрытое спецусловие",
+				Trigger:     "active",
+				Implemented: true,
+				AssetID:     "decks/Особые условия/Будь Другом.jpg",
+			},
+			RevealedPublic: false,
+		},
+	}
+
+	slots := g.buildPublicCategories(g.Players["p1"])
+	var specialSlot *publicCategorySlot
+	for i := range slots {
+		if slots[i].Category == specialDeckCategoryName {
+			specialSlot = &slots[i]
+			break
+		}
+	}
+	if specialSlot == nil {
+		t.Fatalf("special slot not found")
+	}
+	if specialSlot.Status != "hidden" {
+		t.Fatalf("expected hidden special slot status, got %q", specialSlot.Status)
+	}
+	if len(specialSlot.Cards) != 1 {
+		t.Fatalf("expected one hidden special card, got %d", len(specialSlot.Cards))
+	}
+	card := specialSlot.Cards[0]
+	if !card.Hidden {
+		t.Fatalf("expected hidden special card")
+	}
+	if card.BackCategory != specialDeckCategoryName {
+		t.Fatalf("unexpected special back category: %q", card.BackCategory)
+	}
+	if card.ImgURL != "" {
+		t.Fatalf("hidden special card must not expose face url")
+	}
+}
+
+func TestBuildPublicCategories_SpecialRevealedCardUsesFace(t *testing.T) {
+	g := newTestGameSession()
+	g.IsDev = false
+	g.Players["p1"].Specials = []specialConditionState{
+		{
+			InstanceID: "sp-revealed",
+			Definition: specialDefinition{
+				ID:          "sp-revealed",
+				Title:       "Открытое спецусловие",
+				Trigger:     "active",
+				Implemented: true,
+				AssetID:     "decks/Особые условия/Будь Другом.jpg",
+			},
+			RevealedPublic: true,
+		},
+	}
+
+	slots := g.buildPublicCategories(g.Players["p1"])
+	var specialSlot *publicCategorySlot
+	for i := range slots {
+		if slots[i].Category == specialDeckCategoryName {
+			specialSlot = &slots[i]
+			break
+		}
+	}
+	if specialSlot == nil {
+		t.Fatalf("special slot not found")
+	}
+	if specialSlot.Status != "revealed" {
+		t.Fatalf("expected revealed special slot status, got %q", specialSlot.Status)
+	}
+	if len(specialSlot.Cards) != 1 {
+		t.Fatalf("expected one revealed special card, got %d", len(specialSlot.Cards))
+	}
+	card := specialSlot.Cards[0]
+	if card.Hidden {
+		t.Fatalf("revealed special card must not be hidden")
+	}
+	if card.ImgURL == "" {
+		t.Fatalf("revealed special card must have face url")
+	}
+	if card.BackCategory != specialDeckCategoryName {
+		t.Fatalf("unexpected special back category: %q", card.BackCategory)
+	}
+}
