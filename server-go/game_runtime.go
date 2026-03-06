@@ -800,6 +800,21 @@ func (g *gameSession) markVoteWasted(voterID, reason string) {
 	}
 }
 
+func (g *gameSession) markVoteSelf(voterID string) {
+	if voterID == "" {
+		return
+	}
+	if _, ok := g.Players[voterID]; !ok {
+		return
+	}
+	g.AutoSelfVoteVoters[voterID] = true
+	g.Votes[voterID] = voteRecord{
+		TargetID:  voterID,
+		Submitted: time.Now().UnixMilli(),
+		IsValid:   true,
+	}
+}
+
 func (g *gameSession) enterVoteSpecialWindow() gameActionResult {
 	g.BaseVotes = copyVotes(g.Votes)
 	g.VotePhase = votePhaseSpecialWindow
@@ -820,6 +835,8 @@ func (g *gameSession) resetVotesForRevote() {
 	for voterID := range g.AutoWastedVoters {
 		g.markVoteWasted(voterID, "Голос потрачен.")
 	}
+	// Secret forced-self vote applies only to one voting attempt.
+	g.AutoSelfVoteVoters = map[string]bool{}
 }
 
 func (g *gameSession) startTieBreakRevote(candidates []string) {
@@ -951,6 +968,7 @@ func (g *gameSession) removeFromVoting(targetID string) {
 	delete(g.VoteResults, targetID)
 	delete(g.VoteWeights, targetID)
 	delete(g.VoteDisabled, targetID)
+	delete(g.AutoSelfVoteVoters, targetID)
 	delete(g.AutoWastedVoters, targetID)
 	for voterID, restricted := range g.RevoteDisallowByVoter {
 		if restricted == nil {
@@ -966,10 +984,11 @@ func (g *gameSession) removeFromVoting(targetID string) {
 	}
 }
 
-func (g *gameSession) applyElimination(targetID string) {
+func (g *gameSession) applyElimination(targetID string) []gameEvent {
+	events := make([]gameEvent, 0, 2)
 	target := g.Players[targetID]
 	if target == nil || target.Status != playerAlive {
-		return
+		return events
 	}
 	target.Status = playerEliminated
 	g.TotalExiles++
@@ -978,8 +997,9 @@ func (g *gameSession) applyElimination(targetID string) {
 		g.VotesRemaining--
 	}
 	g.handleOnOwnerEliminated(target)
-	g.handleSecretEliminationTriggers(targetID)
+	events = append(events, g.handleSecretEliminationTriggers(targetID)...)
 	g.removeFromVoting(targetID)
+	return events
 }
 
 func (g *gameSession) handleOnOwnerEliminated(player *gamePlayer) {
@@ -1089,7 +1109,8 @@ func (g *gameSession) computeAgeExtremes() (youngestID string, oldestID string, 
 	return youngestID, oldestID, true
 }
 
-func (g *gameSession) handleSecretEliminationTriggers(eliminatedID string) {
+func (g *gameSession) handleSecretEliminationTriggers(eliminatedID string) []gameEvent {
+	events := make([]gameEvent, 0, 2)
 	youngestID, oldestID, hasAgeExtremes := g.computeAgeExtremes()
 	for _, playerID := range g.Order {
 		player := g.Players[playerID]
@@ -1119,10 +1140,24 @@ func (g *gameSession) handleSecretEliminationTriggers(eliminatedID string) {
 			}
 			if triggered {
 				special.Used = true
-				player.ForcedWastedVoteNext = true
+				special.RevealedPublic = true
+				player.ForcedSelfVoteNext = true
+				player.ForcedWastedVoteNext = false
+				events = append(
+					events,
+					g.makeEvent(
+						"info",
+						fmt.Sprintf(
+							"У игрока %s раскрылось особое условие: %s. В следующем голосовании он обязан голосовать против себя.",
+							player.Name,
+							special.Definition.Title,
+						),
+					),
+				)
 			}
 		}
 	}
+	return events
 }
 
 func (g *gameSession) resolveNeighborChoice(actorID string, payload map[string]any) (string, string, string) {
@@ -1474,12 +1509,22 @@ func (g *gameSession) applySpecialWithPending(actorID, specialInstanceID string,
 		special.PendingActivation = false
 		result.StateChanged = true
 	}
-	if !special.RevealedPublic {
-		special.RevealedPublic = true
+	loggedSpecialUseEvent := false
+	if trigger == "onOwnerEliminated" {
 		result.Events = append(
 			result.Events,
 			g.makeEvent("info", fmt.Sprintf("%s применяет особое условие: %s.", player.Name, special.Definition.Title)),
 		)
+		loggedSpecialUseEvent = true
+	}
+	if !special.RevealedPublic {
+		special.RevealedPublic = true
+		if !loggedSpecialUseEvent {
+			result.Events = append(
+				result.Events,
+				g.makeEvent("info", fmt.Sprintf("%s применяет особое условие: %s.", player.Name, special.Definition.Title)),
+			)
+		}
 		result.StateChanged = true
 	}
 	if !result.StateChanged {

@@ -121,6 +121,7 @@ type gamePlayer struct {
 	IsBot                     bool
 
 	BannedAgainst        map[string]bool
+	ForcedSelfVoteNext   bool
 	ForcedWastedVoteNext bool
 }
 
@@ -153,6 +154,7 @@ type gameSession struct {
 	VoteCandidates        map[string]bool
 	VoteDisabled          map[string]string
 	VoteWeights           map[string]int
+	AutoSelfVoteVoters    map[string]bool
 	AutoWastedVoters      map[string]bool
 	RevoteDisallowByVoter map[string]map[string]bool
 	DoubleAgainst         string
@@ -208,6 +210,7 @@ func newGameSession(roomCode, hostID, scenarioID string, settings gameSettings, 
 		VoteCandidates:        map[string]bool{},
 		VoteDisabled:          map[string]string{},
 		VoteWeights:           map[string]int{},
+		AutoSelfVoteVoters:    map[string]bool{},
 		AutoWastedVoters:      map[string]bool{},
 		RevoteDisallowByVoter: map[string]map[string]bool{},
 		FinalThreats:          []string{},
@@ -366,6 +369,7 @@ func (g *gameSession) startVoting() {
 	g.VoteCandidates = map[string]bool{}
 	g.VoteDisabled = map[string]string{}
 	g.VoteWeights = map[string]int{}
+	g.AutoSelfVoteVoters = map[string]bool{}
 	g.AutoWastedVoters = map[string]bool{}
 	g.RevoteDisallowByVoter = map[string]map[string]bool{}
 	g.DoubleAgainst = ""
@@ -375,6 +379,12 @@ func (g *gameSession) startVoting() {
 	}
 	for _, p := range g.Players {
 		if p == nil || p.Status != playerAlive {
+			continue
+		}
+		if p.ForcedSelfVoteNext {
+			g.markVoteSelf(p.PlayerID)
+			p.ForcedSelfVoteNext = false
+			p.ForcedWastedVoteNext = false
 			continue
 		}
 		if p.ForcedWastedVoteNext {
@@ -441,6 +451,7 @@ func (g *gameSession) startNextRoundOrEnd() gameActionResult {
 	g.VoteCandidates = map[string]bool{}
 	g.VoteDisabled = map[string]string{}
 	g.VoteWeights = map[string]int{}
+	g.AutoSelfVoteVoters = map[string]bool{}
 	g.AutoWastedVoters = map[string]bool{}
 	g.RevoteDisallowByVoter = map[string]map[string]bool{}
 	g.DoubleAgainst = ""
@@ -747,12 +758,13 @@ func (g *gameSession) finalizeVoting(actorID string) gameActionResult {
 
 	events := make([]gameEvent, 0, 2)
 	if eliminatedID != "" {
-		g.applyElimination(eliminatedID)
+		triggerEvents := g.applyElimination(eliminatedID)
 		if g.LastEliminatedID != "" {
 			name := g.playerName(g.LastEliminatedID)
 			g.ResolutionNote = fmt.Sprintf("Voting result: %s eliminated.", name)
 			events = append(events, g.makeEvent("elimination", g.ResolutionNote))
 		}
+		events = append(events, triggerEvents...)
 	} else {
 		g.ResolutionNote = "Tie: no one eliminated."
 		events = append(events, g.makeEvent("info", g.ResolutionNote))
@@ -780,7 +792,7 @@ func (g *gameSession) kickPlayer(targetID string) gameActionResult {
 	if player.Status != playerAlive {
 		return gameActionResult{Error: "Игрок уже неактивен."}
 	}
-	g.applyElimination(targetID)
+	triggerEvents := g.applyElimination(targetID)
 	g.ResolutionNote = fmt.Sprintf("Игрок %s исключён вручную.", player.Name)
 	g.removeFromVoting(targetID)
 	if g.CurrentTurnID == targetID {
@@ -791,14 +803,14 @@ func (g *gameSession) kickPlayer(targetID string) gameActionResult {
 		return gameActionResult{
 			StateChanged: true,
 			Events: append(
-				[]gameEvent{g.makeEvent("elimination", g.ResolutionNote)},
+				append([]gameEvent{g.makeEvent("elimination", g.ResolutionNote)}, triggerEvents...),
 				end.Events...,
 			),
 		}
 	}
 	return gameActionResult{
 		StateChanged: true,
-		Events:       []gameEvent{g.makeEvent("elimination", g.ResolutionNote)},
+		Events:       append([]gameEvent{g.makeEvent("elimination", g.ResolutionNote)}, triggerEvents...),
 	}
 }
 
@@ -1032,6 +1044,7 @@ func (g *gameSession) buildGameView(room *room, playerID string) gameView {
 	view.Public.VotesRemaining = g.VotesRemaining
 	view.Public.VotesTotal = g.votesForRound(g.Round)
 	view.Public.RevealLimit = len(g.aliveIDs())
+	view.Public.YourVoteWeight = g.currentVoteWeightFor(playerID)
 	view.Public.CanOpenVotingModal = g.VotePhase != ""
 	view.Public.VoteModalOpen = g.VotePhase == votePhaseVoting
 	view.Public.LastEliminated = g.LastEliminatedID
@@ -1107,6 +1120,16 @@ func (g *gameSession) disallowedVoteTargetsFor(playerID string) []string {
 func (g *gameSession) playerHasVoted(playerID string) bool {
 	_, exists := g.currentVoteSource()[playerID]
 	return exists
+}
+
+func (g *gameSession) currentVoteWeightFor(playerID string) int {
+	if playerID == "" {
+		return 1
+	}
+	if weight, ok := g.VoteWeights[playerID]; ok && weight > 0 {
+		return weight
+	}
+	return 1
 }
 
 func (g *gameSession) revealedThisRoundIDs() []string {

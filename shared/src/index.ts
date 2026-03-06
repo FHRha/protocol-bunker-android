@@ -400,6 +400,7 @@ export interface GameView {
     roundRevealedCount?: number;
     roundTotalAlive?: number;
     currentTurnPlayerId?: string | null;
+    yourVoteWeight?: number;
     votesRemainingInRound?: number;
     votesTotalThisRound?: number;
     revealLimit?: number;
@@ -954,6 +955,7 @@ export const GameViewSchema = z.object({
     roundRevealedCount: z.number().int().nonnegative().optional(),
     roundTotalAlive: z.number().int().nonnegative().optional(),
     currentTurnPlayerId: z.string().nullable().optional(),
+    yourVoteWeight: z.number().int().positive().optional(),
     votesRemainingInRound: z.number().int().min(0).optional(),
     votesTotalThisRound: z.number().int().min(0).optional(),
     revealLimit: z.number().int().min(1).optional(),

@@ -286,6 +286,7 @@ type gameView struct {
 		RoundRevealedCount            int                 `json:"roundRevealedCount,omitempty"`
 		RoundTotalAlive               int                 `json:"roundTotalAlive,omitempty"`
 		CurrentTurnPlayerID           *string             `json:"currentTurnPlayerId,omitempty"`
+		YourVoteWeight                int                 `json:"yourVoteWeight,omitempty"`
 		VotesRemaining                int                 `json:"votesRemainingInRound,omitempty"`
 		VotesTotal                    int                 `json:"votesTotalThisRound,omitempty"`
 		RevealLimit                   int                 `json:"revealLimit,omitempty"`

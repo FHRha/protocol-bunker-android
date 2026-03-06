@@ -296,6 +296,7 @@ export default function GamePage({
   const votePhase = gameView?.public.votePhase ?? null;
   const votesPublic = gameView?.public.votesPublic ?? [];
   const votingProgress = gameView?.public.votingProgress;
+  const yourVoteWeight = gameView?.public.yourVoteWeight ?? 1;
   const voteModalOpenFlag = gameView?.public.voteModalOpen ?? false;
   const activeTimer = gameView?.public.activeTimer ?? null;
   const isHost = roomState?.hostId === you?.playerId;
@@ -610,6 +611,9 @@ export default function GamePage({
   const yourVoteLabel = useMemo(() => {
     const vote = votesByVoter.get(you?.playerId ?? "");
     if (!vote || vote.status !== "voted" || !vote.targetName) return ru.votingSummaryNone;
+    if (vote.targetId && vote.targetId === you?.playerId) {
+      return ru.votingSummarySelf(vote.targetName);
+    }
     return ru.votingSummary(vote.targetName);
   }, [votesByVoter, you?.playerId]);
 
@@ -800,6 +804,37 @@ export default function GamePage({
       if (!slot || slot.cards.length === 0) return false;
       return slot.status === "revealed";
     });
+  };
+
+  const getCategoryCardNamesForPlayer = (playerId: string, categoryKey: string): string[] => {
+    const player = publicPlayers.find((entry) => entry.playerId === playerId);
+    if (!player) return [];
+    const labels = CATEGORY_KEY_TO_LABELS[categoryKey] ?? [categoryKey];
+    const normalizedLabels = new Set(labels.map((label) => normalizeCategoryToken(label)));
+    const result: string[] = [];
+    for (const slot of player.categories) {
+      if (!normalizedLabels.has(normalizeCategoryToken(slot.category))) continue;
+      slot.cards.forEach((card, index) => {
+        if (card.hidden) {
+          result.push(`Скрытая карта #${index + 1}`);
+          return;
+        }
+        const label = String(card.labelShort ?? "").trim();
+        result.push(label || `Карта #${index + 1}`);
+      });
+    }
+    return result;
+  };
+
+  const buildTargetCardHint = (
+    playerId: string,
+    categoryKey: string
+  ): { short: string; full: string } | null => {
+    const cardNames = getCategoryCardNamesForPlayer(playerId, categoryKey);
+    if (cardNames.length === 0) return null;
+    const short = cardNames.length === 1 ? cardNames[0] : `${cardNames[0]} +${cardNames.length - 1}`;
+    const full = cardNames.length === 1 ? `Карта: ${cardNames[0]}` : `Карты: ${cardNames.join(", ")}`;
+    return { short, full };
   };
 
   const isSpecialUsableNow = (special: SpecialConditionInstance): boolean => {
@@ -1045,6 +1080,22 @@ export default function GamePage({
           const youHas = hasRevealedCategory(you.playerId, categoryKey);
           options = options.filter((option) => youHas && hasRevealedCategory(option.id, categoryKey));
         }
+      }
+      const canShowTargetCardHint =
+        Boolean(categoryKey) &&
+        (effectType === "swapRevealedWithNeighbor" ||
+          effectType === "replaceRevealedCard" ||
+          effectType === "discardRevealedAndDealHidden");
+      if (canShowTargetCardHint) {
+        options = options.map((option) => {
+          const hint = buildTargetCardHint(option.id, categoryKey);
+          if (!hint) return option;
+          return {
+            ...option,
+            label: `${option.label} — ${hint.short}`,
+            detail: hint.full,
+          };
+        });
       }
       if (effectType === "stealBaggage_and_giveSpecial") {
         const baggageLabels = CATEGORY_KEY_TO_LABELS.baggage ?? ["Багаж"];
@@ -2003,6 +2054,7 @@ export default function GamePage({
           <div className="vote-modal-layout">
             <div className="vote-modal-section">
               <div className="muted">{yourVoteLabel}</div>
+              {yourVoteWeight > 1 ? <div className="muted">{ru.votingWeightNotice(yourVoteWeight)}</div> : null}
               <select value={voteTargetId ?? ""} onChange={(event) => setVoteTargetId(event.target.value)}>
                 <option value="" disabled>
                   {ru.selectPlayerPlaceholder}
@@ -2074,7 +2126,9 @@ export default function GamePage({
                   <span>{vote.voterName}</span>
                   <span>
                     {vote.status === "voted" && vote.targetName
-                      ? ru.voteAgainst(vote.targetName)
+                      ? vote.targetId && vote.targetId === vote.voterId
+                        ? ru.voteAgainstSelf(vote.targetName)
+                        : ru.voteAgainst(vote.targetName)
                       : vote.status === "invalid"
                         ? ru.voteInvalid(vote.reason ?? ru.voteNotVoted)
                         : ru.voteNotVoted}
@@ -2368,6 +2422,13 @@ export default function GamePage({
                 </option>
               ))}
             </select>
+            {dialogSelection ? (
+              (() => {
+                const selected = specialDialog.options.find((option) => option.id === dialogSelection);
+                if (!selected?.detail) return null;
+                return <div className="muted">{selected.detail}</div>;
+              })()
+            ) : null}
           </>
         ) : null}
         <div className="modal-actions">

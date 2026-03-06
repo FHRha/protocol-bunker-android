@@ -349,6 +349,7 @@ export interface GameView {
         roundRevealedCount?: number;
         roundTotalAlive?: number;
         currentTurnPlayerId?: string | null;
+        yourVoteWeight?: number;
         votesRemainingInRound?: number;
         votesTotalThisRound?: number;
         revealLimit?: number;
@@ -3746,6 +3747,7 @@ export declare const GameViewSchema: z.ZodObject<{
         roundRevealedCount: z.ZodOptional<z.ZodNumber>;
         roundTotalAlive: z.ZodOptional<z.ZodNumber>;
         currentTurnPlayerId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+        yourVoteWeight: z.ZodOptional<z.ZodNumber>;
         votesRemainingInRound: z.ZodOptional<z.ZodNumber>;
         votesTotalThisRound: z.ZodOptional<z.ZodNumber>;
         revealLimit: z.ZodOptional<z.ZodNumber>;
@@ -3876,6 +3878,7 @@ export declare const GameViewSchema: z.ZodObject<{
         roundRevealedCount?: number | undefined;
         roundTotalAlive?: number | undefined;
         currentTurnPlayerId?: string | null | undefined;
+        yourVoteWeight?: number | undefined;
         votesRemainingInRound?: number | undefined;
         votesTotalThisRound?: number | undefined;
         revealLimit?: number | undefined;
@@ -3955,6 +3958,7 @@ export declare const GameViewSchema: z.ZodObject<{
         roundRevealedCount?: number | undefined;
         roundTotalAlive?: number | undefined;
         currentTurnPlayerId?: string | null | undefined;
+        yourVoteWeight?: number | undefined;
         votesRemainingInRound?: number | undefined;
         votesTotalThisRound?: number | undefined;
         revealLimit?: number | undefined;
@@ -4093,6 +4097,7 @@ export declare const GameViewSchema: z.ZodObject<{
         roundRevealedCount?: number | undefined;
         roundTotalAlive?: number | undefined;
         currentTurnPlayerId?: string | null | undefined;
+        yourVoteWeight?: number | undefined;
         votesRemainingInRound?: number | undefined;
         votesTotalThisRound?: number | undefined;
         revealLimit?: number | undefined;
@@ -4280,6 +4285,7 @@ export declare const GameViewSchema: z.ZodObject<{
         roundRevealedCount?: number | undefined;
         roundTotalAlive?: number | undefined;
         currentTurnPlayerId?: string | null | undefined;
+        yourVoteWeight?: number | undefined;
         votesRemainingInRound?: number | undefined;
         votesTotalThisRound?: number | undefined;
         revealLimit?: number | undefined;
@@ -6202,6 +6208,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             roundRevealedCount: z.ZodOptional<z.ZodNumber>;
             roundTotalAlive: z.ZodOptional<z.ZodNumber>;
             currentTurnPlayerId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+            yourVoteWeight: z.ZodOptional<z.ZodNumber>;
             votesRemainingInRound: z.ZodOptional<z.ZodNumber>;
             votesTotalThisRound: z.ZodOptional<z.ZodNumber>;
             revealLimit: z.ZodOptional<z.ZodNumber>;
@@ -6332,6 +6339,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             roundRevealedCount?: number | undefined;
             roundTotalAlive?: number | undefined;
             currentTurnPlayerId?: string | null | undefined;
+            yourVoteWeight?: number | undefined;
             votesRemainingInRound?: number | undefined;
             votesTotalThisRound?: number | undefined;
             revealLimit?: number | undefined;
@@ -6411,6 +6419,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             roundRevealedCount?: number | undefined;
             roundTotalAlive?: number | undefined;
             currentTurnPlayerId?: string | null | undefined;
+            yourVoteWeight?: number | undefined;
             votesRemainingInRound?: number | undefined;
             votesTotalThisRound?: number | undefined;
             revealLimit?: number | undefined;
@@ -6549,6 +6558,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             roundRevealedCount?: number | undefined;
             roundTotalAlive?: number | undefined;
             currentTurnPlayerId?: string | null | undefined;
+            yourVoteWeight?: number | undefined;
             votesRemainingInRound?: number | undefined;
             votesTotalThisRound?: number | undefined;
             revealLimit?: number | undefined;
@@ -6736,6 +6746,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             roundRevealedCount?: number | undefined;
             roundTotalAlive?: number | undefined;
             currentTurnPlayerId?: string | null | undefined;
+            yourVoteWeight?: number | undefined;
             votesRemainingInRound?: number | undefined;
             votesTotalThisRound?: number | undefined;
             revealLimit?: number | undefined;
@@ -6926,6 +6937,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             roundRevealedCount?: number | undefined;
             roundTotalAlive?: number | undefined;
             currentTurnPlayerId?: string | null | undefined;
+            yourVoteWeight?: number | undefined;
             votesRemainingInRound?: number | undefined;
             votesTotalThisRound?: number | undefined;
             revealLimit?: number | undefined;
@@ -7116,6 +7128,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
             roundRevealedCount?: number | undefined;
             roundTotalAlive?: number | undefined;
             currentTurnPlayerId?: string | null | undefined;
+            yourVoteWeight?: number | undefined;
             votesRemainingInRound?: number | undefined;
             votesTotalThisRound?: number | undefined;
             revealLimit?: number | undefined;
@@ -8327,6 +8340,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 roundRevealedCount: z.ZodOptional<z.ZodNumber>;
                 roundTotalAlive: z.ZodOptional<z.ZodNumber>;
                 currentTurnPlayerId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+                yourVoteWeight: z.ZodOptional<z.ZodNumber>;
                 votesRemainingInRound: z.ZodOptional<z.ZodNumber>;
                 votesTotalThisRound: z.ZodOptional<z.ZodNumber>;
                 revealLimit: z.ZodOptional<z.ZodNumber>;
@@ -8457,6 +8471,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 roundRevealedCount?: number | undefined;
                 roundTotalAlive?: number | undefined;
                 currentTurnPlayerId?: string | null | undefined;
+                yourVoteWeight?: number | undefined;
                 votesRemainingInRound?: number | undefined;
                 votesTotalThisRound?: number | undefined;
                 revealLimit?: number | undefined;
@@ -8536,6 +8551,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 roundRevealedCount?: number | undefined;
                 roundTotalAlive?: number | undefined;
                 currentTurnPlayerId?: string | null | undefined;
+                yourVoteWeight?: number | undefined;
                 votesRemainingInRound?: number | undefined;
                 votesTotalThisRound?: number | undefined;
                 revealLimit?: number | undefined;
@@ -8723,6 +8739,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 roundRevealedCount?: number | undefined;
                 roundTotalAlive?: number | undefined;
                 currentTurnPlayerId?: string | null | undefined;
+                yourVoteWeight?: number | undefined;
                 votesRemainingInRound?: number | undefined;
                 votesTotalThisRound?: number | undefined;
                 revealLimit?: number | undefined;
@@ -8910,6 +8927,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 roundRevealedCount?: number | undefined;
                 roundTotalAlive?: number | undefined;
                 currentTurnPlayerId?: string | null | undefined;
+                yourVoteWeight?: number | undefined;
                 votesRemainingInRound?: number | undefined;
                 votesTotalThisRound?: number | undefined;
                 revealLimit?: number | undefined;
@@ -9194,6 +9212,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 roundRevealedCount?: number | undefined;
                 roundTotalAlive?: number | undefined;
                 currentTurnPlayerId?: string | null | undefined;
+                yourVoteWeight?: number | undefined;
                 votesRemainingInRound?: number | undefined;
                 votesTotalThisRound?: number | undefined;
                 revealLimit?: number | undefined;
@@ -9478,6 +9497,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 roundRevealedCount?: number | undefined;
                 roundTotalAlive?: number | undefined;
                 currentTurnPlayerId?: string | null | undefined;
+                yourVoteWeight?: number | undefined;
                 votesRemainingInRound?: number | undefined;
                 votesTotalThisRound?: number | undefined;
                 revealLimit?: number | undefined;
@@ -9765,6 +9785,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 roundRevealedCount?: number | undefined;
                 roundTotalAlive?: number | undefined;
                 currentTurnPlayerId?: string | null | undefined;
+                yourVoteWeight?: number | undefined;
                 votesRemainingInRound?: number | undefined;
                 votesTotalThisRound?: number | undefined;
                 revealLimit?: number | undefined;
@@ -10052,6 +10073,7 @@ export declare const ServerMessageSchema: z.ZodDiscriminatedUnion<"type", [z.Zod
                 roundRevealedCount?: number | undefined;
                 roundTotalAlive?: number | undefined;
                 currentTurnPlayerId?: string | null | undefined;
+                yourVoteWeight?: number | undefined;
                 votesRemainingInRound?: number | undefined;
                 votesTotalThisRound?: number | undefined;
                 revealLimit?: number | undefined;

@@ -840,3 +840,87 @@ func TestGameSession_DevChoice_ResolvesSpecialAssetForNeedMoreFlow(t *testing.T)
 		t.Fatalf("target must have baggage replacement with selected special face")
 	}
 }
+
+func TestGameSession_SecretOnEliminate_AutoVotesSelfOnNextVoting(t *testing.T) {
+	g := newTestGameSession()
+	g.Players["p2"].Status = playerEliminated
+	g.FirstHealthRevealerID = "p2"
+	g.Players["p1"].Specials = []specialConditionState{
+		{
+			InstanceID: "sp-secret-self",
+			Definition: specialDefinition{
+				ID:          "sp-secret-self",
+				Title:       "Secret Self Vote",
+				Implemented: true,
+				Trigger:     "secret_onEliminate",
+				Effect: specialEffect{
+					Type: "forcedWastedVoteOnNextVoting",
+					Params: map[string]any{
+						"condition": "firstRevealedHealthEliminated",
+					},
+				},
+			},
+		},
+	}
+
+	events := g.handleSecretEliminationTriggers("p2")
+	if !g.Players["p1"].Specials[0].Used {
+		t.Fatalf("secret special should be marked as used after trigger")
+	}
+	if !g.Players["p1"].Specials[0].RevealedPublic {
+		t.Fatalf("secret special should become revealed after trigger")
+	}
+	if len(events) == 0 {
+		t.Fatalf("expected reveal notification event for triggered secret special")
+	}
+	if !g.Players["p1"].ForcedSelfVoteNext {
+		t.Fatalf("expected forced self vote flag on next voting")
+	}
+
+	g.startVoting()
+
+	vote, ok := g.Votes["p1"]
+	if !ok {
+		t.Fatalf("expected auto vote record for p1")
+	}
+	if vote.TargetID != "p1" {
+		t.Fatalf("expected auto vote target to be self, got %q", vote.TargetID)
+	}
+	if !vote.IsValid {
+		t.Fatalf("expected self auto vote to be valid")
+	}
+	if _, disabled := g.VoteDisabled["p1"]; disabled {
+		t.Fatalf("self auto vote must not disable voter")
+	}
+}
+
+func TestGameSession_SecretOnEliminate_AutoSelfVoteOnlyForOneVoting(t *testing.T) {
+	g := newTestGameSession()
+	g.Players["p2"].Status = playerEliminated
+	g.FirstHealthRevealerID = "p2"
+	g.Players["p1"].Specials = []specialConditionState{
+		{
+			InstanceID: "sp-secret-self",
+			Definition: specialDefinition{
+				ID:          "sp-secret-self",
+				Title:       "Secret Self Vote",
+				Implemented: true,
+				Trigger:     "secret_onEliminate",
+				Effect: specialEffect{
+					Type: "forcedWastedVoteOnNextVoting",
+					Params: map[string]any{
+						"condition": "firstRevealedHealthEliminated",
+					},
+				},
+			},
+		},
+	}
+
+	g.handleSecretEliminationTriggers("p2")
+	g.startVoting()
+	g.startTieBreakRevote([]string{"p1", "p3"})
+
+	if _, ok := g.Votes["p1"]; ok {
+		t.Fatalf("expected self auto vote to apply only for the first voting attempt, not revote")
+	}
+}

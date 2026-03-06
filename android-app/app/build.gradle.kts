@@ -28,7 +28,7 @@ fun readIntConfig(key: String, envKey: String, fallback: Int): Int =
 
 val releaseAppId = readConfig("APP_ID", "PB_APP_ID") ?: "com.protocolbunker.host"
 val releaseVersionCode = readIntConfig("VERSION_CODE", "PB_VERSION_CODE", 10000)
-val releaseVersionName = readConfig("VERSION_NAME", "PB_VERSION_NAME") ?: "0.2.0"
+val releaseVersionName = readConfig("VERSION_NAME", "PB_VERSION_NAME") ?: "0.2.1"
 
 val releaseStoreFilePath = readConfig("RELEASE_STORE_FILE", "PB_RELEASE_STORE_FILE")
     ?: readConfig("storeFile", "PB_RELEASE_STORE_FILE")
@@ -42,6 +42,7 @@ val enableReleaseLint = readConfig("ENABLE_RELEASE_LINT", "PB_ENABLE_RELEASE_LIN
 val workspaceRoot = rootProject.projectDir.resolve("..")
 val bundledBinaryRoot = project.layout.projectDirectory.dir("src/main/assets/server-binaries")
 val runtimeAssetsCommonDir = layout.buildDirectory.dir("generated/runtime-assets/common")
+val runtimeAssetsLegacyDir = layout.buildDirectory.dir("generated/runtime-assets/server-runtime")
 val runtimeAssetsArm64Dir = layout.buildDirectory.dir("generated/runtime-assets/arm64")
 val runtimeAssetsArmv7Dir = layout.buildDirectory.dir("generated/runtime-assets/armv7")
 val runtimeAssetsX86Dir = layout.buildDirectory.dir("generated/runtime-assets/x86")
@@ -60,6 +61,8 @@ val syncRuntimeAssetsCommon by tasks.registering(Sync::class) {
     val specialsSource = workspaceRoot.resolve("scenarios/classic/SPECIAL_CONDITIONS.json")
 
     doFirst {
+        // Legacy path from older build script revisions could cause duplicate asset merge entries.
+        delete(runtimeAssetsLegacyDir)
         check(decksSource.exists()) { "Missing assets source directory: ${decksSource.absolutePath}" }
         check(clientDistSource.resolve("index.html").exists()) {
             "Missing client dist index: ${clientDistSource.resolve("index.html").absolutePath}"
