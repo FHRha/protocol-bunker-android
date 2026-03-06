@@ -14,6 +14,11 @@ desktop.ini
 *.swp
 *~
 *.tsbuildinfo
+*.orig
+*.rej
+artifacts/
+coverage/
+.cache/
 
 # Environment files
 .env
@@ -30,6 +35,8 @@ android-app/captures/
 android-app/**/build/
 android-app/**/reports/
 android-app/**/test-results/
+android-app/**/outputs/androidTest-results/
+android-app/**/outputs/logs/
 
 # Signing files
 android-app/keystore.properties
@@ -42,17 +49,26 @@ server-go/bin/
 server-go/build/
 server-go/dist/
 server-go/coverage.out
+server-go/coverage*.out
 server-go/*.test
+server-go/test-results/
 
 # JS / Node (if local installs are used)
 client/node_modules/
+client/dist/
 client/.npm/
 client/.pnpm-store/
 client/.yarn/
 client/.cache/
 shared/node_modules/
+shared/dist/
 scenarios/node_modules/
+scenarios/dist/
+shared/.turbo/
+scenarios/.turbo/
+client/.turbo/
 server-go/*.exe
+server-go/server-go
 android-app/keys/*.jks
 android-app/cmdline-tools.zip
 android-app/last-logcat.txt

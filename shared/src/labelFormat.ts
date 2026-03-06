@@ -1,4 +1,4 @@
-﻿const MAX_LABEL_LENGTH = 60;
+const MAX_LABEL_LENGTH = 60;
 
 function sanitizeBaseName(input: string): string {
   const trimmed = input.trim();

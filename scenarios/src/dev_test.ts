@@ -1,4 +1,4 @@
-﻿
+
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -716,6 +716,9 @@ export const scenario: ScenarioModule = {
 
     const getFirstRevealedCard = (player: PlayerState, categoryKey: string) =>
       getCardsByCategoryKey(player, categoryKey, true)[0];
+
+    const getCardByCategoryInstance = (player: PlayerState, categoryKey: string, instanceId: string) =>
+      getCardsByCategoryKey(player, categoryKey, false).find((card) => card.instanceId === instanceId);
 
     const getCardByInstanceId = (player: PlayerState, cardId: string) =>
       player.hand.find((card) => card.instanceId === cardId);
@@ -1896,8 +1899,20 @@ export const scenario: ScenarioModule = {
           const neighbor = neighborChoice.neighborId ? players.get(neighborChoice.neighborId) : undefined;
           if (!neighbor) return { error: "Сосед не найден." };
 
-          const yourCard = getFirstRevealedCard(player, categoryKey);
-          const theirCard = getFirstRevealedCard(neighbor, categoryKey);
+          const requestedActorCardId = String(payload.actorCardId ?? "").trim();
+          const requestedTargetCardId = String(payload.targetCardId ?? "").trim();
+          const yourCard = requestedActorCardId
+            ? getCardByCategoryInstance(player, categoryKey, requestedActorCardId)
+            : getFirstRevealedCard(player, categoryKey);
+          const theirCard = requestedTargetCardId
+            ? getCardByCategoryInstance(neighbor, categoryKey, requestedTargetCardId)
+            : getFirstRevealedCard(neighbor, categoryKey);
+          if (requestedActorCardId && yourCard && !(DEV_SHOW_ALL_PUBLIC || yourCard.revealed)) {
+            return { error: "Нужно выбрать раскрытую свою карту категории." };
+          }
+          if (requestedTargetCardId && theirCard && !(DEV_SHOW_ALL_PUBLIC || theirCard.revealed)) {
+            return { error: "Нужно выбрать раскрытую карту цели в этой категории." };
+          }
           if (!yourCard || !theirCard) return { error: "Нужны раскрытые карты у обоих игроков." };
 
           const temp = { id: yourCard.id, labelShort: yourCard.labelShort, missing: yourCard.missing };
@@ -1920,7 +1935,13 @@ export const scenario: ScenarioModule = {
           if (!target || target.status !== "alive") return { error: "Цель не в игре." };
           if (!deckName) return { error: "Неизвестная категория." };
 
-          const revealedCard = getFirstRevealedCard(target, categoryKey);
+          const requestedTargetCardId = String(payload.targetCardId ?? "").trim();
+          const revealedCard = requestedTargetCardId
+            ? getCardByCategoryInstance(target, categoryKey, requestedTargetCardId)
+            : getFirstRevealedCard(target, categoryKey);
+          if (requestedTargetCardId && revealedCard && !(DEV_SHOW_ALL_PUBLIC || revealedCard.revealed)) {
+            return { error: "Нужно выбрать раскрытую карту цели в этой категории." };
+          }
           if (!revealedCard) return { error: "У цели нет раскрытой карты этой категории." };
 
           const newCard = drawCardFromDeck(deckName, deckPools, rng);
@@ -1942,7 +1963,13 @@ export const scenario: ScenarioModule = {
           if (!target || target.status !== "alive") return { error: "Цель не в игре." };
           if (!deckName) return { error: "Неизвестная категория." };
 
-          const revealedCard = getFirstRevealedCard(target, categoryKey);
+          const requestedTargetCardId = String(payload.targetCardId ?? "").trim();
+          const revealedCard = requestedTargetCardId
+            ? getCardByCategoryInstance(target, categoryKey, requestedTargetCardId)
+            : getFirstRevealedCard(target, categoryKey);
+          if (requestedTargetCardId && revealedCard && !(DEV_SHOW_ALL_PUBLIC || revealedCard.revealed)) {
+            return { error: "Нужно выбрать раскрытую карту цели в этой категории." };
+          }
           if (!revealedCard) return { error: "У цели нет раскрытой карты этой категории." };
 
           const newCard = drawCardFromDeck(deckName, deckPools, rng);

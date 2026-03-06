@@ -1276,6 +1276,19 @@ func (g *gameSession) getFirstCardForSpecial(player *gamePlayer, categoryKey str
 	return cards[0]
 }
 
+func (g *gameSession) getCardByCategoryInstance(player *gamePlayer, categoryKey, instanceID string) *handCard {
+	if player == nil || strings.TrimSpace(instanceID) == "" {
+		return nil
+	}
+	cards := g.getCardsByCategoryKey(player, categoryKey, false)
+	for _, card := range cards {
+		if card.InstanceID == instanceID {
+			return card
+		}
+	}
+	return nil
+}
+
 func (g *gameSession) drawCardFromDeck(deckName string) (assetCard, bool) {
 	pool := g.DeckPools[deckName]
 	card, nextPool, ok := drawRandomCard(pool, g.rng)
@@ -1726,8 +1739,32 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 		if target == nil || target.Status != playerAlive {
 			return gameActionResult{Error: "Сосед не найден."}
 		}
-		yourCard := g.getFirstCardForSpecial(player, categoryKey)
-		theirCard := g.getFirstCardForSpecial(target, categoryKey)
+		requestedActorCardID := strings.TrimSpace(asString(payload["actorCardId"]))
+		requestedTargetCardID := strings.TrimSpace(asString(payload["targetCardId"]))
+		var yourCard *handCard
+		if requestedActorCardID != "" {
+			yourCard = g.getCardByCategoryInstance(player, categoryKey, requestedActorCardID)
+			if yourCard == nil {
+				return gameActionResult{Error: "Нужно выбрать корректную свою карту категории."}
+			}
+			if !g.IsDev && !yourCard.Revealed {
+				return gameActionResult{Error: "Нужно выбрать раскрытую свою карту категории."}
+			}
+		} else {
+			yourCard = g.getFirstCardForSpecial(player, categoryKey)
+		}
+		var theirCard *handCard
+		if requestedTargetCardID != "" {
+			theirCard = g.getCardByCategoryInstance(target, categoryKey, requestedTargetCardID)
+			if theirCard == nil {
+				return gameActionResult{Error: "Нужно выбрать корректную карту цели в этой категории."}
+			}
+			if !g.IsDev && !theirCard.Revealed {
+				return gameActionResult{Error: "Нужно выбрать раскрытую карту цели в этой категории."}
+			}
+		} else {
+			theirCard = g.getFirstCardForSpecial(target, categoryKey)
+		}
 		if yourCard == nil || theirCard == nil {
 			return gameActionResult{Error: "Нужны раскрытые карты у обоих игроков."}
 		}
@@ -1748,7 +1785,19 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 		if deckName == "" {
 			return gameActionResult{Error: "Неизвестная категория."}
 		}
-		revealedCard := g.getFirstCardForSpecial(target, categoryKey)
+		requestedTargetCardID := strings.TrimSpace(asString(payload["targetCardId"]))
+		var revealedCard *handCard
+		if requestedTargetCardID != "" {
+			revealedCard = g.getCardByCategoryInstance(target, categoryKey, requestedTargetCardID)
+			if revealedCard == nil {
+				return gameActionResult{Error: "Нужно выбрать корректную карту цели в этой категории."}
+			}
+			if !g.IsDev && !revealedCard.Revealed {
+				return gameActionResult{Error: "Нужно выбрать раскрытую карту цели в этой категории."}
+			}
+		} else {
+			revealedCard = g.getFirstCardForSpecial(target, categoryKey)
+		}
 		if revealedCard == nil {
 			return gameActionResult{Error: "У цели нет раскрытой карты этой категории."}
 		}
@@ -1773,7 +1822,19 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 		if deckName == "" {
 			return gameActionResult{Error: "Неизвестная категория."}
 		}
-		revealedCard := g.getFirstCardForSpecial(target, categoryKey)
+		requestedTargetCardID := strings.TrimSpace(asString(payload["targetCardId"]))
+		var revealedCard *handCard
+		if requestedTargetCardID != "" {
+			revealedCard = g.getCardByCategoryInstance(target, categoryKey, requestedTargetCardID)
+			if revealedCard == nil {
+				return gameActionResult{Error: "Нужно выбрать корректную карту цели в этой категории."}
+			}
+			if !g.IsDev && !revealedCard.Revealed {
+				return gameActionResult{Error: "Нужно выбрать раскрытую карту цели в этой категории."}
+			}
+		} else {
+			revealedCard = g.getFirstCardForSpecial(target, categoryKey)
+		}
 		if revealedCard == nil {
 			return gameActionResult{Error: "У цели нет раскрытой карты этой категории."}
 		}

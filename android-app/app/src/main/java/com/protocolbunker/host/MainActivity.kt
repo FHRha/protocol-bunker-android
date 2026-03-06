@@ -1,4 +1,4 @@
-﻿package com.protocolbunker.host
+package com.protocolbunker.host
 
 import android.Manifest
 import android.content.ActivityNotFoundException

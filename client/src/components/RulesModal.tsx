@@ -1,4 +1,4 @@
-﻿import ReactMarkdown from "react-markdown";
+import ReactMarkdown from "react-markdown";
 import rulesText from "../content/rules.md?raw";
 import { ru } from "../i18n/ru";
 import Modal from "./Modal";

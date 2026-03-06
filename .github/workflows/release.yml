@@ -1,14 +1,109 @@
-﻿name: release-apk
+name: release-apk
 
 on:
   release:
     types: [published]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  android-e2e-emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server-go/go.mod
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build Client Dist (source-only repo mode)
+        shell: bash
+        run: |
+          npm --prefix shared ci --no-audit --no-fund
+          npm --prefix shared run build
+          npm --prefix client ci --no-audit --no-fund
+          npm --prefix client run build
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK/NDK + Emulator Image
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.2.12479018" \
+            "emulator" \
+            "system-images;android-35;google_apis;x86_64"
+
+      - name: Build Go Android ABI Binaries
+        shell: bash
+        run: bash ./server-go/scripts/build-android-binaries.sh
+
+      - name: Run Android Emulator E2E (Host Flow)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_7
+          disable-animations: true
+          emulator-options: -no-snapshot-save -no-boot-anim -gpu swiftshader_indirect
+          script: |
+            set -euo pipefail
+            cd android-app
+            chmod +x ./gradlew
+            mkdir -p ../artifacts/e2e
+            collect_debug_artifacts() {
+              adb devices || true
+              adb logcat -d > ../artifacts/e2e/logcat.txt || true
+              adb bugreport ../artifacts/e2e/bugreport || true
+              adb exec-out screencap -p > ../artifacts/e2e/screenshot.png || true
+            }
+            trap 'collect_debug_artifacts' ERR
+
+            ./gradlew --no-daemon :app:connectedX8664DebugAndroidTest \
+              "-Pandroid.testInstrumentationRunnerArguments.class=com.protocolbunker.host.ServerHostInstrumentedTest#websocketHostFlow_canCreateRoomAndStartGame"
+            ./gradlew --no-daemon :app:connectedX8664DebugAndroidTest \
+              "-Pandroid.testInstrumentationRunnerArguments.class=com.protocolbunker.host.ServerHostInstrumentedTest#websocketHostFlow_canTransferHostRole"
+            ./gradlew --no-daemon :app:connectedX8664DebugAndroidTest \
+              "-Pandroid.testInstrumentationRunnerArguments.class=com.protocolbunker.host.ServerHostInstrumentedTest#websocketHostFlow_controlCompanionDoesNotCreatePlayer"
+
+      - name: Upload Android E2E Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-e2e-release-debug
+          path: |
+            artifacts/e2e/**
+            android-app/app/build/reports/androidTests/**
+            android-app/app/build/outputs/androidTest-results/**
+          if-no-files-found: ignore
+
   build-and-upload:
+    if: ${{ github.event_name == 'release' }}
+    needs: android-e2e-emulator
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     env:
       PB_VERSION_CODE: ${{ github.run_number }}
@@ -70,13 +165,9 @@ jobs:
           echo "PB_RELEASE_KEY_ALIAS=$SIGNING_KEY_ALIAS" >> "$GITHUB_ENV"
           echo "PB_RELEASE_KEY_PASSWORD=$SIGNING_KEY_PASSWORD" >> "$GITHUB_ENV"
 
-      - name: Validate Encoding (UTF-8 / mojibake)
-        shell: pwsh
-        run: ./scripts/check-encoding.ps1
-
-      - name: Run Go Tests
-        working-directory: server-go
-        run: go test ./...
+      - name: Smoke Checks (encoding + tests + builds)
+        shell: bash
+        run: bash ./scripts/smoke-release.sh
 
       - name: Build Go Android ABI Binaries
         run: bash ./server-go/scripts/build-android-binaries.sh
@@ -84,6 +175,70 @@ jobs:
       - name: Build Release APK
         working-directory: android-app
         run: bash ./gradlew --no-daemon clean assembleRelease
+
+      - name: Validate Release APKs (files + ABI split + unique hashes)
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import os
+          import sys
+          import zipfile
+
+          expected = {
+              "arm64": ("android-app/app/build/outputs/apk/arm64/release/app-arm64-release.apk", {"arm64-v8a"}),
+              "armv7": ("android-app/app/build/outputs/apk/armv7/release/app-armv7-release.apk", {"armeabi-v7a"}),
+              "x86": ("android-app/app/build/outputs/apk/x86/release/app-x86-release.apk", {"x86"}),
+              "x8664": ("android-app/app/build/outputs/apk/x8664/release/app-x8664-release.apk", {"x86_64"}),
+              "universal": (
+                  "android-app/app/build/outputs/apk/universal/release/app-universal-release.apk",
+                  {"arm64-v8a", "armeabi-v7a", "x86", "x86_64"},
+              ),
+          }
+          abi_set = {"arm64-v8a", "armeabi-v7a", "x86", "x86_64"}
+          by_hash = {}
+          errors = []
+
+          for name, (apk_path, required_abis) in expected.items():
+              if not os.path.isfile(apk_path):
+                  errors.append(f"[{name}] missing file: {apk_path}")
+                  continue
+
+              with zipfile.ZipFile(apk_path, "r") as apk:
+                  present_abis = {
+                      entry.split("/")[1]
+                      for entry in apk.namelist()
+                      if entry.startswith("lib/") and entry.count("/") >= 2
+                  }
+              present_known_abis = present_abis.intersection(abi_set)
+
+              missing = sorted(required_abis.difference(present_known_abis))
+              extras = sorted(present_known_abis.difference(required_abis))
+
+              if missing:
+                  errors.append(f"[{name}] missing ABI dirs in apk: {', '.join(missing)}")
+              if name != "universal" and extras:
+                  errors.append(f"[{name}] unexpected ABI dirs in split apk: {', '.join(extras)}")
+
+              digest = hashlib.sha256(open(apk_path, "rb").read()).hexdigest()
+              if digest in by_hash:
+                  errors.append(f"[{name}] duplicate APK content hash with [{by_hash[digest]}]")
+              by_hash[digest] = name
+
+              size_mb = os.path.getsize(apk_path) / (1024 * 1024)
+              print(f"[{name}] ok | abis={sorted(present_known_abis)} | size={size_mb:.1f}MB | sha256={digest[:12]}...")
+
+          if len(by_hash) != len(expected):
+              errors.append(f"expected {len(expected)} unique APK hashes, got {len(by_hash)}")
+
+          if errors:
+              print("APK validation failed:", file=sys.stderr)
+              for err in errors:
+                  print(f" - {err}", file=sys.stderr)
+              sys.exit(1)
+
+          print("APK validation passed.")
+          PY
 
       - name: Prepare Release Artifacts
         shell: bash

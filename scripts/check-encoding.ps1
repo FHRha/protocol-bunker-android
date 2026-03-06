@@ -76,6 +76,10 @@ foreach ($file in $files) {
 
   $bytes = [System.IO.File]::ReadAllBytes($file)
   if ($bytes.Length -eq 0) { continue }
+  if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+    $issues.Add("${file}: UTF-8 BOM detected (use UTF-8 without BOM)")
+    continue
+  }
 
   $text = $null
   try {
@@ -98,4 +102,4 @@ if ($issues.Count -gt 0) {
   exit 1
 }
 
-Write-Host "Encoding check passed: no invalid UTF-8 / mojibake-like chunks detected."
+Write-Host "Encoding check passed: UTF-8 without BOM, no invalid UTF-8 / mojibake-like chunks detected."

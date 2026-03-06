@@ -1,4 +1,4 @@
-﻿package com.protocolbunker.host.server
+package com.protocolbunker.host.server
 
 import android.app.Notification
 import android.app.NotificationChannel

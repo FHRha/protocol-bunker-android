@@ -53,12 +53,21 @@ fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GRADLEW="$ROOT_DIR/gradlew"
+WORKSPACE_DIR="$(cd "$ROOT_DIR/.." && pwd)"
 if [[ ! -x "$GRADLEW" ]]; then
   GRADLEW="$ROOT_DIR/gradlew.bat"
 fi
 if [[ ! -f "$GRADLEW" ]]; then
   echo "Gradle wrapper not found in $ROOT_DIR" >&2
   exit 1
+fi
+
+if [[ ! -f "$WORKSPACE_DIR/client/dist/index.html" ]]; then
+  echo "0) client/dist not found, building web assets..."
+  npm --prefix "$WORKSPACE_DIR/shared" ci --no-audit --no-fund
+  npm --prefix "$WORKSPACE_DIR/shared" run build
+  npm --prefix "$WORKSPACE_DIR/client" ci --no-audit --no-fund
+  npm --prefix "$WORKSPACE_DIR/client" run build
 fi
 
 echo "1) Uninstalling existing app to avoid signature mismatch..."
@@ -73,5 +82,7 @@ run_test() {
 run_test "com.protocolbunker.host.ServerHostInstrumentedTest#startStopService_updatesRuntimeState"
 run_test "com.protocolbunker.host.ServerHostInstrumentedTest#serverRemainsActiveAfterAppBackgrounded"
 run_test "com.protocolbunker.host.ServerHostInstrumentedTest#healthEndpointRespondsAfterStart"
+run_test "com.protocolbunker.host.ServerHostInstrumentedTest#websocketHostFlow_canCreateRoomAndStartGame"
+run_test "com.protocolbunker.host.ServerHostInstrumentedTest#websocketHostFlow_canTransferHostRole"
 
 echo "Smoke e2e passed"

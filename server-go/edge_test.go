@@ -593,6 +593,107 @@ func TestServer_Edge_ControlCompanion_HostChangedContainsNewControlId(t *testing
 	}
 }
 
+func TestServer_Edge_WSFastPath_HelloTransferHostStartGame(t *testing.T) {
+	assetsRoot, clientRoot := makeTestRoots(t)
+	srv, err := newServer(config{
+		Host:               "127.0.0.1",
+		Port:               18109,
+		AssetsRoot:         assetsRoot,
+		ClientDistRoot:     clientRoot,
+		EnableDevScenarios: true,
+	})
+	if err != nil {
+		t.Fatalf("newServer failed: %v", err)
+	}
+	testServer := httptest.NewServer(srv.routes())
+	defer testServer.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(testServer.URL, "http")
+	hostConn, err := dialWS(wsURL)
+	if err != nil {
+		t.Fatalf("host dial failed: %v", err)
+	}
+	defer hostConn.Close()
+
+	mustSend(t, hostConn, map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"name":       "Host",
+			"create":     true,
+			"scenarioId": scenarioDevTest,
+			"sessionId":  "edge-fast-host",
+		},
+	})
+	hostAck := mustReadType(t, hostConn, "helloAck")
+	hostID := mustNestedString(t, hostAck, "payload", "playerId")
+	editToken := mustNestedString(t, hostAck, "payload", "editToken")
+	roomState := mustReadRoomState(t, hostConn)
+	if hostID == "" || editToken == "" || roomState.RoomCode == "" {
+		t.Fatalf("invalid host init: host=%q edit=%q room=%q", hostID, editToken, roomState.RoomCode)
+	}
+
+	companionConn, err := dialWS(wsURL)
+	if err != nil {
+		t.Fatalf("companion dial failed: %v", err)
+	}
+	defer companionConn.Close()
+	mustSend(t, companionConn, map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"roomCode":  roomState.RoomCode,
+			"editToken": editToken,
+		},
+	})
+	companionAck := mustReadType(t, companionConn, "helloAck")
+	if got := mustNestedString(t, companionAck, "payload", "playerId"); got != hostID {
+		t.Fatalf("companion must bind to host control player: got=%s want=%s", got, hostID)
+	}
+	_ = mustReadRoomState(t, companionConn)
+
+	guestConn, err := dialWS(wsURL)
+	if err != nil {
+		t.Fatalf("guest dial failed: %v", err)
+	}
+	defer guestConn.Close()
+	mustSend(t, guestConn, map[string]any{
+		"type": "hello",
+		"payload": map[string]any{
+			"name":      "Guest",
+			"roomCode":  roomState.RoomCode,
+			"sessionId": "edge-fast-guest",
+		},
+	})
+	guestAck := mustReadType(t, guestConn, "helloAck")
+	guestID := mustNestedString(t, guestAck, "payload", "playerId")
+	if guestID == "" || guestID == hostID {
+		t.Fatalf("invalid guest id: %q", guestID)
+	}
+	_ = mustReadRoomState(t, guestConn)
+	_ = mustReadRoomState(t, hostConn)
+	_ = mustReadRoomState(t, companionConn)
+
+	mustSend(t, companionConn, map[string]any{
+		"type": "requestHostTransfer",
+		"payload": map[string]any{
+			"targetPlayerId": guestID,
+		},
+	})
+	_ = mustReadRoomState(t, companionConn)
+	hostChanged := mustReadType(t, companionConn, "hostChanged")
+	if got := mustNestedString(t, hostChanged, "payload", "newHostId"); got != guestID {
+		t.Fatalf("transfer failed, new host id: got=%s want=%s", got, guestID)
+	}
+
+	mustSend(t, companionConn, map[string]any{
+		"type":    "startGame",
+		"payload": map[string]any{},
+	})
+	view := mustReadGameView(t, companionConn)
+	if view.Phase != scenarioPhaseReveal && view.Phase != scenarioPhaseRevealDiscussion {
+		t.Fatalf("unexpected game phase after start: %s", view.Phase)
+	}
+}
+
 func setupTestRoom(
 	t *testing.T,
 	port int,

@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PublicPlayerView, WorldState30 } from "@bunker/shared";
 import { ru } from "../i18n/ru";
 

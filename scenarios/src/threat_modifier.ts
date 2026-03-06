@@ -1,11 +1,11 @@
-﻿import type { WorldFacedCard } from "@bunker/shared";
+import type { WorldFacedCard } from "@bunker/shared";
 
 const normalizeTitle = (value: string) => value.trim().replace(/\s+/g, " ").toUpperCase();
 const normalizeRef = (value: string) =>
   value
     .trim()
     .toLowerCase()
-    .replaceAll("\\", "/")
+    .replace(/\\/g, "/")
     .replace(/^assets\//, "")
     .replace(/^decks\//, "")
     .replace(/\.[a-z0-9]{2,4}$/i, "")

@@ -1,6 +1,6 @@
 {
   "name": "@bunker/scenarios",
-  "version": "0.1.2",
+  "version": "0.2.2",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,9 +12,10 @@
   },
   "devDependencies": {
     "@types/node": "^20.12.7",
+    "typescript": "^5.9.3",
     "vitest": "^2.1.9"
   },
   "dependencies": {
-    "@bunker/shared": "workspace:*"
+    "@bunker/shared": "file:../shared"
   }
 }

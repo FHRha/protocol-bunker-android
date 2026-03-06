@@ -1,4 +1,4 @@
-* text=auto
+* text=auto eol=lf
 
 *.go text eol=lf
 *.ts text eol=lf
@@ -16,6 +16,9 @@
 *.html text eol=lf
 *.sh text eol=lf
 *.ps1 text eol=lf
+*.psm1 text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
 
 *.png binary
 *.jpg binary

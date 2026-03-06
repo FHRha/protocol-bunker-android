@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ScenarioMeta } from "@bunker/shared";
 import { DEV_TAB_IDENTITY } from "../config";
 import { ru } from "../i18n/ru";

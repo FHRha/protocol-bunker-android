@@ -1,4 +1,4 @@
-﻿import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import type { GameEvent, GameView, RoomState, SpecialConditionInstance, SpecialTargetScope } from "@bunker/shared";
 import { computeNeighbors, getTargetCandidates } from "@bunker/shared";
 import { ru } from "../i18n/ru";
@@ -806,21 +806,43 @@ export default function GamePage({
     });
   };
 
-  const getCategoryCardNamesForPlayer = (playerId: string, categoryKey: string): string[] => {
+  type CategorySelectionCard = {
+    instanceId: string;
+    label: string;
+    revealed: boolean;
+  };
+
+  const getCategoryCardsForPlayer = (
+    playerId: string,
+    categoryKey: string,
+    revealedOnly = false
+  ): CategorySelectionCard[] => {
     const player = publicPlayers.find((entry) => entry.playerId === playerId);
     if (!player) return [];
     const labels = CATEGORY_KEY_TO_LABELS[categoryKey] ?? [categoryKey];
     const normalizedLabels = new Set(labels.map((label) => normalizeCategoryToken(label)));
-    const result: string[] = [];
+    const result: CategorySelectionCard[] = [];
     for (const slot of player.categories) {
       if (!normalizedLabels.has(normalizeCategoryToken(slot.category))) continue;
       slot.cards.forEach((card, index) => {
-        if (card.hidden) {
-          result.push(`Скрытая карта #${index + 1}`);
+        const instanceId = String(card.instanceId ?? "").trim();
+        if (!instanceId) return;
+        const revealed = !card.hidden;
+        if (revealedOnly && !revealed) return;
+        if (!revealed) {
+          result.push({
+            instanceId,
+            label: `Скрытая карта #${index + 1}`,
+            revealed: false,
+          });
           return;
         }
         const label = String(card.labelShort ?? "").trim();
-        result.push(label || `Карта #${index + 1}`);
+        result.push({
+          instanceId,
+          label: label || `Карта #${index + 1}`,
+          revealed: true,
+        });
       });
     }
     return result;
@@ -830,7 +852,7 @@ export default function GamePage({
     playerId: string,
     categoryKey: string
   ): { short: string; full: string } | null => {
-    const cardNames = getCategoryCardNamesForPlayer(playerId, categoryKey);
+    const cardNames = getCategoryCardsForPlayer(playerId, categoryKey).map((card) => card.label);
     if (cardNames.length === 0) return null;
     const short = cardNames.length === 1 ? cardNames[0] : `${cardNames[0]} +${cardNames.length - 1}`;
     const full = cardNames.length === 1 ? `Карта: ${cardNames[0]}` : `Карты: ${cardNames.join(", ")}`;
@@ -1081,6 +1103,56 @@ export default function GamePage({
           options = options.filter((option) => youHas && hasRevealedCategory(option.id, categoryKey));
         }
       }
+      const requiresCategoryCardSelection =
+        Boolean(categoryKey) &&
+        (effectType === "swapRevealedWithNeighbor" ||
+          effectType === "replaceRevealedCard" ||
+          effectType === "discardRevealedAndDealHidden");
+      if (requiresCategoryCardSelection) {
+        const revealedOnly = !isDevScenario;
+        const actorCategoryCards =
+          effectType === "swapRevealedWithNeighbor"
+            ? getCategoryCardsForPlayer(you.playerId, categoryKey, revealedOnly)
+            : [];
+        const categoryCardOptions: SpecialDialogOption[] = [];
+        options.forEach((option) => {
+          const targetCards = getCategoryCardsForPlayer(option.id, categoryKey, revealedOnly);
+          targetCards.forEach((targetCard) => {
+            if (effectType === "swapRevealedWithNeighbor") {
+              actorCategoryCards.forEach((actorCard) => {
+                categoryCardOptions.push({
+                  id: `${option.id}::${targetCard.instanceId}::${actorCard.instanceId}`,
+                  label: `${option.label} — ${targetCard.label} ⇄ Вы: ${actorCard.label}`,
+                  detail: `Обмен: ${targetCard.label} ⇄ ${actorCard.label}`,
+                  payload: {
+                    targetPlayerId: option.id,
+                    targetCardId: targetCard.instanceId,
+                    actorCardId: actorCard.instanceId,
+                  },
+                });
+              });
+              return;
+            }
+            categoryCardOptions.push({
+              id: `${option.id}::${targetCard.instanceId}`,
+              label: `${option.label} — ${targetCard.label}`,
+              detail: `Карта категории: ${targetCard.label}`,
+              payload: {
+                targetPlayerId: option.id,
+                targetCardId: targetCard.instanceId,
+              },
+            });
+          });
+        });
+        openSpecialDialog(
+          special.instanceId,
+          "Выберите карту категории",
+          "player",
+          categoryCardOptions,
+          special.text
+        );
+        return;
+      }
       const canShowTargetCardHint =
         Boolean(categoryKey) &&
         (effectType === "swapRevealedWithNeighbor" ||
@@ -1166,9 +1238,10 @@ export default function GamePage({
 
     if (specialDialog.kind === "player") {
       const special = you?.specialConditions.find((item) => item.instanceId === specialDialog.specialInstanceId);
+      const selectedPayload = selectedOption?.payload;
       if (special?.effect.type === "stealBaggage_and_giveSpecial") {
-        const targetPlayerId = String(selectedOption?.payload?.targetPlayerId ?? "").trim();
-        const baggageCardId = String(selectedOption?.payload?.baggageCardId ?? "").trim();
+        const targetPlayerId = String(selectedPayload?.targetPlayerId ?? "").trim();
+        const baggageCardId = String(selectedPayload?.baggageCardId ?? "").trim();
         if (!targetPlayerId) return;
         if (baggageCardId) {
           onApplySpecial(specialDialog.specialInstanceId, {
@@ -1179,7 +1252,16 @@ export default function GamePage({
           onApplySpecial(specialDialog.specialInstanceId, { targetPlayerId });
         }
       } else {
-        onApplySpecial(specialDialog.specialInstanceId, { targetPlayerId: dialogSelection });
+        const nextPayload: Record<string, unknown> = {};
+        if (selectedPayload) {
+          Object.entries(selectedPayload).forEach(([key, value]) => {
+            nextPayload[key] = value;
+          });
+        }
+        if (!("targetPlayerId" in nextPayload)) {
+          nextPayload.targetPlayerId = dialogSelection;
+        }
+        onApplySpecial(specialDialog.specialInstanceId, nextPayload);
       }
     } else if (specialDialog.kind === "neighbor") {
       onApplySpecial(specialDialog.specialInstanceId, { side: dialogSelection });

@@ -1,4 +1,4 @@
-﻿package com.protocolbunker.host.server
+package com.protocolbunker.host.server
 
 import android.content.Context
 import com.protocolbunker.host.util.NetworkUtils

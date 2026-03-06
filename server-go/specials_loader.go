@@ -79,13 +79,16 @@ func resolveTargetScopeFromTargeting(raw string, choiceKind string) string {
 		return ""
 	}
 	targeting := strings.ToLower(strings.TrimSpace(raw))
+	if containsAny(targeting, "not self", "не себя", "кроме себя", "not-self") {
+		return "any_alive"
+	}
 	if containsAny(targeting, "neighbor", "сосед", "left", "right", "слева", "справа") {
 		return "neighbors"
 	}
 	if containsAny(targeting, "including self", "включая себя", "any_including_self") {
 		return "any_including_self"
 	}
-	if containsAny(targeting, "self", "себя", "сам") {
+	if containsAny(targeting, "only self", "self only", "only yourself", "только себя", "только себе", "у себя") {
 		return "self"
 	}
 	return "any_alive"

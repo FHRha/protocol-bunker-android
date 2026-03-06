@@ -28,7 +28,7 @@ fun readIntConfig(key: String, envKey: String, fallback: Int): Int =
 
 val releaseAppId = readConfig("APP_ID", "PB_APP_ID") ?: "com.protocolbunker.host"
 val releaseVersionCode = readIntConfig("VERSION_CODE", "PB_VERSION_CODE", 10000)
-val releaseVersionName = readConfig("VERSION_NAME", "PB_VERSION_NAME") ?: "0.2.1"
+val releaseVersionName = readConfig("VERSION_NAME", "PB_VERSION_NAME") ?: "0.2.2"
 
 val releaseStoreFilePath = readConfig("RELEASE_STORE_FILE", "PB_RELEASE_STORE_FILE")
     ?: readConfig("storeFile", "PB_RELEASE_STORE_FILE")
@@ -297,4 +297,5 @@ dependencies {
     androidTestImplementation("androidx.test:core-ktx:1.6.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    androidTestImplementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

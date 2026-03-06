@@ -1,4 +1,4 @@
-﻿import type { GameEventKind } from "@bunker/shared";
+import type { GameEventKind } from "@bunker/shared";
 import { RULESET_PRESET_COUNTS } from "@bunker/shared";
 
 export const ru = {

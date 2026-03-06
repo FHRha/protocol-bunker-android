@@ -1,4 +1,4 @@
-﻿import { ASSET_BASE } from "./config";
+import { ASSET_BASE } from "./config";
 
 const BACK_DECK_PATH = "decks/Рубашки";
 const BACKS_BY_CATEGORY: Record<string, string> = {

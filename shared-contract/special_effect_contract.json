@@ -1,0 +1,77 @@
+{
+  "effectRules": {
+    "addFinalThreat": {
+      "choiceKind": "none",
+      "targetScope": ""
+    },
+    "banVoteAgainst": {
+      "choiceKind": "player",
+      "targetScope": "any_alive"
+    },
+    "disableVote": {
+      "choiceKind": "player",
+      "targetScope": "any_alive"
+    },
+    "discardBunkerCard": {
+      "choiceKind": "bunker",
+      "targetScope": ""
+    },
+    "discardRevealedAndDealHidden": {
+      "choiceKind": "player",
+      "targetScope": "any_alive"
+    },
+    "doubleVotesAgainst_and_disableSelfVote": {
+      "choiceKind": "player",
+      "targetScope": "any_alive"
+    },
+    "forcedWastedVoteOnNextVoting": {
+      "choiceKind": "none",
+      "targetScope": ""
+    },
+    "forceRevealCategoryForAll": {
+      "choiceKind": "category",
+      "targetScope": ""
+    },
+    "forceRevote": {
+      "choiceKind": "none",
+      "targetScope": ""
+    },
+    "redealAllRevealed": {
+      "choiceKind": "none",
+      "targetScope": ""
+    },
+    "replaceBunkerCard": {
+      "choiceKind": "bunker",
+      "targetScope": ""
+    },
+    "replaceRevealedCard": {
+      "choiceKind": "player",
+      "targetScope": "any_alive"
+    },
+    "setRoundRule": {
+      "choiceKind": "none",
+      "targetScope": ""
+    },
+    "stealBaggage_and_giveSpecial": {
+      "choiceKind": "player",
+      "targetScope": "any_alive"
+    },
+    "stealBunkerCardToExiled": {
+      "choiceKind": "bunker",
+      "targetScope": ""
+    },
+    "swapRevealedWithNeighbor": {
+      "choiceKind": "neighbor",
+      "targetScope": "neighbors"
+    },
+    "voteWeight": {
+      "choiceKind": "none",
+      "targetScope": ""
+    }
+  },
+  "categoryCardSelectionEffects": [
+    "discardRevealedAndDealHidden",
+    "replaceRevealedCard",
+    "swapRevealedWithNeighbor"
+  ]
+}

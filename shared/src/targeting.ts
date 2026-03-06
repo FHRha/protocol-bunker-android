@@ -1,4 +1,4 @@
-﻿import type { SpecialTargetScope } from "./index.js";
+import type { SpecialTargetScope } from "./index.js";
 
 const includesAny = (value: string, terms: string[]) => terms.some((term) => value.includes(term));
 

@@ -1,4 +1,4 @@
-﻿# Protocol: Bunker Host (Android)
+# Protocol: Bunker Host (Android)
 
 Android-приложение, которое запускает локальную комнату для игры **«Протокол: Бункер»** прямо на телефоне.
 
@@ -64,8 +64,15 @@ go build ./...
 # Linux/macOS:
 ./scripts/build-android-binaries.sh
 
-# 3) APK
-cd ../android-app
+# 3) Web client dist (не хранится в git)
+cd ..
+npm --prefix shared ci
+npm --prefix shared run build
+npm --prefix client ci
+npm --prefix client run build
+
+# 4) APK
+cd android-app
 ./gradlew assembleDebug assembleRelease
 ```
 
@@ -78,6 +85,22 @@ powershell -ExecutionPolicy Bypass -File scripts/check-encoding.ps1
 ```
 
 Этот же чек запускается в GitHub Actions перед сборкой релиза.
+
+## CI и релизы
+
+Workflow'ы:
+
+- `.github/workflows/ci.yml` — проверки на `push`/`pull_request`:
+  - строгая проверка кодировок (UTF-8 + поиск mojibake);
+  - полный `go test ./...` (включая per-card тесты спецкарт);
+  - быстрый WS integration test на Go сервере;
+  - Android Emulator E2E.
+- `.github/workflows/nightly.yml` — ночной прогон:
+  - `scripts/smoke-release.sh`;
+  - Android Emulator E2E.
+- `.github/workflows/release.yml` — только на опубликованный релиз:
+  - Android Emulator E2E;
+  - сборка и загрузка APK в GitHub Release.
 
 ## Автосборка релизов
 
@@ -104,3 +127,39 @@ Workflow: `.github/workflows/release.yml`
 - `ANDROID_KEY_PASSWORD`
 
 Если эти secrets не заданы, релиз соберется с debug-подписью (только для тестов).
+
+## Branch protection для main
+
+Автоматическое применение через `gh` CLI:
+
+```powershell
+.\scripts\apply-branch-protection.ps1 -Branch main
+```
+
+```bash
+bash ./scripts/apply-branch-protection.sh main
+```
+
+Скрипт берет последние успешные CI job'ы и делает их обязательными для `main`.
+
+## Release Checklist (обязательно перед тегом)
+
+1. Локально прошел smoke:
+   - `powershell -ExecutionPolicy Bypass -File scripts/smoke-release.ps1`
+   - или `bash ./scripts/smoke-release.sh`
+2. В CI зеленые:
+   - `encoding-check`
+   - `server-go-tests`
+   - `server-ws-integration`
+   - `android-e2e-emulator`
+3. Ручная проверка APK:
+   - `arm64` на реальном устройстве;
+   - `x86_64` на эмуляторе.
+4. Smoke-сценарий игры пройден:
+   - создание лобби;
+   - старт;
+   - голосование;
+   - применение спецкарт;
+   - завершение партии.
+5. Версия и release notes обновлены.
+6. В релизе присутствуют 5 APK: `arm64`, `armv7`, `x86`, `x8664`, `universal`.

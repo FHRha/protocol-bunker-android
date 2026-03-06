@@ -1,4 +1,4 @@
-﻿export const tokenKey = (roomCode: string) => `bunker.playerToken.${roomCode}`;
+export const tokenKey = (roomCode: string) => `bunker.playerToken.${roomCode}`;
 
 const TAB_ID_KEY = "bunker.dev_tab_id";
 const TAB_INSTANCE_KEY = "bunker.dev_tab_instance";
