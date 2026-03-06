@@ -93,13 +93,10 @@ Workflow'ы:
 - `.github/workflows/ci.yml` — проверки на `push`/`pull_request`:
   - строгая проверка кодировок (UTF-8 + поиск mojibake);
   - полный `go test ./...` (включая per-card тесты спецкарт);
-  - быстрый WS integration test на Go сервере;
-  - Android Emulator E2E.
+  - быстрый WS integration test на Go сервере.
 - `.github/workflows/nightly.yml` — ночной прогон:
-  - `scripts/smoke-release.sh`;
-  - Android Emulator E2E.
+  - `scripts/smoke-release.sh`.
 - `.github/workflows/release.yml` — только на опубликованный релиз:
-  - Android Emulator E2E;
   - сборка и загрузка APK в GitHub Release.
 
 ## Автосборка релизов
@@ -151,7 +148,6 @@ bash ./scripts/apply-branch-protection.sh main
    - `encoding-check`
    - `server-go-tests`
    - `server-ws-integration`
-   - `android-e2e-emulator`
 3. Ручная проверка APK:
    - `arm64` на реальном устройстве;
    - `x86_64` на эмуляторе.

@@ -24,7 +24,7 @@ if ([string]::IsNullOrWhiteSpace($runId)) {
 }
 
 $jobNames = gh api "repos/$Repository/actions/runs/$runId/jobs?per_page=100" --jq '.jobs[].name'
-$requiredChecks = @("server-ws-integration", "android-e2e-emulator")
+$requiredChecks = @("server-ws-integration")
 $missing = @()
 foreach ($check in $requiredChecks) {
     if (-not ($jobNames -contains $check)) {

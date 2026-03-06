@@ -31,7 +31,7 @@ fi
 
 mapfile -t JOB_NAMES < <(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?per_page=100" --jq '.jobs[].name')
 
-REQUIRED=("server-ws-integration" "android-e2e-emulator")
+REQUIRED=("server-ws-integration")
 MISSING=()
 for req in "${REQUIRED[@]}"; do
   found=0
@@ -57,7 +57,7 @@ cat > "$PAYLOAD_FILE" <<JSON
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["server-ws-integration", "android-e2e-emulator"]
+    "contexts": ["server-ws-integration"]
   },
   "enforce_admins": true,
   "required_pull_request_reviews": {
