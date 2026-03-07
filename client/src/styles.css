@@ -3559,6 +3559,8 @@ button.ghost {
 }
 
 .modal.special-choice-modal .modal-body {
+  display: flex;
+  flex-direction: column;
   overflow: auto;
   overflow-x: hidden;
   min-height: 0;
@@ -3566,12 +3568,26 @@ button.ghost {
   padding-right: 4px;
 }
 
+.modal.special-choice-modal select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
 .modal.special-choice-modal .modal-actions {
   position: sticky;
   bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   background: linear-gradient(to top, var(--panel) 78%, color-mix(in srgb, var(--panel) 85%, transparent));
   padding-top: 10px;
   margin-top: 6px;
+}
+
+.modal.special-choice-modal .modal-actions button {
+  flex: 1 1 140px;
+  min-width: 0;
 }
 
 .special-choice-field {
@@ -3588,6 +3604,23 @@ button.ghost {
   line-height: 1.4;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+@media (max-width: 700px) {
+  .modal.special-choice-modal {
+    width: min(760px, 96vw);
+    max-height: calc(100dvh - 24px);
+  }
+
+  .modal.special-choice-modal .modal-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    justify-content: stretch;
+  }
+
+  .modal.special-choice-modal .modal-actions button {
+    width: 100%;
+  }
 }
 
 .rulesButton {

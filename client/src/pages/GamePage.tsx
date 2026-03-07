@@ -344,6 +344,11 @@ export default function GamePage({
   }, [useStructuredPlayerDialog, structuredPlayerGroups, dialogTargetSelection]);
 
   const structuredOptionChoices = structuredSelectedGroup?.options ?? [];
+  const shortenDialogLabel = (value: string, maxLen = 28): string => {
+    const text = value.trim();
+    if (text.length <= maxLen) return text;
+    return `${text.slice(0, maxLen - 1)}…`;
+  };
   const getStructuredOptionLabel = (option: SpecialDialogOption): string => {
     const payload = option.payload ?? {};
     const targetCardLabel =
@@ -354,10 +359,10 @@ export default function GamePage({
       typeof payload.baggageLabel === "string" ? payload.baggageLabel.trim() : "";
 
     if (targetCardLabel && actorCardLabel) {
-      return `Вы: ${actorCardLabel} ⇄ Игрок: ${targetCardLabel}`;
+      return `Вы: ${shortenDialogLabel(actorCardLabel)} ⇄ Игрок: ${shortenDialogLabel(targetCardLabel)}`;
     }
-    if (targetCardLabel) return `Игрок: ${targetCardLabel}`;
-    if (baggageLabel) return `Игрок: ${baggageLabel}`;
+    if (targetCardLabel) return `Игрок: ${shortenDialogLabel(targetCardLabel)}`;
+    if (baggageLabel) return `Игрок: ${shortenDialogLabel(baggageLabel)}`;
     if (option.detail && option.detail.trim().length > 0) return option.detail;
     return option.label;
   };
