@@ -364,6 +364,7 @@ class ServerHostInstrumentedTest {
             .build()
         private val openLatch = CountDownLatch(1)
         private val incoming = LinkedBlockingQueue<JSONObject>()
+        private val backlog = ArrayDeque<JSONObject>()
         private val failure = AtomicReference<Throwable?>(null)
         private var socket: WebSocket? = null
 
@@ -403,30 +404,52 @@ class ServerHostInstrumentedTest {
 
         fun awaitType(type: String, timeoutMs: Long): JSONObject {
             val deadline = System.currentTimeMillis() + timeoutMs
+
+            val backlogIterator = backlog.iterator()
+            while (backlogIterator.hasNext()) {
+                val buffered = backlogIterator.next()
+                val extracted = extractExpectedMessage(type, buffered)
+                if (extracted != null) {
+                    backlogIterator.remove()
+                    return extracted
+                }
+            }
+
             while (System.currentTimeMillis() < deadline) {
                 failure.get()?.let { throw AssertionError("WebSocket failure while waiting for $type", it) }
                 val message = incoming.poll(250, TimeUnit.MILLISECONDS) ?: continue
-                val messageType = message.optString("type")
-                if (messageType == type) {
-                    return message
+                val extracted = extractExpectedMessage(type, message)
+                if (extracted != null) {
+                    return extracted
                 }
-                if (messageType == "statePatch") {
-                    val payload = message.optJSONObject("payload") ?: continue
-                    if (type == "roomState" && payload.has("roomState")) {
-                        return JSONObject().apply {
-                            put("type", "roomState")
-                            put("payload", payload.optJSONObject("roomState") ?: JSONObject())
-                        }
-                    }
-                    if (type == "gameView" && payload.has("gameView")) {
-                        return JSONObject().apply {
-                            put("type", "gameView")
-                            put("payload", payload.optJSONObject("gameView") ?: JSONObject())
-                        }
-                    }
-                }
+                backlog.addLast(message)
             }
             throw AssertionError("Message type $type was not received in ${timeoutMs}ms")
+        }
+
+        private fun extractExpectedMessage(type: String, message: JSONObject): JSONObject? {
+            val messageType = message.optString("type")
+            if (messageType == type) {
+                return message
+            }
+            if (messageType != "statePatch") {
+                return null
+            }
+
+            val payload = message.optJSONObject("payload") ?: return null
+            if (type == "roomState" && payload.has("roomState")) {
+                return JSONObject().apply {
+                    put("type", "roomState")
+                    put("payload", payload.optJSONObject("roomState") ?: JSONObject())
+                }
+            }
+            if (type == "gameView" && payload.has("gameView")) {
+                return JSONObject().apply {
+                    put("type", "gameView")
+                    put("payload", payload.optJSONObject("gameView") ?: JSONObject())
+                }
+            }
+            return null
         }
 
         fun close() {

@@ -46,6 +46,20 @@ interface SpecialDialogState {
   targetPlayerId?: string;
 }
 
+function getDialogTargetPlayerId(option: SpecialDialogOption): string {
+  const raw = option.payload?.targetPlayerId;
+  return typeof raw === "string" ? raw.trim() : "";
+}
+
+function hasStructuredCardChoice(option: SpecialDialogOption): boolean {
+  const payload = option.payload ?? {};
+  return (
+    typeof payload.targetCardId === "string" ||
+    typeof payload.actorCardId === "string" ||
+    typeof payload.baggageCardId === "string"
+  );
+}
+
 const CATEGORY_KEY_TO_RU: Record<string, string> = {
   profession: "Профессия",
   health: "Здоровье",
@@ -249,6 +263,7 @@ export default function GamePage({
   const [autoVoteRound, setAutoVoteRound] = useState<number | null>(null);
   const [specialDialog, setSpecialDialog] = useState<SpecialDialogState | null>(null);
   const [dialogSelection, setDialogSelection] = useState<string>("");
+  const [dialogTargetSelection, setDialogTargetSelection] = useState<string>("");
   const [devRemoveTargetId, setDevRemoveTargetId] = useState<string>("");
   const [devChecks, setDevChecks] = useState<
     Array<{ id: string; label: string; status: "pass" | "fail"; detail?: string }>
@@ -283,9 +298,70 @@ export default function GamePage({
   const specialDialogRef = useRef<SpecialDialogState | null>(null);
   const lastWorldEventRef = useRef<string | null>(null);
   const lastPostGameRef = useRef<number | null>(null);
-
   const you = gameView?.you;
   const publicPlayers = gameView?.public.players ?? [];
+
+  const useStructuredPlayerDialog = useMemo(() => {
+    if (!specialDialog || specialDialog.kind !== "player") return false;
+    const hasTargetPlayerIds = specialDialog.options.some((option) => getDialogTargetPlayerId(option).length > 0);
+    const hasCardChoices = specialDialog.options.some(hasStructuredCardChoice);
+    return hasTargetPlayerIds && hasCardChoices;
+  }, [specialDialog]);
+
+  const structuredPlayerGroups = useMemo(() => {
+    if (!specialDialog || !useStructuredPlayerDialog) return [] as Array<{
+      id: string;
+      label: string;
+      options: SpecialDialogOption[];
+    }>;
+
+    const groups = new Map<string, { id: string; label: string; options: SpecialDialogOption[] }>();
+    specialDialog.options.forEach((option) => {
+      const targetPlayerId = getDialogTargetPlayerId(option);
+      if (!targetPlayerId) return;
+      const player = publicPlayers.find((entry) => entry.playerId === targetPlayerId);
+      const group = groups.get(targetPlayerId);
+      if (group) {
+        group.options.push(option);
+        return;
+      }
+      groups.set(targetPlayerId, {
+        id: targetPlayerId,
+        label: option.label || player?.name || targetPlayerId,
+        options: [option],
+      });
+    });
+
+    return Array.from(groups.values());
+  }, [specialDialog, useStructuredPlayerDialog, publicPlayers]);
+
+  const structuredSelectedGroup = useMemo(() => {
+    if (!useStructuredPlayerDialog || structuredPlayerGroups.length === 0) return null;
+    return (
+      structuredPlayerGroups.find((group) => group.id === dialogTargetSelection) ??
+      structuredPlayerGroups[0]
+    );
+  }, [useStructuredPlayerDialog, structuredPlayerGroups, dialogTargetSelection]);
+
+  const structuredOptionChoices = structuredSelectedGroup?.options ?? [];
+  const getStructuredOptionLabel = (option: SpecialDialogOption): string => {
+    const payload = option.payload ?? {};
+    const targetCardLabel =
+      typeof payload.targetCardLabel === "string" ? payload.targetCardLabel.trim() : "";
+    const actorCardLabel =
+      typeof payload.actorCardLabel === "string" ? payload.actorCardLabel.trim() : "";
+    const baggageLabel =
+      typeof payload.baggageLabel === "string" ? payload.baggageLabel.trim() : "";
+
+    if (targetCardLabel && actorCardLabel) {
+      return `Вы: ${actorCardLabel} ⇄ Игрок: ${targetCardLabel}`;
+    }
+    if (targetCardLabel) return `Игрок: ${targetCardLabel}`;
+    if (baggageLabel) return `Игрок: ${baggageLabel}`;
+    if (option.detail && option.detail.trim().length > 0) return option.detail;
+    return option.label;
+  };
+
   const world = gameView?.world;
   const worldEvent = gameView?.worldEvent;
   const postGame = gameView?.postGame;
@@ -498,6 +574,32 @@ export default function GamePage({
   useEffect(() => {
     specialDialogRef.current = specialDialog;
   }, [specialDialog]);
+
+  useEffect(() => {
+    if (!specialDialog || !useStructuredPlayerDialog) {
+      setDialogTargetSelection("");
+      return;
+    }
+    if (structuredPlayerGroups.length === 0) {
+      setDialogTargetSelection("");
+      return;
+    }
+    setDialogTargetSelection((prev) =>
+      structuredPlayerGroups.some((group) => group.id === prev) ? prev : structuredPlayerGroups[0].id
+    );
+  }, [specialDialog, useStructuredPlayerDialog, structuredPlayerGroups]);
+
+  useEffect(() => {
+    if (!useStructuredPlayerDialog) return;
+    if (structuredOptionChoices.length === 0) {
+      if (dialogSelection) setDialogSelection("");
+      return;
+    }
+    const hasSelected = structuredOptionChoices.some((option) => option.id === dialogSelection);
+    if (!hasSelected) {
+      setDialogSelection(structuredOptionChoices[0].id);
+    }
+  }, [useStructuredPlayerDialog, structuredOptionChoices, dialogSelection]);
   useEffect(() => {
     if (phase !== "reveal" && phase !== "ended") {
       setSelectedCardId(null);
@@ -787,12 +889,14 @@ export default function GamePage({
     targetPlayerId?: string
   ) => {
     setDialogSelection("");
+    setDialogTargetSelection("");
     setSpecialDialog({ kind, specialInstanceId, title, options, description, targetPlayerId });
   };
 
   const closeSpecialDialog = () => {
     setSpecialDialog(null);
     setDialogSelection("");
+    setDialogTargetSelection("");
   };
 
   const hasRevealedCategory = (playerId: string, categoryKey: string) => {
@@ -1122,12 +1226,14 @@ export default function GamePage({
               actorCategoryCards.forEach((actorCard) => {
                 categoryCardOptions.push({
                   id: `${option.id}::${targetCard.instanceId}::${actorCard.instanceId}`,
-                  label: `${option.label} — ${targetCard.label} ⇄ Вы: ${actorCard.label}`,
-                  detail: `Обмен: ${targetCard.label} ⇄ ${actorCard.label}`,
+                  label: option.label,
+                  detail: `Обмен: Вы (${actorCard.label}) ⇄ Игрок (${targetCard.label})`,
                   payload: {
                     targetPlayerId: option.id,
                     targetCardId: targetCard.instanceId,
                     actorCardId: actorCard.instanceId,
+                    targetCardLabel: targetCard.label,
+                    actorCardLabel: actorCard.label,
                   },
                 });
               });
@@ -1135,11 +1241,12 @@ export default function GamePage({
             }
             categoryCardOptions.push({
               id: `${option.id}::${targetCard.instanceId}`,
-              label: `${option.label} — ${targetCard.label}`,
+              label: option.label,
               detail: `Карта категории: ${targetCard.label}`,
               payload: {
                 targetPlayerId: option.id,
                 targetCardId: targetCard.instanceId,
+                targetCardLabel: targetCard.label,
               },
             });
           });
@@ -1192,11 +1299,12 @@ export default function GamePage({
               : baggageLabelRaw || `Карта багажа #${index + 1}`;
             baggageOptions.push({
               id: `${target.playerId}::${baggageCardId}`,
-              label: `${option.label} - ${baggageLabel}`,
-              detail: `Забрать багаж: ${baggageLabel}`,
+              label: option.label,
+              detail: `Забрать у игрока: ${baggageLabel}`,
               payload: {
                 targetPlayerId: target.playerId,
                 baggageCardId,
+                baggageLabel,
               },
             });
           });
@@ -2483,32 +2591,76 @@ export default function GamePage({
         title={specialDialog?.title}
         onClose={closeSpecialDialog}
         dismissible={true}
+        className={useStructuredPlayerDialog ? "special-choice-modal" : undefined}
       >
-        {specialDialog?.description ? <div className="muted">{specialDialog.description}</div> : null}
+        {specialDialog?.description ? (
+          <div className="muted special-choice-description">{specialDialog.description}</div>
+        ) : null}
         {specialDialog && specialDialog.kind !== "none" ? (
           <>
             {specialDialog.options.length === 0 ? (
               <div className="muted">{ru.noTargetCandidates}</div>
             ) : null}
-            <select
-              value={dialogSelection}
-              onChange={(event) => setDialogSelection(event.target.value)}
-              disabled={specialDialog.options.length === 0}
-            >
-              <option value="" disabled>
-                {ru.modalSelect}
-              </option>
-              {specialDialog.options.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
+            {useStructuredPlayerDialog ? (
+              <>
+                <div className="special-choice-field">
+                  <label htmlFor="special-target-select">{ru.playersTitle}</label>
+                  <select
+                    id="special-target-select"
+                    value={dialogTargetSelection}
+                    onChange={(event) => setDialogTargetSelection(event.target.value)}
+                    disabled={structuredPlayerGroups.length === 0}
+                  >
+                    <option value="" disabled>{ru.modalSelect}</option>
+                    {structuredPlayerGroups.map((group) => (
+                      <option key={group.id} value={group.id}>
+                        {group.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="special-choice-field">
+                  <label htmlFor="special-option-select">Вариант</label>
+                  <select
+                    id="special-option-select"
+                    value={dialogSelection}
+                    onChange={(event) => setDialogSelection(event.target.value)}
+                    disabled={structuredOptionChoices.length === 0}
+                  >
+                    <option value="" disabled>
+                      {ru.modalSelect}
+                    </option>
+                    {structuredOptionChoices.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {getStructuredOptionLabel(option)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            ) : (
+              <select
+                value={dialogSelection}
+                onChange={(event) => setDialogSelection(event.target.value)}
+                disabled={specialDialog.options.length === 0}
+              >
+                <option value="" disabled>
+                  {ru.modalSelect}
                 </option>
-              ))}
-            </select>
+                {specialDialog.options.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            )}
             {dialogSelection ? (
               (() => {
-                const selected = specialDialog.options.find((option) => option.id === dialogSelection);
+                const selected =
+                  structuredOptionChoices.find((option) => option.id === dialogSelection) ??
+                  specialDialog.options.find((option) => option.id === dialogSelection);
                 if (!selected?.detail) return null;
-                return <div className="muted">{selected.detail}</div>;
+                return <div className="muted special-choice-description">{selected.detail}</div>;
               })()
             ) : null}
           </>
