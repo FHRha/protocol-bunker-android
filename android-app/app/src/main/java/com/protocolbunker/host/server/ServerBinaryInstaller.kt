@@ -25,13 +25,13 @@ internal object ServerBinaryInstaller {
 
             val supportedAbis = Build.SUPPORTED_ABIS?.toList().orEmpty()
             if (supportedAbis.isEmpty()) {
-                logger("ABI РЅРµ РѕРїСЂРµРґРµР»С‘РЅ: СЃРїРёСЃРѕРє SUPPORTED_ABIS РїСѓСЃС‚")
+                logger("ABI не определён: список SUPPORTED_ABIS пуст")
                 return@withContext false
             }
 
             val selectedAbi = supportedAbis.firstOrNull { hasBundledBinary(context, it) }
             if (selectedAbi == null) {
-                logger("РќРµ РЅР°Р№РґРµРЅ РІСЃС‚СЂРѕРµРЅРЅС‹Р№ Go-Р±РёРЅР°СЂСЊ РїРѕРґ ABI: ${supportedAbis.joinToString()}")
+                logger("Не найден встроенный Go-бинарь под ABI: ${supportedAbis.joinToString()}")
                 return@withContext false
             }
 
@@ -74,12 +74,12 @@ internal object ServerBinaryInstaller {
         if (target.exists()) {
             target.delete()
         }
-        check(temp.renameTo(target)) { "РќРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ Р±РёРЅР°СЂСЊ РІ ${target.absolutePath}" }
+        check(temp.renameTo(target)) { "Не удалось установить бинарь в ${target.absolutePath}" }
         target.setExecutable(true, false)
 
         meta.parentFile?.mkdirs()
         meta.writeText(expectedMeta)
-        logger("Go-Р±РёРЅР°СЂСЊ СѓСЃС‚Р°РЅРѕРІР»РµРЅ РґР»СЏ ABI: $abi")
+        logger("Go-бинарь установлен для ABI: $abi")
         return true
     }
 
@@ -88,7 +88,7 @@ internal object ServerBinaryInstaller {
         val hasClientInApk = hasAssetFile(context, "$RUNTIME_ASSET_ROOT/client/dist/index.html")
         val hasSpecialsInApk = hasAssetFile(context, "$RUNTIME_ASSET_ROOT/scenarios/classic/SPECIAL_CONDITIONS.json")
         if (!hasDecksInApk || !hasClientInApk || !hasSpecialsInApk) {
-            logger("Р’ APK РЅРµ РЅР°Р№РґРµРЅС‹ РёРіСЂРѕРІС‹Рµ СЂРµСЃСѓСЂСЃС‹ (decks/client-dist/scenarios)")
+            logger("В APK не найдены игровые ресурсы (decks/client-dist/scenarios)")
             return false
         }
 
@@ -115,13 +115,13 @@ internal object ServerBinaryInstaller {
         val installedClient = File(runtimeRoot, "client/dist/index.html")
         val installedSpecials = File(runtimeRoot, "scenarios/classic/SPECIAL_CONDITIONS.json")
         if (!installedDecks.isDirectory || !installedClient.isFile || !installedSpecials.isFile) {
-            logger("РќРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ РёРіСЂРѕРІС‹Рµ СЂРµСЃСѓСЂСЃС‹ РІ ${runtimeRoot.absolutePath}")
+            logger("Не удалось установить игровые ресурсы в ${runtimeRoot.absolutePath}")
             return false
         }
 
         runtimeMeta.parentFile?.mkdirs()
         runtimeMeta.writeText(installStamp)
-        logger("РРіСЂРѕРІС‹Рµ СЂРµСЃСѓСЂСЃС‹ СѓСЃС‚Р°РЅРѕРІР»РµРЅС‹: ${runtimeRoot.absolutePath}")
+        logger("Игровые ресурсы установлены: ${runtimeRoot.absolutePath}")
         return true
     }
 
