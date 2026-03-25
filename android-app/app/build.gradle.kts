@@ -261,19 +261,30 @@ android {
     }
 }
 
+fun wireVariantPreBuild(
+    flavorName: String,
+    runtimeTask: Sync,
+    nativeTask: Sync
+) {
+    listOf("Debug", "Release").forEach { buildType ->
+        val taskName = "pre${flavorName}${buildType}Build"
+        tasks.matching { it.name == taskName }.configureEach {
+            dependsOn(syncRuntimeAssetsCommon)
+            dependsOn(runtimeTask)
+            dependsOn(nativeTask)
+        }
+    }
+}
+
 tasks.named("preBuild").configure {
     dependsOn(syncRuntimeAssetsCommon)
-    dependsOn(syncRuntimeAssetsArm64)
-    dependsOn(syncRuntimeAssetsArmv7)
-    dependsOn(syncRuntimeAssetsX86)
-    dependsOn(syncRuntimeAssetsX8664)
-    dependsOn(syncRuntimeAssetsUniversal)
-    dependsOn(syncNativeExecArm64)
-    dependsOn(syncNativeExecArmv7)
-    dependsOn(syncNativeExecX86)
-    dependsOn(syncNativeExecX8664)
-    dependsOn(syncNativeExecUniversal)
 }
+
+wireVariantPreBuild("Arm64", syncRuntimeAssetsArm64, syncNativeExecArm64)
+wireVariantPreBuild("Armv7", syncRuntimeAssetsArmv7, syncNativeExecArmv7)
+wireVariantPreBuild("X86", syncRuntimeAssetsX86, syncNativeExecX86)
+wireVariantPreBuild("X8664", syncRuntimeAssetsX8664, syncNativeExecX8664)
+wireVariantPreBuild("Universal", syncRuntimeAssetsUniversal, syncNativeExecUniversal)
 
 if (!hasReleaseSigning) {
     logger.warn(

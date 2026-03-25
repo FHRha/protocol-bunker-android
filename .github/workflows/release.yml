@@ -13,6 +13,7 @@ concurrency:
 
 jobs:
   metadata:
+    name: Release metadata
     runs-on: ubuntu-latest
     outputs:
       release_tag: ${{ steps.resolve.outputs.release_tag }}
@@ -33,20 +34,26 @@ jobs:
           echo "Version name: $VERSION_NAME"
 
   encoding-check:
+    name: Encoding check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Validate UTF-8 Encoding
         shell: bash
         run: pwsh -File ./scripts/check-encoding.ps1
 
   go-tests:
+    name: Go tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -61,10 +68,13 @@ jobs:
           go test ./...
 
   js-verify-and-client-dist:
+    name: JS verify and client dist
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -74,13 +84,11 @@ jobs:
           cache-dependency-path: |
             shared/package-lock.json
             client/package-lock.json
-
-      - name: Install JS dependencies
+      - name: Install shared and client dependencies
         shell: bash
         run: |
           npm --prefix shared ci --no-audit --no-fund
           npm --prefix client ci --no-audit --no-fund
-          npm --prefix scenarios install --no-audit --no-fund --package-lock=false
 
       - name: Verify generated special-effect contract
         shell: bash
@@ -91,12 +99,6 @@ jobs:
         run: |
           npm --prefix shared run build
           npm --prefix shared run test
-
-      - name: Scenario tests and build
-        shell: bash
-        run: |
-          npm --prefix scenarios run test
-          npm --prefix scenarios run build
 
       - name: Client typecheck and build
         shell: bash
@@ -111,7 +113,36 @@ jobs:
           path: client/dist/**
           if-no-files-found: error
 
+  scenarios-tests:
+    name: Scenarios tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            shared/package-lock.json
+            scenarios/package-lock.json
+
+      - name: Install shared and scenarios dependencies
+        shell: bash
+        run: |
+          npm --prefix shared ci --no-audit --no-fund
+          npm --prefix scenarios ci --no-audit --no-fund
+
+      - name: Run scenario tests
+        shell: bash
+        run: npm --prefix scenarios run test
+
   build-server-binaries:
+    name: Build Android Go binaries
     runs-on: ubuntu-latest
     env:
       PB_VERSION_CODE: ${{ github.run_number }}
@@ -119,6 +150,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -133,11 +166,7 @@ jobs:
         shell: bash
         run: |
           yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0" \
-            "ndk;27.2.12479018"
+          sdkmanager "ndk;27.2.12479018"
 
       - name: Build Go Android ABI binaries
         shell: bash
@@ -149,13 +178,16 @@ jobs:
           name: server-binaries
           path: android-app/app/src/main/assets/server-binaries/**
           if-no-files-found: error
+          compression-level: 0
 
   build-apk-matrix:
+    name: Build APK (${{ matrix.label }})
     needs:
       - metadata
       - encoding-check
       - go-tests
       - js-verify-and-client-dist
+      - scenarios-tests
       - build-server-binaries
     runs-on: ubuntu-latest
     permissions:
@@ -165,22 +197,27 @@ jobs:
       matrix:
         include:
           - flavor: arm64
+            label: ARM64
             gradle_task: assembleArm64Release
             apk_path: android-app/app/build/outputs/apk/arm64/release/app-arm64-release.apk
             abi_dirs: arm64-v8a
           - flavor: armv7
+            label: ARMv7
             gradle_task: assembleArmv7Release
             apk_path: android-app/app/build/outputs/apk/armv7/release/app-armv7-release.apk
             abi_dirs: armeabi-v7a
           - flavor: x86
+            label: x86
             gradle_task: assembleX86Release
             apk_path: android-app/app/build/outputs/apk/x86/release/app-x86-release.apk
             abi_dirs: x86
           - flavor: x8664
+            label: x86_64
             gradle_task: assembleX8664Release
             apk_path: android-app/app/build/outputs/apk/x8664/release/app-x8664-release.apk
             abi_dirs: x86_64
           - flavor: universal
+            label: Universal
             gradle_task: assembleUniversalRelease
             apk_path: android-app/app/build/outputs/apk/universal/release/app-universal-release.apk
             abi_dirs: arm64-v8a,armeabi-v7a,x86,x86_64
@@ -195,6 +232,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Download client dist
         uses: actions/download-artifact@v4
@@ -223,7 +262,6 @@ jobs:
         run: |
           yes | sdkmanager --licenses > /dev/null || true
           sdkmanager \
-            "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
@@ -297,14 +335,18 @@ jobs:
           name: apk-${{ matrix.flavor }}
           path: dist/*.apk
           if-no-files-found: error
+          compression-level: 0
 
   publish-release:
+    name: Publish release
     needs:
       - metadata
       - build-apk-matrix
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Download all APK artifacts
         uses: actions/download-artifact@v4
@@ -388,6 +430,7 @@ jobs:
             dist/SHA256SUMS.txt
             dist/release-manifest.json
           if-no-files-found: error
+          compression-level: 0
 
       - name: Attach artifacts to GitHub Release
         env:
