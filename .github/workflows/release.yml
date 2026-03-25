@@ -17,7 +17,6 @@ jobs:
     outputs:
       release_tag: ${{ steps.resolve.outputs.release_tag }}
       version_name: ${{ steps.resolve.outputs.version_name }}
-      artifact_prefix: ${{ steps.resolve.outputs.artifact_prefix }}
     steps:
       - name: Resolve Version
         id: resolve
@@ -30,7 +29,6 @@ jobs:
           fi
           echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
-          echo "artifact_prefix=protocol-bunker-host-${TAG}" >> "$GITHUB_OUTPUT"
           echo "Release tag: $TAG"
           echo "Version name: $VERSION_NAME"
 
@@ -291,7 +289,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp "${{ matrix.apk_path }}" "dist/${{ needs.metadata.outputs.artifact_prefix }}-app-${{ matrix.flavor }}-release.apk"
+          cp "${{ matrix.apk_path }}" "dist/${{ matrix.flavor }}-protocol-bunker-v${{ needs.metadata.outputs.version_name }}.apk"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -342,8 +340,8 @@ jobs:
           for filename in files:
               matched = False
               for flavor in expected:
-                  token = f"-app-{flavor}-release.apk"
-                  if filename.endswith(token):
+                  token = f"{flavor}-protocol-bunker-v"
+                  if filename.startswith(token) and filename.endswith(".apk"):
                       expected[flavor] = filename
                       matched = True
                       break
@@ -384,7 +382,7 @@ jobs:
       - name: Upload APK bundle artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ needs.metadata.outputs.artifact_prefix }}-bundle
+          name: protocol-bunker-v${{ needs.metadata.outputs.version_name }}-bundle
           path: |
             dist/*.apk
             dist/SHA256SUMS.txt

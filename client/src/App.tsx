@@ -1846,6 +1846,7 @@ export default function App() {
             canRetry={Boolean(intentRef.current)}
             reconnecting={connectionStatus === "reconnecting"}
             onRetry={() => void handleRetry()}
+            onExitToMenu={() => navigate("/")}
           />
         ) : null}
         <AnimatedRouteContainer>
@@ -2066,5 +2067,4 @@ export default function App() {
     </ErrorBoundary>
   );
 }
-
 

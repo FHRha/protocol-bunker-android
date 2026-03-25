@@ -261,6 +261,7 @@ export default function GamePage({
       devCheckMissingHint: (expected: string, actual: string) => gameText.t("devCheckMissingHint", { expected, actual }),
       devCheckEmpty: gameText.t("devCheckEmpty"),
       worldBunkerCard: (index: number) => gameText.t("worldBunkerCard", { index }),
+      worldKindDisaster: gameText.t("worldKindDisaster"),
       unnamedCard: gameText.t("unnamedCard"),
       devPlayersInGame: (count: number) => gameText.t("devPlayersInGame", { count }),
       roundProgressLabel: (round: number, revealed: number, total: number) => gameText.t("roundProgressLabel", { round, revealed, total }),
@@ -1869,7 +1870,7 @@ export default function GamePage({
               revealed={revealedInCategory}
               fullWidth={fullWidth}
               featured={featured}
-              inactive={categoryLocked}
+              disabled={categoryLocked}
               expandable={categoryKey !== DOSSIER_MAIN_CATEGORY_KEY}
               options={options}
               onCardClick={() => {
@@ -3243,6 +3244,5 @@ export default function GamePage({
     </div>
   );
 }
-
 
 
