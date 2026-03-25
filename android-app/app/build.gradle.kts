@@ -28,7 +28,7 @@ fun readIntConfig(key: String, envKey: String, fallback: Int): Int =
 
 val releaseAppId = readConfig("APP_ID", "PB_APP_ID") ?: "com.protocolbunker.host"
 val releaseVersionCode = readIntConfig("VERSION_CODE", "PB_VERSION_CODE", 10000)
-val releaseVersionName = readConfig("VERSION_NAME", "PB_VERSION_NAME") ?: "0.2.2"
+val releaseVersionName = readConfig("VERSION_NAME", "PB_VERSION_NAME") ?: "0.2.6"
 
 val releaseStoreFilePath = readConfig("RELEASE_STORE_FILE", "PB_RELEASE_STORE_FILE")
     ?: readConfig("storeFile", "PB_RELEASE_STORE_FILE")

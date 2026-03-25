@@ -67,9 +67,22 @@ func findDeckByAliases(decks map[string][]assetCard, aliases ...string) string {
 }
 
 func resolveWorldDeckNames(decks map[string][]assetCard) (bunkerDeck, disasterDeck, threatDeck string) {
-	return findDeckByAliases(decks, "бункер", "bunker"),
-		findDeckByAliases(decks, "катастроф", "disaster", "catastroph", "apocalypse"),
-		findDeckByAliases(decks, "угроз", "threat")
+	if _, ok := decks["bunker"]; ok {
+		bunkerDeck = "bunker"
+	} else {
+		bunkerDeck = findDeckByAliases(decks, "????????????", "bunker")
+	}
+	if _, ok := decks["disaster"]; ok {
+		disasterDeck = "disaster"
+	} else {
+		disasterDeck = findDeckByAliases(decks, "??????????????????", "disaster", "catastroph", "apocalypse")
+	}
+	if _, ok := decks["threat"]; ok {
+		threatDeck = "threat"
+	} else {
+		threatDeck = findDeckByAliases(decks, "??????????", "threat")
+	}
+	return bunkerDeck, disasterDeck, threatDeck
 }
 
 func drawWorldMany(
@@ -93,12 +106,15 @@ func drawWorldMany(
 			})
 			continue
 		}
+		imgURL := "/assets/" + card.ID
+		log.Printf("[world] drew %s card: ID=%q, ImgURL=%q", kind, card.ID, imgURL)
 		out = append(out, worldFacedCardView{
 			Kind:        kind,
 			ID:          card.ID,
 			Title:       card.Label,
 			Description: card.Label,
 			ImageID:     card.ID,
+			ImgURL:      imgURL,
 			IsRevealed:  false,
 		})
 	}
@@ -131,6 +147,7 @@ func drawWorldDisaster(
 				Title:       card.Label,
 				Description: card.Label,
 				ImageID:     card.ID,
+				ImgURL:      "/assets/" + card.ID,
 			}
 		}
 		log.Printf("[world] selected disaster %q not found in deck %q, falling back to random", selectedID, deckName)
@@ -152,6 +169,7 @@ func drawWorldDisaster(
 		Title:       card.Label,
 		Description: card.Label,
 		ImageID:     card.ID,
+		ImgURL:      "/assets/" + card.ID,
 	}
 }
 
@@ -203,11 +221,17 @@ func (g *gameSession) buildWorldView() *worldStateView {
 		for _, card := range g.World.Bunker {
 			revealed := card
 			revealed.IsRevealed = true
+			if revealed.ImgURL == "" && revealed.ID != "" {
+				revealed.ImgURL = "/assets/" + revealed.ID
+			}
 			world.Bunker = append(world.Bunker, revealed)
 		}
 		for _, card := range g.World.Threats {
 			revealed := card
 			revealed.IsRevealed = true
+			if revealed.ImgURL == "" && revealed.ID != "" {
+				revealed.ImgURL = "/assets/" + revealed.ID
+			}
 			world.Threats = append(world.Threats, revealed)
 		}
 		return &world
@@ -324,14 +348,14 @@ func (g *gameSession) currentThreatModifier() threatModifierView {
 
 func (g *gameSession) revealWorldThreat(actorID string, index int) gameActionResult {
 	if g.Phase != scenarioPhaseEnded {
-		return gameActionResult{Error: "Угрозы раскрываются в конце игры."}
+		return g.actionErrorLocalized("Threats are revealed at the end of the game.", g.scenarioTextKey("error.threat.revealEndedOnly", "classic.auto.104"), nil)
 	}
 	modifier := g.currentThreatModifier()
 	if index < 0 || index >= modifier.FinalCount {
-		return gameActionResult{Error: "Некорректная карта угроз."}
+		return g.actionErrorLocalized("Invalid threat card.", g.scenarioTextKey("error.threat.invalid", "error.threat.invalid"), nil)
 	}
 	if g.Settings.FinalThreatReveal == "host" && actorID != g.HostID {
-		return gameActionResult{Error: "Только хост может открывать угрозы."}
+		return g.actionErrorLocalized("Only the host can reveal threats.", g.scenarioTextKey("error.threat.hostOnly", "classic.auto.095"), nil)
 	}
 
 	target := &g.World.Threats[index]
@@ -345,28 +369,28 @@ func (g *gameSession) revealWorldThreat(actorID string, index int) gameActionRes
 
 func (g *gameSession) setBunkerOutcome(actorID, outcome string) gameActionResult {
 	if g.Phase != scenarioPhaseEnded || g.PostGame == nil || !g.PostGame.IsActive {
-		return gameActionResult{Error: "Игра ещё не завершена."}
+		return g.actionErrorLocalized("The game has not ended yet.", g.scenarioTextKey("error.game.notEnded", "error.game.notEnded"), nil)
 	}
 	if actorID != g.HostID {
-		return gameActionResult{Error: "Только хост может выбрать исход бункера."}
+		return g.actionErrorLocalized("Only the host can choose the bunker outcome.", g.scenarioTextKey("error.bunkerOutcome.hostOnly", "classic.auto.093"), nil)
 	}
 	if g.PostGame.Outcome != "" {
-		return gameActionResult{Error: "Исход уже выбран."}
+		return g.actionErrorLocalized("Bunker outcome has already been chosen.", g.scenarioTextKey("error.bunkerOutcome.alreadyChosen", "error.bunkerOutcome.alreadyChosen"), nil)
 	}
 	if outcome != "survived" && outcome != "failed" {
-		return gameActionResult{Error: "Некорректный исход."}
+		return g.actionErrorLocalized("Invalid bunker outcome.", g.scenarioTextKey("error.bunkerOutcome.invalid", "error.bunkerOutcome.invalid"), nil)
 	}
 
 	g.PostGame.Outcome = outcome
 	g.PostGame.DecidedBy = actorID
 	g.PostGame.DecidedAt = time.Now().UnixMilli()
 	if outcome == "survived" {
-		g.LastStageText = "Финал: бункер выжил."
+		g.setLastStage("Final: the bunker survived.", g.scenarioTextKey("event.postgame.bunkerSurvived", "classic.auto.105"), nil)
 	} else {
-		g.LastStageText = "Финал: бункер не выжил."
+		g.setLastStage("Final: the bunker did not survive.", g.scenarioTextKey("event.postgame.bunkerFailed", "classic.auto.106"), nil)
 	}
 	return gameActionResult{
 		StateChanged: true,
-		Events:       []gameEvent{g.makeEvent("info", g.LastStageText)},
+		Events:       []gameEvent{g.makeEventLocalized("info", g.LastStageText, g.LastStageKey, g.LastStageVars)},
 	}
 }

@@ -7,25 +7,20 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  build-and-upload:
-    if: ${{ github.event_name == 'release' }}
-    permissions:
-      contents: write
+  metadata:
     runs-on: ubuntu-latest
-    env:
-      PB_VERSION_CODE: ${{ github.run_number }}
-      PB_APP_ID: com.protocolbunker.host
-      SIGNING_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-      SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-
+    outputs:
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      version_name: ${{ steps.resolve.outputs.version_name }}
+      artifact_prefix: ${{ steps.resolve.outputs.artifact_prefix }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Resolve Version
+        id: resolve
         shell: bash
         run: |
           TAG="${{ github.event.release.tag_name }}"
@@ -33,26 +28,110 @@ jobs:
           if [[ -z "$VERSION_NAME" ]]; then
             VERSION_NAME="$TAG"
           fi
-          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
-          echo "PB_VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "release_tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "artifact_prefix=protocol-bunker-host-${TAG}" >> "$GITHUB_OUTPUT"
           echo "Release tag: $TAG"
           echo "Version name: $VERSION_NAME"
+
+  encoding-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate UTF-8 Encoding
+        shell: bash
+        run: pwsh -File ./scripts/check-encoding.ps1
+
+  go-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version-file: server-go/go.mod
+          cache: true
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - name: Run Go Tests
+        shell: bash
+        run: |
+          cd server-go
+          go test ./...
+
+  js-verify-and-client-dist:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          distribution: temurin
-          java-version: '17'
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            shared/package-lock.json
+            client/package-lock.json
+
+      - name: Install JS dependencies
+        shell: bash
+        run: |
+          npm --prefix shared ci --no-audit --no-fund
+          npm --prefix client ci --no-audit --no-fund
+          npm --prefix scenarios install --no-audit --no-fund --package-lock=false
+
+      - name: Verify generated special-effect contract
+        shell: bash
+        run: node ./scripts/generate-special-effect-contract.mjs --check
+
+      - name: Shared build and tests
+        shell: bash
+        run: |
+          npm --prefix shared run build
+          npm --prefix shared run test
+
+      - name: Scenario tests and build
+        shell: bash
+        run: |
+          npm --prefix scenarios run test
+          npm --prefix scenarios run build
+
+      - name: Client typecheck and build
+        shell: bash
+        run: |
+          npm --prefix client run typecheck
+          npm --prefix client run build
+
+      - name: Upload client dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-dist
+          path: client/dist/**
+          if-no-files-found: error
+
+  build-server-binaries:
+    runs-on: ubuntu-latest
+    env:
+      PB_VERSION_CODE: ${{ github.run_number }}
+      PB_APP_ID: com.protocolbunker.host
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server-go/go.mod
+          cache: true
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK/NDK Packages
+      - name: Install Android SDK/NDK packages
         shell: bash
         run: |
           yes | sdkmanager --licenses > /dev/null || true
@@ -62,7 +141,95 @@ jobs:
             "build-tools;35.0.0" \
             "ndk;27.2.12479018"
 
-      - name: Configure Release Signing (optional)
+      - name: Build Go Android ABI binaries
+        shell: bash
+        run: bash ./server-go/scripts/build-android-binaries.sh
+
+      - name: Upload server binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-binaries
+          path: android-app/app/src/main/assets/server-binaries/**
+          if-no-files-found: error
+
+  build-apk-matrix:
+    needs:
+      - metadata
+      - encoding-check
+      - go-tests
+      - js-verify-and-client-dist
+      - build-server-binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: arm64
+            gradle_task: assembleArm64Release
+            apk_path: android-app/app/build/outputs/apk/arm64/release/app-arm64-release.apk
+            abi_dirs: arm64-v8a
+          - flavor: armv7
+            gradle_task: assembleArmv7Release
+            apk_path: android-app/app/build/outputs/apk/armv7/release/app-armv7-release.apk
+            abi_dirs: armeabi-v7a
+          - flavor: x86
+            gradle_task: assembleX86Release
+            apk_path: android-app/app/build/outputs/apk/x86/release/app-x86-release.apk
+            abi_dirs: x86
+          - flavor: x8664
+            gradle_task: assembleX8664Release
+            apk_path: android-app/app/build/outputs/apk/x8664/release/app-x8664-release.apk
+            abi_dirs: x86_64
+          - flavor: universal
+            gradle_task: assembleUniversalRelease
+            apk_path: android-app/app/build/outputs/apk/universal/release/app-universal-release.apk
+            abi_dirs: arm64-v8a,armeabi-v7a,x86,x86_64
+    env:
+      PB_VERSION_CODE: ${{ github.run_number }}
+      PB_APP_ID: com.protocolbunker.host
+      PB_VERSION_NAME: ${{ needs.metadata.outputs.version_name }}
+      SIGNING_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+      SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download client dist
+        uses: actions/download-artifact@v4
+        with:
+          name: client-dist
+          path: client/dist
+
+      - name: Download server binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: server-binaries
+          path: android-app/app/src/main/assets/server-binaries
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Configure release signing
         if: ${{ env.SIGNING_KEYSTORE_B64 != '' }}
         shell: bash
         run: |
@@ -73,111 +240,159 @@ jobs:
           echo "PB_RELEASE_KEY_ALIAS=$SIGNING_KEY_ALIAS" >> "$GITHUB_ENV"
           echo "PB_RELEASE_KEY_PASSWORD=$SIGNING_KEY_PASSWORD" >> "$GITHUB_ENV"
 
-      - name: Smoke Checks (encoding + tests + builds)
-        shell: bash
-        run: bash ./scripts/smoke-release.sh
-
-      - name: Build Go Android ABI Binaries
-        run: bash ./server-go/scripts/build-android-binaries.sh
-
-      - name: Build Release APK
+      - name: Assemble ${{ matrix.flavor }} release APK
         working-directory: android-app
-        run: bash ./gradlew --no-daemon clean assembleRelease
-
-      - name: Validate Release APKs (files + ABI split + unique hashes)
         shell: bash
+        run: bash ./gradlew --no-daemon ${{ matrix.gradle_task }}
+
+      - name: Validate APK file and ABI contents
+        shell: bash
+        env:
+          APK_PATH: ${{ matrix.apk_path }}
+          REQUIRED_ABIS: ${{ matrix.abi_dirs }}
+          FLAVOR: ${{ matrix.flavor }}
         run: |
           python3 - <<'PY'
-          import hashlib
           import os
           import sys
           import zipfile
 
-          expected = {
-              "arm64": ("android-app/app/build/outputs/apk/arm64/release/app-arm64-release.apk", {"arm64-v8a"}),
-              "armv7": ("android-app/app/build/outputs/apk/armv7/release/app-armv7-release.apk", {"armeabi-v7a"}),
-              "x86": ("android-app/app/build/outputs/apk/x86/release/app-x86-release.apk", {"x86"}),
-              "x8664": ("android-app/app/build/outputs/apk/x8664/release/app-x8664-release.apk", {"x86_64"}),
-              "universal": (
-                  "android-app/app/build/outputs/apk/universal/release/app-universal-release.apk",
-                  {"arm64-v8a", "armeabi-v7a", "x86", "x86_64"},
-              ),
-          }
+          apk_path = os.environ["APK_PATH"]
+          required_abis = {x for x in os.environ["REQUIRED_ABIS"].split(",") if x}
+          flavor = os.environ["FLAVOR"]
           abi_set = {"arm64-v8a", "armeabi-v7a", "x86", "x86_64"}
-          by_hash = {}
-          errors = []
 
-          for name, (apk_path, required_abis) in expected.items():
-              if not os.path.isfile(apk_path):
-                  errors.append(f"[{name}] missing file: {apk_path}")
-                  continue
-
-              with zipfile.ZipFile(apk_path, "r") as apk:
-                  present_abis = {
-                      entry.split("/")[1]
-                      for entry in apk.namelist()
-                      if entry.startswith("lib/") and entry.count("/") >= 2
-                  }
-              present_known_abis = present_abis.intersection(abi_set)
-
-              missing = sorted(required_abis.difference(present_known_abis))
-              extras = sorted(present_known_abis.difference(required_abis))
-
-              if missing:
-                  errors.append(f"[{name}] missing ABI dirs in apk: {', '.join(missing)}")
-              if name != "universal" and extras:
-                  errors.append(f"[{name}] unexpected ABI dirs in split apk: {', '.join(extras)}")
-
-              digest = hashlib.sha256(open(apk_path, "rb").read()).hexdigest()
-              if digest in by_hash:
-                  errors.append(f"[{name}] duplicate APK content hash with [{by_hash[digest]}]")
-              by_hash[digest] = name
-
-              size_mb = os.path.getsize(apk_path) / (1024 * 1024)
-              print(f"[{name}] ok | abis={sorted(present_known_abis)} | size={size_mb:.1f}MB | sha256={digest[:12]}...")
-
-          if len(by_hash) != len(expected):
-              errors.append(f"expected {len(expected)} unique APK hashes, got {len(by_hash)}")
-
-          if errors:
-              print("APK validation failed:", file=sys.stderr)
-              for err in errors:
-                  print(f" - {err}", file=sys.stderr)
+          if not os.path.isfile(apk_path):
+              print(f"[{flavor}] missing APK: {apk_path}", file=sys.stderr)
               sys.exit(1)
 
-          print("APK validation passed.")
+          with zipfile.ZipFile(apk_path, "r") as apk:
+              present_abis = {
+                  entry.split("/")[1]
+                  for entry in apk.namelist()
+                  if entry.startswith("lib/") and entry.count("/") >= 2
+              }
+
+          present_known = present_abis.intersection(abi_set)
+          missing = sorted(required_abis.difference(present_known))
+          extras = sorted(present_known.difference(required_abis))
+          if missing:
+              print(f"[{flavor}] missing ABI dirs: {', '.join(missing)}", file=sys.stderr)
+              sys.exit(1)
+          if flavor != "universal" and extras:
+              print(f"[{flavor}] unexpected ABI dirs: {', '.join(extras)}", file=sys.stderr)
+              sys.exit(1)
+
+          size_mb = os.path.getsize(apk_path) / (1024 * 1024)
+          print(f"[{flavor}] ok | abis={sorted(present_known)} | size={size_mb:.1f}MB")
           PY
 
-      - name: Prepare Release Artifacts
+      - name: Prepare artifact
         shell: bash
         run: |
           mkdir -p dist
-          expected_apks=(
-            "android-app/app/build/outputs/apk/arm64/release/app-arm64-release.apk"
-            "android-app/app/build/outputs/apk/armv7/release/app-armv7-release.apk"
-            "android-app/app/build/outputs/apk/x86/release/app-x86-release.apk"
-            "android-app/app/build/outputs/apk/x8664/release/app-x8664-release.apk"
-            "android-app/app/build/outputs/apk/universal/release/app-universal-release.apk"
-          )
-          for apk in "${expected_apks[@]}"; do
-            if [[ ! -f "$apk" ]]; then
-              echo "Missing expected release APK: $apk"
-              find android-app/app/build/outputs/apk -type f -name "*.apk" -print | sort || true
-              exit 1
-            fi
-            base="$(basename "$apk")"
-            cp "$apk" "dist/protocol-bunker-host-${RELEASE_TAG}-${base}"
-          done
+          cp "${{ matrix.apk_path }}" "dist/${{ needs.metadata.outputs.artifact_prefix }}-app-${{ matrix.flavor }}-release.apk"
 
-      - name: Upload CI Artifact
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: protocol-bunker-host-${{ env.RELEASE_TAG }}-apks
+          name: apk-${{ matrix.flavor }}
           path: dist/*.apk
+          if-no-files-found: error
 
-      - name: Attach APKs To GitHub Release
+  publish-release:
+    needs:
+      - metadata
+      - build-apk-matrix
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all APK artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: apk-*
+          merge-multiple: true
+          path: dist
+
+      - name: Validate release set and generate checksums
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import sys
+
+          dist = "dist"
+          files = sorted(
+              f for f in os.listdir(dist)
+              if f.endswith(".apk")
+          )
+          expected = {
+              "arm64": None,
+              "armv7": None,
+              "x86": None,
+              "x8664": None,
+              "universal": None,
+          }
+          manifest = []
+          seen_hashes = {}
+
+          for filename in files:
+              matched = False
+              for flavor in expected:
+                  token = f"-app-{flavor}-release.apk"
+                  if filename.endswith(token):
+                      expected[flavor] = filename
+                      matched = True
+                      break
+              if not matched:
+                  print(f"Unexpected release artifact: {filename}", file=sys.stderr)
+                  sys.exit(1)
+
+          missing = [flavor for flavor, filename in expected.items() if filename is None]
+          if missing:
+              print(f"Missing APK artifacts: {', '.join(missing)}", file=sys.stderr)
+              sys.exit(1)
+
+          sha_lines = []
+          for flavor, filename in expected.items():
+              path = os.path.join(dist, filename)
+              digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
+              if digest in seen_hashes:
+                  print(f"Duplicate APK hash: {filename} == {seen_hashes[digest]}", file=sys.stderr)
+                  sys.exit(1)
+              seen_hashes[digest] = filename
+              size = os.path.getsize(path)
+              manifest.append({
+                  "flavor": flavor,
+                  "file": filename,
+                  "sha256": digest,
+                  "sizeBytes": size,
+              })
+              sha_lines.append(f"{digest}  {filename}")
+
+          with open(os.path.join(dist, "SHA256SUMS.txt"), "w", encoding="utf-8", newline="\n") as fh:
+              fh.write("\n".join(sha_lines) + "\n")
+          with open(os.path.join(dist, "release-manifest.json"), "w", encoding="utf-8", newline="\n") as fh:
+              json.dump(manifest, fh, ensure_ascii=False, indent=2)
+
+          print("Release artifacts validated.")
+          PY
+
+      - name: Upload APK bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.metadata.outputs.artifact_prefix }}-bundle
+          path: |
+            dist/*.apk
+            dist/SHA256SUMS.txt
+            dist/release-manifest.json
+          if-no-files-found: error
+
+      - name: Attach artifacts to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
-        run: |
-          gh release upload "$RELEASE_TAG" dist/*.apk --clobber
+        run: gh release upload "${{ needs.metadata.outputs.release_tag }}" dist/* --clobber

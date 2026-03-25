@@ -73,15 +73,17 @@ func resolveCategoryDeckSlot(category string) (deckSlotConfig, bool) {
 		}
 	}
 
-	for categoryKey, label := range categoryKeyToLabel {
-		if normalizeSpecialKey(label) != normalized && normalizeSpecialKey(categoryKey) != normalized {
+	for categoryKey := range categoryKeyToDeck {
+		if normalizeSpecialKey(categoryKey) != normalized &&
+			normalizeSpecialKey(scenarioCategoryLabel(scenarioClassic, categoryKey)) != normalized &&
+			normalizeSpecialKey(scenarioCategoryLabel(scenarioDevTest, categoryKey)) != normalized {
 			continue
 		}
 		deck := categoryKeyToDeck[categoryKey]
 		if deck == "" {
 			continue
 		}
-		return deckSlotConfig{deck: deck, slot: categoryKeyToSlot[categoryKey]}, true
+		return deckSlotConfig{deck: deck, slot: categorySlotKey(categoryKey)}, true
 	}
 
 	return deckSlotConfig{}, false
@@ -91,7 +93,7 @@ func healthDeckName() string {
 	if len(coreDecks) > 1 {
 		return coreDecks[1]
 	}
-	return categoryKeyToDeck["health"]
+	return "health"
 }
 
 type handCard struct {
@@ -130,6 +132,8 @@ type gameActionResult struct {
 	StateChanged bool
 	Events       []gameEvent
 	Error        string
+	ErrorKey     string
+	ErrorVars    map[string]any
 }
 
 type gameSession struct {
@@ -165,6 +169,8 @@ type gameSession struct {
 	ResolutionNote        string
 	Winners               []string
 	LastStageText         string
+	LastStageKey          string
+	LastStageVars         map[string]any
 	TotalExiles           int
 	EventCounter          int
 	World                 worldStateView
@@ -173,6 +179,8 @@ type gameSession struct {
 	FinalThreats          []string
 	FirstHealthRevealerID string
 	RoundRules            roundRulesPublic
+	ResolutionNoteKey     string
+	ResolutionNoteVars    map[string]any
 	ActiveTimer           *gameTimerState
 	DeckPools             map[string][]assetCard
 	CardCounter           int
@@ -223,6 +231,7 @@ func newGameSession(roomCode, hostID, scenarioID string, settings gameSettings, 
 	if len(sourceSpecials) == 0 {
 		sourceSpecials = implementedSpecialDefinitions
 	}
+	sourceSpecials = localizeSpecialDefinitions(sourceSpecials, scenarioID, settings.CardLocale)
 	session.specialCatalog = cloneSpecialDefinitions(sourceSpecials)
 	session.specialPool = make([]specialDefinition, 0, len(sourceSpecials))
 	for _, def := range sourceSpecials {
@@ -244,7 +253,7 @@ func newGameSession(roomCode, hostID, scenarioID string, settings gameSettings, 
 				CardID:     "",
 				Deck:       deckName,
 				SlotKey:    slot,
-				Label:      "Нет карты",
+				Label:      scenarioCardNoCardLabel(session.Scenario),
 				Revealed:   false,
 				Missing:    true,
 			}
@@ -284,7 +293,10 @@ func newGameSession(roomCode, hostID, scenarioID string, settings gameSettings, 
 	session.VotesRemaining = session.votesForRound(session.Round)
 	session.WorldEvent = nil
 	session.revealNextBunkerCard(session.Round)
-	session.LastStageText = "Раунд 1. Раскрытие карт."
+	session.setLastStage(scenarioText(session.Scenario, "event.roundStart", "Round 1. Reveal phase."), session.scenarioTextKey("event.roundStart", "classic.auto.121"), map[string]any{
+		"round": session.Round,
+		"v1":    session.Round,
+	})
 	session.scheduleRevealTimeoutIfNeeded()
 	return session
 }
@@ -389,13 +401,16 @@ func (g *gameSession) startVoting() {
 			continue
 		}
 		if p.ForcedWastedVoteNext {
-			g.markVoteWasted(p.PlayerID, "Голос потрачен.")
+			g.markVoteWasted(p.PlayerID, scenarioText(g.Scenario, "vote.spent", "Vote spent."))
 			p.ForcedWastedVoteNext = false
 		}
 	}
-	g.ResolutionNote = ""
+	g.setResolutionNote("", "", nil)
 	g.RoundRules.NoTalkUntilVoting = false
-	g.LastStageText = fmt.Sprintf("Раунд %d. Голосование.", g.Round)
+	g.setLastStage(scenarioText(g.Scenario, "event.votingStart", fmt.Sprintf("Round %d. Voting.", g.Round)), g.scenarioTextKey("event.votingStart", "classic.auto.119"), map[string]any{
+		"round": g.Round,
+		"v1":    g.Round,
+	})
 }
 
 func (g *gameSession) finishGame(reason string) gameActionResult {
@@ -420,11 +435,19 @@ func (g *gameSession) finishGame(reason string) gameActionResult {
 	}
 	g.Winners = winners
 	if len(winners) == 0 {
-		g.LastStageText = "Игра завершена."
+		g.setLastStage(scenarioText(g.Scenario, "classic.auto.117", "Game finished."), g.scenarioTextKey("event.gameEnd", "classic.auto.117"), map[string]any{
+			"winners": "",
+			"v1":      "",
+			"v2":      "",
+		})
 	} else {
-		g.LastStageText = fmt.Sprintf("Игра завершена. В бункер попали: %s.", strings.Join(winners, ","))
+		g.setLastStage(scenarioText(g.Scenario, "classic.auto.117", fmt.Sprintf("Game finished. Winners: %s.", strings.Join(winners, ", "))), g.scenarioTextKey("event.gameEnd", "classic.auto.117"), map[string]any{
+			"winners": strings.Join(winners, ", "),
+			"v1":      strings.Join(winners, ", "),
+			"v2":      "",
+		})
 	}
-	event := g.makeEvent("gameEnd", g.LastStageText)
+	event := g.makeEventLocalized("gameEnd", g.LastStageText, g.LastStageKey, g.LastStageVars)
 	if reason != "" {
 		event.Message = fmt.Sprintf("%s (%s)", event.Message, reason)
 	}
@@ -433,11 +456,11 @@ func (g *gameSession) finishGame(reason string) gameActionResult {
 
 func (g *gameSession) startNextRoundOrEnd() gameActionResult {
 	if g.shouldEnd() {
-		return g.finishGame("условия завершения достигнуты")
+		return g.finishGame("Bunker capacity reached.")
 	}
 	nextRound := g.Round + 1
 	if nextRound > len(g.Ruleset.VotesPerRnd) {
-		return g.finishGame("закончились раунды")
+		return g.finishGame("No more rounds available.")
 	}
 
 	g.Round = nextRound
@@ -461,12 +484,15 @@ func (g *gameSession) startNextRoundOrEnd() gameActionResult {
 	g.CurrentTurnID = g.firstAliveID()
 	g.VotesRemaining = g.votesForRound(nextRound)
 	g.LastRevealerID = ""
-	g.ResolutionNote = ""
+	g.setResolutionNote("", "", nil)
 	g.RoundRules = roundRulesPublic{}
-	g.LastStageText = fmt.Sprintf("Раунд %d. Раскрытие карт.", nextRound)
+	g.setLastStage(scenarioText(g.Scenario, "classic.auto.121", fmt.Sprintf("Round %d. Reveal phase.", nextRound)), g.scenarioTextKey("event.roundStart", "classic.auto.121"), map[string]any{
+		"round": nextRound,
+		"v1":    nextRound,
+	})
 	g.scheduleRevealTimeoutIfNeeded()
 
-	event := g.makeEvent("roundStart", g.LastStageText)
+	event := g.makeEventLocalized("roundStart", g.LastStageText, g.LastStageKey, g.LastStageVars)
 	return gameActionResult{StateChanged: true, Events: []gameEvent{event}}
 }
 
@@ -484,7 +510,7 @@ func (g *gameSession) shouldEnd() bool {
 func (g *gameSession) handleAction(actorID, actionType string, payload map[string]any) gameActionResult {
 	player := g.Players[actorID]
 	if player == nil {
-		return gameActionResult{Error: "Игрок не найден."}
+		return g.actionErrorLocalized("Player not found.", g.scenarioTextKey("error.player.notFound", "error.player.notFound"), nil)
 	}
 
 	switch actionType {
@@ -526,21 +552,21 @@ func (g *gameSession) handleAction(actorID, actionType string, payload map[strin
 		targetID, _ := payload["targetPlayerId"].(string)
 		return g.markLeftBunker(targetID)
 	default:
-		return gameActionResult{Error: "Неизвестное действие."}
+		return g.actionErrorLocalized("Unknown action.", g.scenarioTextKey("error.action.unknown", "error.action.unknown"), nil)
 	}
 }
 
 func (g *gameSession) revealCard(actorID, cardID string) gameActionResult {
 	player := g.Players[actorID]
 	if player == nil {
-		return gameActionResult{Error: "Игрок не найден."}
+		return gameActionResult{Error: "Player not found."}
 	}
 	if g.Phase == scenarioPhaseEnded {
 		if g.PostGame == nil || !g.PostGame.IsActive || g.PostGame.Outcome != "" {
-			return gameActionResult{Error: "Игра уже завершена."}
+			return g.actionErrorLocalized("Game has already ended.", g.scenarioTextKey("error.game.alreadyEnded", "error.game.alreadyEnded"), nil)
 		}
 		if player.Status == playerLeftBunker {
-			return gameActionResult{Error: "Вы покинули игру."}
+			return g.actionErrorLocalized("Player already left the bunker.", g.scenarioTextKey("error.player.alreadyLeftBunker", "error.player.alreadyLeftBunker"), nil)
 		}
 		for i := range player.Hand {
 			card := &player.Hand[i]
@@ -548,23 +574,22 @@ func (g *gameSession) revealCard(actorID, cardID string) gameActionResult {
 				continue
 			}
 			if card.Revealed {
-				return gameActionResult{Error: "Карта уже раскрыта."}
+				return g.actionErrorLocalized("This card has already been revealed.", "error.card.alreadyRevealed", nil)
 			}
 			card.Revealed = true
 			return gameActionResult{StateChanged: true}
 		}
-		return gameActionResult{Error: "Карта не найдена."}
+		return g.actionErrorLocalized("Card not found.", "error.card.notFound", nil)
 	}
 	if g.Phase != scenarioPhaseReveal {
-		return gameActionResult{Error: "Сейчас нельзя раскрывать карту."}
+		return g.actionErrorLocalized("You cannot reveal cards right now.", "error.reveal.notNow", nil)
 	}
 	if actorID != g.CurrentTurnID {
-		return gameActionResult{Error: "Сейчас ход другого игрока."}
+		return g.actionErrorLocalized("It is another player's turn right now.", "error.turn.otherPlayer", nil)
 	}
 	if player.Status != playerAlive {
-		return gameActionResult{Error: "Игрок не может выполнить действие."}
+		return g.actionErrorLocalized("You have been excluded from the game.", "error.player.excluded", nil)
 	}
-
 	var targetCard *handCard
 	for i := range player.Hand {
 		card := &player.Hand[i]
@@ -574,10 +599,10 @@ func (g *gameSession) revealCard(actorID, cardID string) gameActionResult {
 		}
 	}
 	if targetCard == nil {
-		return gameActionResult{Error: "Карта не найдена."}
+		return g.actionErrorLocalized("Card not found.", "error.card.notFound", nil)
 	}
 	if targetCard.Revealed {
-		return gameActionResult{Error: "Карта уже раскрыта."}
+		return g.actionErrorLocalized("This card has already been revealed.", "error.card.alreadyRevealed", nil)
 	}
 	if g.RoundRules.ForcedCategory != "" {
 		forced := g.RoundRules.ForcedCategory
@@ -602,61 +627,67 @@ func (g *gameSession) revealCard(actorID, cardID string) gameActionResult {
 			matchesForced = targetCard.Deck == cfg.deck && (cfg.slot == "" || targetCard.SlotKey == cfg.slot)
 		}
 		if hasForcedHidden && !matchesForced {
-			return gameActionResult{Error: fmt.Sprintf("В этом раунде нужно раскрыть карту категории \"%s\".", forced)}
+			return g.actionErrorLocalized(
+				fmt.Sprintf("This round you must reveal a card from category \"%s\".", forced),
+				"error.reveal.forcedCategory",
+				map[string]any{"category": forced},
+			)
 		}
 	}
-
 	targetCard.Revealed = true
 	if targetCard.Deck == healthDeckName() && g.FirstHealthRevealerID == "" {
 		g.FirstHealthRevealerID = actorID
 	}
 	g.RevealedThisRnd[actorID] = true
 	g.LastRevealerID = actorID
-	g.LastStageText = fmt.Sprintf("%s раскрыл карту.", player.Name)
+	g.setLastStage(scenarioText(g.Scenario, "classic.auto.140", fmt.Sprintf("%s revealed a card.", player.Name)), g.scenarioTextKey("event.reveal.card", "classic.auto.140"), map[string]any{
+		"name": player.Name,
+		"v1":   player.Name,
+	})
 	enterResult := g.enterRevealDiscussion()
-	events := []gameEvent{g.makeEvent("info", g.LastStageText)}
+	events := []gameEvent{g.makeEventLocalized("info", g.LastStageText, g.LastStageKey, g.LastStageVars)}
 	events = append(events, enterResult.Events...)
 	return gameActionResult{StateChanged: true, Events: events}
 }
-
 func (g *gameSession) continueRound(actorID string) gameActionResult {
 	if g.Phase == scenarioPhaseEnded {
-		return gameActionResult{Error: "Игра уже завершена."}
+		return g.actionErrorLocalized("Game has already ended.", g.scenarioTextKey("error.game.alreadyEnded", "error.game.alreadyEnded"), nil)
 	}
-
 	if !g.canContinue(actorID) {
-		return gameActionResult{Error: "Недостаточно прав для продолжения."}
+		switch g.Settings.ContinuePermission {
+		case "host_only":
+			return g.actionErrorLocalized("Only the host can continue the turn.", "error.continue.hostOnly", nil)
+		case "revealer_only":
+			return g.actionErrorLocalized("Only the player who revealed the card can continue.", "error.continue.revealerOnly", nil)
+		default:
+			return g.actionErrorLocalized("Cannot continue the turn right now.", "error.continue.notNow", nil)
+		}
 	}
-
 	if g.Phase == scenarioPhaseRevealDiscussion {
 		return g.advanceAfterDiscussion()
 	}
-
 	switch g.Phase {
 	case scenarioPhaseResolution:
 		if g.shouldEnd() {
-			return g.finishGame("условия завершения достигнуты")
+			return g.finishGame("after_resolution")
 		}
 		if g.VotesRemaining > 0 {
 			g.startVoting()
 			return gameActionResult{
 				StateChanged: true,
-				Events:       []gameEvent{g.makeEvent("votingStart", g.LastStageText)},
+				Events:       []gameEvent{g.makeEventLocalized("votingStart", g.LastStageText, g.LastStageKey, g.LastStageVars)},
 			}
 		}
 		return g.startNextRoundOrEnd()
-
 	case scenarioPhaseVoting:
 		if g.VotePhase == votePhaseSpecialWindow {
 			return g.finalizeVoting(actorID)
 		}
-		return gameActionResult{Error: "Сначала завершите голосование."}
-
+		return g.actionErrorLocalized("Cannot continue the turn right now.", "error.continue.notNow", nil)
 	default:
-		return gameActionResult{Error: "Команда недоступна в текущей фазе."}
+		return g.actionErrorLocalized("Cannot continue the turn right now.", "error.continue.notNow", nil)
 	}
 }
-
 func (g *gameSession) canContinue(actorID string) bool {
 	permission := g.Settings.ContinuePermission
 	switch permission {
@@ -676,142 +707,142 @@ func (g *gameSession) canContinue(actorID string) bool {
 
 func (g *gameSession) vote(actorID, targetID string) gameActionResult {
 	if g.Phase != scenarioPhaseVoting || g.VotePhase != votePhaseVoting {
-		return gameActionResult{Error: "Сейчас нет активного голосования."}
+		return g.actionErrorLocalized("There is no voting right now.", "error.voting.notNow", nil)
 	}
 	if actorID == targetID {
-		return gameActionResult{Error: "Нельзя голосовать за себя."}
+		return g.actionErrorLocalized("You cannot vote for yourself.", "error.vote.self", nil)
 	}
 	if !g.VoteCandidates[targetID] {
-		return gameActionResult{Error: "Недопустимый кандидат."}
+		return g.actionErrorLocalized("Invalid candidate.", "error.vote.invalidCandidate", nil)
 	}
 	if perVoter := g.RevoteDisallowByVoter[actorID]; perVoter != nil && perVoter[targetID] {
-		return gameActionResult{Error: "Нельзя голосовать за этого кандидата."}
+		return g.actionErrorLocalized("You cannot vote for this candidate.", "error.vote.disallowedCandidate", nil)
 	}
 	if reason, blocked := g.VoteDisabled[actorID]; blocked {
 		if reason == "" {
-			reason = "Ваш голос заблокирован."
+			return g.actionErrorLocalized("Your vote is blocked.", "error.vote.blocked", nil)
 		}
 		return gameActionResult{Error: reason}
 	}
-
 	actor := g.Players[actorID]
 	target := g.Players[targetID]
 	if actor == nil || target == nil {
-		return gameActionResult{Error: "Игрок не найден."}
+		return gameActionResult{Error: "Player not found."}
 	}
 	if actor.Status != playerAlive {
-		return gameActionResult{Error: "Вы исключены из игры."}
+		return g.actionErrorLocalized("You have been excluded from the game.", "error.player.excluded", nil)
 	}
 	if target.Status != playerAlive {
-		return gameActionResult{Error: "Кандидат не в игре."}
+		return g.actionErrorLocalized("The candidate is not in the game.", "error.vote.candidateNotAlive", nil)
 	}
 	if target.BannedAgainst[actorID] {
-		return gameActionResult{Error: "Вы не можете голосовать против этого игрока."}
+		return g.actionErrorLocalized("You cannot vote against this player.", "error.vote.cannotAgainst", nil)
 	}
 	if _, exists := g.Votes[actorID]; exists {
-		return gameActionResult{Error: "Вы уже проголосовали."}
+		return g.actionErrorLocalized("You have already voted.", "error.vote.alreadySubmitted", nil)
 	}
-
 	g.Votes[actorID] = voteRecord{
 		TargetID:  targetID,
 		Submitted: time.Now().UnixMilli(),
 		IsValid:   true,
 	}
-
 	aliveCount := len(g.aliveIDs())
 	if len(g.Votes) >= aliveCount {
 		return g.enterVoteSpecialWindow()
 	}
 	return gameActionResult{StateChanged: true}
 }
-
 func (g *gameSession) finalizeVoting(actorID string) gameActionResult {
 	if g.Phase != scenarioPhaseVoting {
-		return gameActionResult{Error: "voting is not active"}
+		return g.actionErrorLocalized("Voting has not started.", "error.voting.notStarted", nil)
 	}
 	if g.VotePhase != votePhaseSpecialWindow && g.VotePhase != votePhaseVoting {
-		return gameActionResult{Error: "voting already finalized"}
+		return g.actionErrorLocalized("Voting has already been finalized.", g.scenarioTextKey("error.control.finalizeVoting", "error.control.finalizeVoting"), nil)
 	}
 	if actorID != g.HostID {
-		return gameActionResult{Error: "only CONTROL can finalize voting"}
+		return g.actionErrorLocalized("Only CONTROL can finalize voting.", g.scenarioTextKey("error.control.finalizeVoting", "error.control.finalizeVoting"), nil)
 	}
 	g.clearActiveTimer()
-
 	source := g.currentVoteSource()
 	if len(source) == 0 && len(g.BaseVotes) > 0 {
 		source = g.BaseVotes
 	}
 	g.VoteResults = copyVotes(source)
-
 	_, topCandidates := g.computeVoteTotals(source)
 	if len(topCandidates) > 1 && !g.TieBreakUsed {
 		g.startTieBreakRevote(topCandidates)
 		return gameActionResult{
 			StateChanged: true,
-			Events:       []gameEvent{g.makeEvent("info", g.LastStageText)},
+			Events:       []gameEvent{g.makeEventLocalized("info", g.LastStageText, g.LastStageKey, g.LastStageVars)},
 		}
 	}
-
 	eliminatedID := ""
 	if len(topCandidates) > 0 {
 		eliminatedID = topCandidates[g.rng.Intn(len(topCandidates))]
 	}
-
 	events := make([]gameEvent, 0, 2)
 	if eliminatedID != "" {
 		triggerEvents := g.applyElimination(eliminatedID)
 		if g.LastEliminatedID != "" {
 			name := g.playerName(g.LastEliminatedID)
-			g.ResolutionNote = fmt.Sprintf("Voting result: %s eliminated.", name)
-			events = append(events, g.makeEvent("elimination", g.ResolutionNote))
+			g.setResolutionNote(scenarioText(g.Scenario, "classic.auto.122", fmt.Sprintf("Voting result: %s eliminated.", name)), g.scenarioTextKey("event.voting.eliminated", "classic.auto.122"), map[string]any{
+				"name": name,
+				"v1":   name,
+			})
 		}
 		events = append(events, triggerEvents...)
 	} else {
-		g.ResolutionNote = "Tie: no one eliminated."
+		g.setResolutionNote(scenarioText(g.Scenario, "event.tie.noEliminated", "Tie: no one eliminated."), g.scenarioTextKey("event.tie.noEliminated", "event.tie.noEliminated"), nil)
 		events = append(events, g.makeEvent("info", g.ResolutionNote))
 	}
-
 	g.Phase = scenarioPhaseResolution
 	g.VotePhase = votePhaseResolve
-	g.LastStageText = g.ResolutionNote
+	g.setLastStage(g.ResolutionNote, g.ResolutionNoteKey, g.ResolutionNoteVars)
 	g.Votes = map[string]voteRecord{}
-
 	if g.shouldEnd() {
-		end := g.finishGame("after_voting")
+		end := g.finishGame("Bunker capacity reached.")
 		events = append(events, end.Events...)
 	} else {
 		g.schedulePhaseTimer(timerKindResolutionAuto, 2)
 	}
 	return gameActionResult{StateChanged: true, Events: events}
 }
-
 func (g *gameSession) kickPlayer(targetID string) gameActionResult {
 	player := g.Players[targetID]
 	if player == nil {
-		return gameActionResult{Error: "Игрок не найден."}
+		return g.actionErrorLocalized("Player not found.", g.scenarioTextKey("error.player.notFound", "error.player.notFound"), nil)
 	}
 	if player.Status != playerAlive {
-		return gameActionResult{Error: "Игрок уже неактивен."}
+		return g.actionErrorLocalized("Player is already excluded.", g.scenarioTextKey("error.player.excluded", "error.player.excluded"), nil)
 	}
 	triggerEvents := g.applyElimination(targetID)
-	g.ResolutionNote = fmt.Sprintf("Игрок %s исключён вручную.", player.Name)
+	g.setResolutionNote(
+		fmt.Sprintf("%s was eliminated.", player.Name),
+		g.scenarioTextKey("event.elimination.resolution", "event.elimination.resolution"),
+		map[string]any{"name": player.Name},
+	)
 	g.removeFromVoting(targetID)
 	if g.CurrentTurnID == targetID {
-		g.CurrentTurnID = g.nextUnrevealedAliveAfter(targetID)
+		next := g.nextUnrevealedAliveAfter(targetID)
+		if next == "" {
+			next = g.firstAliveID()
+		}
+		g.CurrentTurnID = next
 	}
+	eliminationEvent := g.makeEventLocalized("elimination", g.ResolutionNote, g.ResolutionNoteKey, g.ResolutionNoteVars)
 	if g.shouldEnd() {
-		end := g.finishGame("ручное исключение")
+		end := g.finishGame("Bunker capacity reached.")
 		return gameActionResult{
 			StateChanged: true,
 			Events: append(
-				append([]gameEvent{g.makeEvent("elimination", g.ResolutionNote)}, triggerEvents...),
+				append([]gameEvent{eliminationEvent}, triggerEvents...),
 				end.Events...,
 			),
 		}
 	}
 	return gameActionResult{
 		StateChanged: true,
-		Events:       append([]gameEvent{g.makeEvent("elimination", g.ResolutionNote)}, triggerEvents...),
+		Events:       append([]gameEvent{eliminationEvent}, triggerEvents...),
 	}
 }
 
@@ -824,7 +855,7 @@ func (g *gameSession) drawInitialHandForPlayer(playerID string) []handCard {
 				CardID:     "",
 				Deck:       deckName,
 				SlotKey:    slot,
-				Label:      "Нет карты",
+				Label:      scenarioCardNoCardLabel(g.Scenario),
 				Revealed:   false,
 				Missing:    true,
 			}
@@ -850,7 +881,7 @@ func (g *gameSession) drawInitialHandForPlayer(playerID string) []handCard {
 
 func (g *gameSession) devAddPlayer(name string) gameActionResult {
 	if !g.IsDev {
-		return gameActionResult{Error: "DEV-режим доступен только в сценарии dev_test."}
+		return gameActionResult{Error: "DEV actions are only available in dev_test."}
 	}
 	g.DevBotCounter++
 	playerID := fmt.Sprintf("dev-%s-%d", strings.ToLower(g.RoomCode), g.DevBotCounter)
@@ -859,7 +890,7 @@ func (g *gameSession) devAddPlayer(name string) gameActionResult {
 		playerID = fmt.Sprintf("dev-%s-%d", strings.ToLower(g.RoomCode), g.DevBotCounter)
 	}
 
-	fallbackName := fmt.Sprintf("DEV Игрок %d", g.DevBotCounter)
+	fallbackName := fmt.Sprintf("%s %d", scenarioBotPrefix(g.Scenario), g.DevBotCounter)
 	displayName := sanitizeHumanText(strings.TrimSpace(name), fallbackName)
 	newPlayer := &gamePlayer{
 		PlayerID:                  playerID,
@@ -883,13 +914,18 @@ func (g *gameSession) devAddPlayer(name string) gameActionResult {
 	}
 	return gameActionResult{
 		StateChanged: true,
-		Events:       []gameEvent{g.makeEvent("info", fmt.Sprintf("DEV: добавлен игрок %s.", displayName))},
+		Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.playerAdded", fmt.Sprintf("DEV: Player %s added.", displayName)),
+			"event.playerAdded",
+			map[string]any{"name": displayName},
+		)},
 	}
 }
 
 func (g *gameSession) devRemovePlayer(targetID string) gameActionResult {
 	if !g.IsDev {
-		return gameActionResult{Error: "DEV-действие доступно только в dev_test."}
+		return gameActionResult{Error: "DEV actions are only available in dev_test."}
 	}
 
 	removeID := strings.TrimSpace(targetID)
@@ -904,11 +940,15 @@ func (g *gameSession) devRemovePlayer(targetID string) gameActionResult {
 		}
 	}
 	if removeID == "" {
-		return gameActionResult{Error: "Нет игрока для удаления."}
+		return g.actionErrorLocalized("No player available for removal.", g.scenarioTextKey("error.removePlayer.none", ""), nil)
 	}
+
 	target := g.Players[removeID]
 	if target == nil {
-		return gameActionResult{Error: "Игрок не найден."}
+		return gameActionResult{Error: "Player not found."}
+	}
+	if removeID == g.HostID {
+		return gameActionResult{Error: "Cannot remove the host."}
 	}
 
 	delete(g.Players, removeID)
@@ -929,9 +969,14 @@ func (g *gameSession) devRemovePlayer(targetID string) gameActionResult {
 		g.CurrentTurnID = next
 	}
 
-	events := []gameEvent{g.makeEvent("info", fmt.Sprintf("Удалён игрок %s.", target.Name))}
+	events := []gameEvent{g.makeEventLocalized(
+		"info",
+		scenarioText(g.Scenario, "event.playerRemoved", fmt.Sprintf("DEV: Player %s removed.", target.Name)),
+		"event.playerRemoved",
+		map[string]any{"name": target.Name},
+	)}
 	if g.shouldEnd() {
-		end := g.finishGame("DEV: удаление игрока")
+		end := g.finishGame("Bunker capacity reached.")
 		events = append(events, end.Events...)
 	}
 	return gameActionResult{StateChanged: true, Events: events}
@@ -940,18 +985,18 @@ func (g *gameSession) devRemovePlayer(targetID string) gameActionResult {
 func (g *gameSession) markLeftBunker(targetID string) gameActionResult {
 	targetID = strings.TrimSpace(targetID)
 	if targetID == "" {
-		return gameActionResult{Error: "Нужно указать targetPlayerId."}
+		return g.actionErrorLocalized("Player not found.", g.scenarioTextKey("error.player.notFound", "error.player.notFound"), nil)
 	}
 	player := g.Players[targetID]
 	if player == nil {
-		return gameActionResult{Error: "Игрок не найден."}
+		return g.actionErrorLocalized("Player not found.", g.scenarioTextKey("error.player.notFound", "error.player.notFound"), nil)
 	}
 	if player.Status == playerLeftBunker {
-		return gameActionResult{Error: "Игрок уже покинул бункер."}
+		return g.actionErrorLocalized("Player already left the bunker.", g.scenarioTextKey("error.player.alreadyLeftBunker", "error.player.alreadyLeftBunker"), nil)
 	}
 
-	wasAlive := player.Status == playerAlive
 	player.Status = playerLeftBunker
+	delete(g.RevealedThisRnd, targetID)
 	g.removeFromVoting(targetID)
 	if g.CurrentTurnID == targetID {
 		next := g.nextUnrevealedAliveAfter(targetID)
@@ -960,24 +1005,24 @@ func (g *gameSession) markLeftBunker(targetID string) gameActionResult {
 		}
 		g.CurrentTurnID = next
 	}
-	events := []gameEvent{g.makeEvent("playerLeftBunker", fmt.Sprintf("Игрок %s покинул бункер.", player.Name))}
 
-	if wasAlive {
-		g.TotalExiles++
-		if g.VotesRemaining > 0 {
-			g.VotesRemaining--
-		}
-	}
+	events := []gameEvent{g.makeEventLocalized(
+		"playerLeftBunker",
+		scenarioText(g.Scenario, "event.player.leftBunker", fmt.Sprintf("%s left the bunker.", player.Name)),
+		g.scenarioTextKey("event.player.leftBunker", "event.player.leftBunker"),
+		map[string]any{"name": player.Name},
+	)}
 
-	if g.Phase == scenarioPhaseVoting && wasAlive {
-		g.clearActiveTimer()
-		g.Phase = scenarioPhaseResolution
-		g.VotePhase = votePhaseResolve
-		g.ResolutionNote = fmt.Sprintf("Голосование пропущено: %s покинул игру.", player.Name)
-		g.LastStageText = g.ResolutionNote
-		events = append(events, g.makeEvent("info", g.ResolutionNote))
+	if g.Phase == scenarioPhaseResolution {
+		g.setResolutionNote(
+			scenarioText(g.Scenario, "event.player.leftBunker", fmt.Sprintf("%s left the bunker.", player.Name)),
+			g.scenarioTextKey("event.player.leftBunker", "event.player.leftBunker"),
+			map[string]any{"name": player.Name},
+		)
+		g.setLastStage(g.ResolutionNote, g.ResolutionNoteKey, g.ResolutionNoteVars)
+		events = append(events, g.makeEventLocalized("info", g.ResolutionNote, g.ResolutionNoteKey, g.ResolutionNoteVars))
 		if g.shouldEnd() {
-			end := g.finishGame("после выхода игрока")
+			end := g.finishGame("Bunker capacity reached.")
 			events = append(events, end.Events...)
 		} else {
 			g.schedulePhaseTimer(timerKindResolutionAuto, 2)
@@ -986,32 +1031,103 @@ func (g *gameSession) markLeftBunker(targetID string) gameActionResult {
 	}
 
 	if g.shouldEnd() {
-		end := g.finishGame("после выхода игрока")
+		end := g.finishGame("Bunker capacity reached.")
 		events = append(events, end.Events...)
 	}
 	return gameActionResult{StateChanged: true, Events: events}
 }
 func (g *gameSession) makeEvent(kind, message string) gameEvent {
+	return g.makeEventLocalized(kind, message, "", nil)
+}
+func (g *gameSession) actionErrorLocalized(fallback, key string, vars map[string]any) gameActionResult {
+	result := gameActionResult{Error: fallback}
+	if key == "" {
+		return result
+	}
+	if g.scenarioSupportsLocalizedScenarioText() {
+		result.ErrorKey = key
+		result.ErrorVars = cloneLocalizedVars(vars)
+	}
+	return result
+}
+
+func (g *gameSession) scenarioTextKey(devKey, classicKey string) string {
+	switch g.Scenario {
+	case scenarioClassic:
+		return classicKey
+	case scenarioDevTest:
+		return devKey
+	default:
+		return ""
+	}
+}
+
+func (g *gameSession) makeEventLocalized(kind, message, messageKey string, messageVars map[string]any) gameEvent {
 	g.EventCounter++
 	safeMessage := sanitizeHumanText(message, defaultEventMessage(kind))
-	return gameEvent{
-		ID:        fmt.Sprintf("%s-%d-%d", g.RoomCode, time.Now().UnixMilli(), g.EventCounter),
-		Kind:      kind,
-		Message:   safeMessage,
-		CreatedAt: time.Now().UnixMilli(),
+	if !g.scenarioSupportsLocalizedScenarioText() {
+		messageKey = ""
+		messageVars = nil
 	}
+	return gameEvent{
+		ID:          fmt.Sprintf("%s-%d-%d", g.RoomCode, time.Now().UnixMilli(), g.EventCounter),
+		Kind:        kind,
+		Message:     safeMessage,
+		MessageKey:  messageKey,
+		MessageVars: cloneLocalizedVars(messageVars),
+		CreatedAt:   time.Now().UnixMilli(),
+	}
+}
+
+func (g *gameSession) scenarioSupportsLocalizedScenarioText() bool {
+	return g.Scenario == scenarioClassic || g.Scenario == scenarioDevTest
+}
+
+func cloneLocalizedVars(vars map[string]any) map[string]any {
+	if len(vars) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(vars))
+	for key, value := range vars {
+		out[key] = value
+	}
+	return out
+}
+
+func (g *gameSession) setLastStage(text, key string, vars map[string]any) {
+	g.LastStageText = text
+	if !g.scenarioSupportsLocalizedScenarioText() {
+		g.LastStageKey = ""
+		g.LastStageVars = nil
+		return
+	}
+	g.LastStageKey = key
+	g.LastStageVars = cloneLocalizedVars(vars)
+}
+
+func (g *gameSession) setResolutionNote(text, key string, vars map[string]any) {
+	g.ResolutionNote = text
+	if !g.scenarioSupportsLocalizedScenarioText() {
+		g.ResolutionNoteKey = ""
+		g.ResolutionNoteVars = nil
+		return
+	}
+	g.ResolutionNoteKey = key
+	g.ResolutionNoteVars = cloneLocalizedVars(vars)
 }
 
 func (g *gameSession) buildGameView(room *room, playerID string) gameView {
 	view := gameView{
-		Phase:      g.Phase,
-		Round:      g.Round,
-		Categories: append([]string(nil), categoryOrder...),
-		LastStage:  sanitizeHumanText(g.LastStageText, defaultStageMessage(g.Round)),
-		Ruleset:    g.Ruleset,
-		World:      g.buildWorldView(),
-		WorldEvent: g.WorldEvent,
-		PostGame:   g.PostGame,
+		Phase:         g.Phase,
+		Round:         g.Round,
+		Categories:    append([]string(nil), categoryOrder...),
+		LastStage:     sanitizeHumanText(g.LastStageText, defaultStageMessage(g.Round)),
+		LastStageKey:  g.LastStageKey,
+		LastStageVars: cloneLocalizedVars(g.LastStageVars),
+		Ruleset:       g.Ruleset,
+		World:         g.buildWorldView(),
+		WorldEvent:    g.WorldEvent,
+		PostGame:      g.PostGame,
 	}
 
 	you := g.Players[playerID]
@@ -1022,11 +1138,16 @@ func (g *gameSession) buildGameView(room *room, playerID string) gameView {
 	view.You.Name = you.Name
 	view.You.Hand = make([]cardRef, 0, len(you.Hand))
 	for _, card := range you.Hand {
+		imgURL := ""
+		if card.CardID != "" {
+			imgURL = "/assets/" + card.CardID
+		}
 		view.You.Hand = append(view.You.Hand, cardRef{
 			ID:       card.CardID,
 			Deck:     card.Deck,
 			Instance: card.InstanceID,
 			Label:    card.Label,
+			ImgURL:   imgURL,
 			Missing:  card.Missing,
 			Revealed: card.Revealed,
 		})
@@ -1051,11 +1172,13 @@ func (g *gameSession) buildGameView(room *room, playerID string) gameView {
 	view.Public.LastEliminated = g.LastEliminatedID
 	view.Public.Winners = append([]string(nil), g.Winners...)
 	view.Public.ResolutionNote = sanitizeHumanText(g.ResolutionNote, "Voting results updated.")
+	view.Public.ResolutionNoteKey = g.ResolutionNoteKey
+	view.Public.ResolutionNoteVars = cloneLocalizedVars(g.ResolutionNoteVars)
 	if g.RoundRules.NoTalkUntilVoting || g.RoundRules.ForcedCategory != "" {
 		rulesCopy := g.RoundRules
 		if rulesCopy.ForcedCategory != "" {
 			if key := resolveCategoryKey(rulesCopy.ForcedCategory); key != "" {
-				rulesCopy.ForcedCategory = categoryKeyToLabel[key]
+				rulesCopy.ForcedCategory = canonicalCategoryKey(key)
 			} else {
 				if looksLikeMojibake(rulesCopy.ForcedCategory) {
 					rulesCopy.ForcedCategory = ""
@@ -1172,6 +1295,9 @@ func (g *gameSession) buildVotesPublic() []votePublic {
 				TargetID:   info.TargetID,
 				TargetName: sanitizeHumanText(targetName, "Unknown player"),
 				Status:     "voted",
+				ReasonCode: g.inferVoteReasonCode(playerID, info),
+				ReasonKey:  g.inferVoteReasonKey(playerID, info),
+				ReasonVars: g.inferVoteReasonVars(),
 				Submitted:  info.Submitted,
 			})
 			continue
@@ -1181,10 +1307,98 @@ func (g *gameSession) buildVotesPublic() []votePublic {
 			VoterName: sanitizeHumanText(player.Name, "Player"),
 			Status:    "invalid",
 			Reason:    sanitizeHumanText(info.ReasonText, "Vote rejected."),
-			Submitted: info.Submitted,
+			ReasonKey: g.inferVoteReasonKey(playerID, info),
+			ReasonCode: g.inferVoteReasonCode(
+				playerID,
+				info,
+			),
+			ReasonVars: g.inferVoteReasonVars(),
+			Submitted:  info.Submitted,
 		})
 	}
 	return out
+}
+
+func (g *gameSession) inferVoteReasonCode(playerID string, info effectiveVoteRecord) string {
+	if info.Status == "blocked" {
+		normalized := strings.ToLower(strings.TrimSpace(info.ReasonText))
+		switch {
+		case strings.Contains(normalized, "vote.blocked.byspecial"),
+			strings.Contains(normalized, "blocked by special"),
+			strings.Contains(normalized, "vote blocked"):
+			return "VOTE_BLOCKED"
+		case strings.Contains(normalized, "vote.spent.byspecial"),
+			strings.Contains(normalized, "spent by special"),
+			strings.Contains(normalized, "vote spent"),
+			strings.Contains(normalized, "spent"):
+			return "VOTE_SPENT"
+		}
+	}
+	if info.Status == "voted" {
+		if g.AutoSelfVoteVoters[playerID] && info.TargetID == playerID {
+			return "VOTE_FORCED_SELF"
+		}
+		return ""
+	}
+	if g.AutoSelfVoteVoters[playerID] {
+		return "VOTE_FORCED_SELF"
+	}
+	if g.AutoWastedVoters[playerID] {
+		return "VOTE_SPENT"
+	}
+	if _, blocked := g.VoteDisabled[playerID]; blocked {
+		normalized := strings.ToLower(strings.TrimSpace(info.ReasonText))
+		switch {
+		case strings.Contains(normalized, "vote.blocked.byspecial"),
+			strings.Contains(normalized, "blocked by special"),
+			strings.Contains(normalized, "vote blocked"):
+			return "VOTE_BLOCKED"
+		case strings.Contains(normalized, "vote.spent.byspecial"),
+			strings.Contains(normalized, "spent by special"),
+			strings.Contains(normalized, "vote spent"),
+			strings.Contains(normalized, "spent"):
+			return "VOTE_SPENT"
+		}
+	}
+	if info.TargetID != "" {
+		if disallowed := g.RevoteDisallowByVoter[playerID]; len(disallowed) > 0 && disallowed[info.TargetID] {
+			return "VOTE_TARGET_DISALLOWED"
+		}
+		if g.DoubleAgainst != "" && info.TargetID == g.DoubleAgainst {
+			return "VOTE_BANNED_AGAINST_TARGET"
+		}
+	}
+	normalized := strings.ToLower(strings.TrimSpace(info.ReasonText))
+	switch {
+	case strings.Contains(normalized, "cannot vote against this player"),
+		strings.Contains(normalized, "vote disallowed"),
+		strings.Contains(normalized, "target disallowed"):
+		return "VOTE_BANNED_AGAINST_TARGET"
+	default:
+		return ""
+	}
+}
+
+func (g *gameSession) inferVoteReasonKey(playerID string, info effectiveVoteRecord) string {
+	if !g.scenarioSupportsLocalizedScenarioText() {
+		return ""
+	}
+	switch g.inferVoteReasonCode(playerID, info) {
+	case "VOTE_BLOCKED":
+		return "error.vote.blocked"
+	case "VOTE_TARGET_DISALLOWED":
+		return "error.vote.disallowedCandidate"
+	case "VOTE_TARGET_UNAVAILABLE":
+		return "error.vote.candidateNotAlive"
+	case "VOTE_BANNED_AGAINST_TARGET":
+		return "error.vote.cannotAgainst"
+	default:
+		return ""
+	}
+}
+
+func (g *gameSession) inferVoteReasonVars() map[string]any {
+	return nil
 }
 
 func (g *gameSession) buildPublicPlayers(room *room) []publicPlayerView {
@@ -1237,7 +1451,13 @@ func (g *gameSession) buildPublicPlayers(room *room) []publicPlayerView {
 				Deck:     card.Deck,
 				Instance: card.InstanceID,
 				Label:    card.Label,
-				Missing:  card.Missing,
+				ImgURL: func() string {
+					if card.CardID == "" {
+						return ""
+					}
+					return "/assets/" + card.CardID
+				}(),
+				Missing: card.Missing,
 			})
 		}
 		public.RevealedCount = revealedCount
@@ -1306,7 +1526,7 @@ func (g *gameSession) buildPublicCategories(player *gamePlayer) []publicCategory
 			if !g.IsDev && !card.Revealed {
 				hiddenCards = append(hiddenCards, publicCategoryCard{
 					InstanceID:   card.InstanceID,
-					Label:        "Скрытая карта",
+					Label:        scenarioCardNoCardLabel(g.Scenario),
 					Revealed:     false,
 					Hidden:       true,
 					BackCategory: backCategory,
@@ -1362,10 +1582,16 @@ func (g *gameSession) buildYouCategories(player *gamePlayer) []youCategorySlot {
 			if cfg.slot != "" && card.SlotKey != cfg.slot {
 				continue
 			}
+			imgURL := ""
+			if card.CardID != "" {
+				imgURL = "/assets/" + card.CardID
+			}
 			cards = append(cards, youCategoryCard{
 				InstanceID: card.InstanceID,
 				Label:      card.Label,
+				Deck:       cfg.deck,
 				Revealed:   card.Revealed,
+				ImgURL:     imgURL,
 			})
 		}
 		sort.Slice(cards, func(i, j int) bool {

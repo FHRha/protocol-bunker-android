@@ -94,8 +94,6 @@ Workflow'ы:
   - строгая проверка кодировок (UTF-8 + поиск mojibake);
   - полный `go test ./...` (включая per-card тесты спецкарт);
   - быстрый WS integration test на Go сервере.
-- `.github/workflows/nightly.yml` — ночной прогон:
-  - `scripts/smoke-release.sh`.
 - `.github/workflows/release.yml` — только на опубликованный релиз:
   - сборка и загрузка APK в GitHub Release.
 
@@ -124,20 +122,6 @@ Workflow: `.github/workflows/release.yml`
 - `ANDROID_KEY_PASSWORD`
 
 Если эти secrets не заданы, релиз соберется с debug-подписью (только для тестов).
-
-## Branch protection для main
-
-Автоматическое применение через `gh` CLI:
-
-```powershell
-.\scripts\apply-branch-protection.ps1 -Branch main
-```
-
-```bash
-bash ./scripts/apply-branch-protection.sh main
-```
-
-Скрипт берет последние успешные CI job'ы и делает их обязательными для `main`.
 
 ## Release Checklist (обязательно перед тегом)
 

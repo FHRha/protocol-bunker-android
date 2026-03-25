@@ -28,25 +28,18 @@ func loadAssetCatalog(assetsRoot string) (assetCatalog, error) {
 	}
 
 	catalog := assetCatalog{Decks: map[string][]assetCard{}}
-	deckEntries, err := os.ReadDir(decksRoot)
+	deckDirs, err := resolveDeckDirectories(decksRoot)
 	if err != nil {
-		return assetCatalog{}, fmt.Errorf("failed reading decks: %w", err)
+		return assetCatalog{}, err
 	}
 
-	for _, deckEntry := range deckEntries {
-		if !deckEntry.IsDir() {
-			continue
-		}
-		deckName := deckEntry.Name()
-		if strings.EqualFold(deckName, "TEMP") {
-			continue
-		}
-		deckDir := filepath.Join(decksRoot, deckName)
-		files, err := os.ReadDir(deckDir)
+	for _, deckDir := range deckDirs {
+		files, err := os.ReadDir(deckDir.fullPath)
 		if err != nil {
 			continue
 		}
 
+		deckName := deckDir.deckID
 		cards := make([]assetCard, 0, len(files))
 		for _, file := range files {
 			if file.IsDir() {
@@ -56,7 +49,7 @@ func loadAssetCatalog(assetsRoot string) (assetCatalog, error) {
 			if _, ok := cardFileExts[ext]; !ok {
 				continue
 			}
-			relative := filepath.ToSlash(filepath.Join("decks", deckName, file.Name()))
+			relative := filepath.ToSlash(filepath.Join(deckDir.relativeRoot, file.Name()))
 			label := strings.TrimSpace(strings.TrimSuffix(file.Name(), ext))
 			if label == "" {
 				label = file.Name()
@@ -74,6 +67,110 @@ func loadAssetCatalog(assetsRoot string) (assetCatalog, error) {
 	}
 
 	return catalog, nil
+}
+
+type assetDeckDir struct {
+	deckID       string
+	fullPath     string
+	relativeRoot string
+}
+
+func resolveDeckDirectories(decksRoot string) ([]assetDeckDir, error) {
+	layout1xRoot := filepath.Join(decksRoot, "1x")
+	if info, err := os.Stat(layout1xRoot); err == nil && info.IsDir() {
+		return resolveNestedDeckDirectories(decksRoot, layout1xRoot)
+	}
+	return resolveFlatDeckDirectories(decksRoot)
+}
+
+func resolveNestedDeckDirectories(decksRoot, layoutRoot string) ([]assetDeckDir, error) {
+	localeEntries, err := os.ReadDir(layoutRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed reading nested decks layout: %w", err)
+	}
+
+	localeName := ""
+	for _, preferred := range []string{"ru", "en"} {
+		for _, entry := range localeEntries {
+			if entry.IsDir() && strings.EqualFold(entry.Name(), preferred) {
+				localeName = entry.Name()
+				break
+			}
+		}
+		if localeName != "" {
+			break
+		}
+	}
+	if localeName == "" {
+		for _, entry := range localeEntries {
+			if entry.IsDir() {
+				localeName = entry.Name()
+				break
+			}
+		}
+	}
+	if localeName == "" {
+		return nil, fmt.Errorf("no locale directories found in %s", layoutRoot)
+	}
+
+	localeRoot := filepath.Join(layoutRoot, localeName)
+	deckEntries, err := os.ReadDir(localeRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed reading locale deck directories: %w", err)
+	}
+
+	dirs := make([]assetDeckDir, 0, len(deckEntries))
+	for _, deckEntry := range deckEntries {
+		if !deckEntry.IsDir() || strings.EqualFold(deckEntry.Name(), "TEMP") {
+			continue
+		}
+		deckID := resolveDeckIDByLabel(deckEntry.Name())
+		if deckID == "" {
+			continue
+		}
+		relativeRoot, err := filepath.Rel(filepath.Dir(decksRoot), filepath.Join(localeRoot, deckEntry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("failed building relative asset path for %s: %w", deckEntry.Name(), err)
+		}
+		dirs = append(dirs, assetDeckDir{
+			deckID:       deckID,
+			fullPath:     filepath.Join(localeRoot, deckEntry.Name()),
+			relativeRoot: relativeRoot,
+		})
+	}
+
+	sort.Slice(dirs, func(i, j int) bool {
+		return dirs[i].deckID < dirs[j].deckID
+	})
+	return dirs, nil
+}
+
+func resolveFlatDeckDirectories(decksRoot string) ([]assetDeckDir, error) {
+	deckEntries, err := os.ReadDir(decksRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed reading decks: %w", err)
+	}
+
+	dirs := make([]assetDeckDir, 0, len(deckEntries))
+	for _, deckEntry := range deckEntries {
+		if !deckEntry.IsDir() || strings.EqualFold(deckEntry.Name(), "TEMP") {
+			continue
+		}
+		deckID := resolveDeckIDByLabel(deckEntry.Name())
+		if deckID == "" {
+			deckID = deckEntry.Name()
+		}
+		dirs = append(dirs, assetDeckDir{
+			deckID:       deckID,
+			fullPath:     filepath.Join(decksRoot, deckEntry.Name()),
+			relativeRoot: filepath.Join("decks", deckEntry.Name()),
+		})
+	}
+
+	sort.Slice(dirs, func(i, j int) bool {
+		return dirs[i].deckID < dirs[j].deckID
+	})
+	return dirs, nil
 }
 
 func newRand(seed int64) *rand.Rand {
@@ -102,7 +199,7 @@ func availableScenarios(enableDev bool) []scenarioMeta {
 		scenarios = append(scenarios, scenarioMeta{
 			ID:          scenarioDevTest,
 			Name:        "Dev Test Scenario",
-			Description: "Dev-песочница для проверки механик и UI.",
+			Description: "Dev sandbox for testing mechanics and UI.",
 			DevOnly:     true,
 		})
 	}

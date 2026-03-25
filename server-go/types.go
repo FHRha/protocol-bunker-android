@@ -21,18 +21,18 @@ const (
 )
 
 var (
-	coreDecks      = []string{"Профессия", "Здоровье", "Хобби", "Багаж", "Биология"}
-	factsDeck      = "Факты"
+	coreDecks      = []string{"profession", "health", "hobby", "baggage", "biology"}
+	factsDeck      = "fact"
 	factsSlotOrder = []string{"facts1", "facts2"}
 	categoryOrder  = []string{
-		"Профессия",
-		"Здоровье",
-		"Хобби",
-		"Багаж",
-		"Факт №1",
-		"Факт №2",
-		"Биология",
-		"Особые условия",
+		"profession",
+		"health",
+		"hobby",
+		"baggage",
+		"facts1",
+		"facts2",
+		"biology",
+		"special",
 	}
 )
 
@@ -51,7 +51,6 @@ type gameSettings struct {
 	EnablePostVoteDiscussion    bool   `json:"enablePostVoteDiscussionTimer"`
 	PostVoteDiscussionSeconds   int    `json:"postVoteDiscussionSeconds"`
 	AutomationMode              string `json:"automationMode"`
-	EnablePresenterMode         bool   `json:"enablePresenterMode"`
 	ContinuePermission          string `json:"continuePermission"`
 	RevealTimeoutAction         string `json:"revealTimeoutAction"`
 	RevealsBeforeVoting         int    `json:"revealsBeforeVoting"`
@@ -59,6 +58,7 @@ type gameSettings struct {
 	MaxPlayers                  int    `json:"maxPlayers"`
 	FinalThreatReveal           string `json:"finalThreatReveal"`
 	ForcedDisasterID            string `json:"forcedDisasterId"`
+	CardLocale                  string `json:"cardLocale"`
 	// Backward compatibility with older client builds.
 	SelectedDisasterID string `json:"selectedDisasterId,omitempty"`
 }
@@ -110,6 +110,7 @@ type cardRef struct {
 	Deck      string `json:"deck"`
 	Instance  string `json:"instanceId,omitempty"`
 	Label     string `json:"labelShort,omitempty"`
+	ImgURL    string `json:"imgUrl,omitempty"`
 	Secret    bool   `json:"secret,omitempty"`
 	Missing   bool   `json:"missing,omitempty"`
 	Revealed  bool   `json:"revealed"`
@@ -135,7 +136,9 @@ type publicCategorySlot struct {
 type youCategoryCard struct {
 	InstanceID string `json:"instanceId"`
 	Label      string `json:"labelShort"`
+	Deck       string `json:"deck,omitempty"`
 	Revealed   bool   `json:"revealed"`
+	ImgURL     string `json:"imgUrl,omitempty"`
 }
 
 type youCategorySlot struct {
@@ -170,13 +173,16 @@ type votingProgress struct {
 }
 
 type votePublic struct {
-	VoterID    string `json:"voterId"`
-	VoterName  string `json:"voterName"`
-	TargetID   string `json:"targetId,omitempty"`
-	TargetName string `json:"targetName,omitempty"`
-	Status     string `json:"status"`
-	Reason     string `json:"reason,omitempty"`
-	Submitted  int64  `json:"submittedAt,omitempty"`
+	VoterID    string         `json:"voterId"`
+	VoterName  string         `json:"voterName"`
+	TargetID   string         `json:"targetId,omitempty"`
+	TargetName string         `json:"targetName,omitempty"`
+	Status     string         `json:"status"`
+	Reason     string         `json:"reason,omitempty"`
+	ReasonKey  string         `json:"reasonKey,omitempty"`
+	ReasonCode string         `json:"reasonCode,omitempty"`
+	ReasonVars map[string]any `json:"reasonVars,omitempty"`
+	Submitted  int64          `json:"submittedAt,omitempty"`
 }
 
 type roundRulesPublic struct {
@@ -219,6 +225,7 @@ type worldCardView struct {
 	Description string `json:"description"`
 	Text        string `json:"text,omitempty"`
 	ImageID     string `json:"imageId,omitempty"`
+	ImgURL      string `json:"imgUrl,omitempty"`
 }
 
 type worldFacedCardView struct {
@@ -228,6 +235,7 @@ type worldFacedCardView struct {
 	Description     string `json:"description"`
 	Text            string `json:"text,omitempty"`
 	ImageID         string `json:"imageId,omitempty"`
+	ImgURL          string `json:"imgUrl,omitempty"`
 	IsRevealed      bool   `json:"isRevealed"`
 	RevealedAtRound *int   `json:"revealedAtRound,omitempty"`
 	RevealedBy      string `json:"revealedBy,omitempty"`
@@ -265,15 +273,17 @@ type threatModifierView struct {
 }
 
 type gameView struct {
-	Phase      string             `json:"phase"`
-	Round      int                `json:"round"`
-	Categories []string           `json:"categoryOrder"`
-	LastStage  string             `json:"lastStageText,omitempty"`
-	Ruleset    gameRuleset        `json:"ruleset"`
-	World      *worldStateView    `json:"world,omitempty"`
-	WorldEvent *worldEventView    `json:"worldEvent,omitempty"`
-	PostGame   *postGameStateView `json:"postGame,omitempty"`
-	You        struct {
+	Phase         string             `json:"phase"`
+	Round         int                `json:"round"`
+	Categories    []string           `json:"categoryOrder"`
+	LastStage     string             `json:"lastStageText,omitempty"`
+	LastStageKey  string             `json:"lastStageTextKey,omitempty"`
+	LastStageVars map[string]any     `json:"lastStageTextVars,omitempty"`
+	Ruleset       gameRuleset        `json:"ruleset"`
+	World         *worldStateView    `json:"world,omitempty"`
+	WorldEvent    *worldEventView    `json:"worldEvent,omitempty"`
+	PostGame      *postGameStateView `json:"postGame,omitempty"`
+	You           struct {
 		PlayerID   string                         `json:"playerId"`
 		Name       string                         `json:"name"`
 		Hand       []cardRef                      `json:"hand"`
@@ -303,15 +313,19 @@ type gameView struct {
 		LastEliminated                string              `json:"lastEliminated,omitempty"`
 		Winners                       []string            `json:"winners,omitempty"`
 		ResolutionNote                string              `json:"resolutionNote,omitempty"`
+		ResolutionNoteKey             string              `json:"resolutionNoteKey,omitempty"`
+		ResolutionNoteVars            map[string]any      `json:"resolutionNoteVars,omitempty"`
 		RoundRules                    *roundRulesPublic   `json:"roundRules,omitempty"`
 	} `json:"public"`
 }
 
 type gameEvent struct {
-	ID        string `json:"id"`
-	Kind      string `json:"kind"`
-	Message   string `json:"message"`
-	CreatedAt int64  `json:"createdAt"`
+	ID          string         `json:"id"`
+	Kind        string         `json:"kind"`
+	Message     string         `json:"message"`
+	MessageKey  string         `json:"messageKey,omitempty"`
+	MessageVars map[string]any `json:"messageVars,omitempty"`
+	CreatedAt   int64          `json:"createdAt"`
 }
 
 type wsServerMessage struct {
@@ -320,20 +334,18 @@ type wsServerMessage struct {
 }
 
 type clientHelloPayload struct {
-	Name         string `json:"name"`
-	RoomCode     string `json:"roomCode,omitempty"`
-	Create       bool   `json:"create,omitempty"`
-	ScenarioID   string `json:"scenarioId,omitempty"`
-	PlayerToken  string `json:"playerToken,omitempty"`
-	ControlToken string `json:"controlToken,omitempty"`
-	EditToken    string `json:"editToken,omitempty"`
-	TabID        string `json:"tabId,omitempty"`
-	SessionID    string `json:"sessionId,omitempty"`
+	Name        string `json:"name"`
+	RoomCode    string `json:"roomCode,omitempty"`
+	Create      bool   `json:"create,omitempty"`
+	ScenarioID  string `json:"scenarioId,omitempty"`
+	Locale      string `json:"locale,omitempty"`
+	PlayerToken string `json:"playerToken,omitempty"`
+	TabID       string `json:"tabId,omitempty"`
+	SessionID   string `json:"sessionId,omitempty"`
 }
 
-type clientOverlaySubscribePayload struct {
-	RoomCode string `json:"roomCode"`
-	Token    string `json:"token"`
+type clientUpdateLocalePayload struct {
+	Locale string `json:"locale"`
 }
 
 type player struct {
@@ -375,9 +387,6 @@ type room struct {
 	CleanupTimer      *time.Timer
 	CleanupVersion    int64
 	NoConnectedSince  *int64
-	ControlToken      string
-	EditToken         string
-	ControlCompanions map[*websocket.Conn]struct{}
 }
 
 type roomGame interface {
@@ -394,7 +403,6 @@ type server struct {
 	mu                 sync.Mutex
 	rooms              map[string]*room
 	connToID           map[*websocket.Conn]connInfo
-	companionConns     map[*websocket.Conn]companionConnInfo
 	assets             assetCatalog
 	specialDefinitions []specialDefinition
 	upgrader           websocket.Upgrader
@@ -403,10 +411,6 @@ type server struct {
 type connInfo struct {
 	RoomCode string
 	PlayerID string
-}
-
-type companionConnInfo struct {
-	RoomCode string
 }
 
 type config struct {

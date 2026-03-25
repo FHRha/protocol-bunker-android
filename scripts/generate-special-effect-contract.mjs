@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 const inputPath = path.resolve(root, "scenarios", "classic", "SPECIAL_CONDITIONS.json");
-const outputPath = path.resolve(root, "shared-contract", "special_effect_contract.json");
+const outputPath = path.resolve(root, "shared", "special_effect_contract.json");
 
 const args = new Set(process.argv.slice(2));
 const checkOnly = args.has("--check");

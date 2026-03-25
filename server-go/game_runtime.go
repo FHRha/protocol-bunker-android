@@ -21,41 +21,19 @@ var (
 	}
 
 	categoryKeyToDeck = map[string]string{
-		"profession": "Профессия",
-		"health":     "Здоровье",
-		"hobby":      "Хобби",
-		"baggage":    "Багаж",
-		"facts":      "Факты",
-		"facts1":     "Факты",
-		"facts2":     "Факты",
-		"biology":    "Биология",
+		"profession": coreDecks[0],
+		"health":     healthDeckName(),
+		"hobby":      coreDecks[2],
+		"baggage":    coreDecks[3],
+		"facts":      factsDeck,
+		"facts1":     factsDeck,
+		"facts2":     factsDeck,
+		"biology":    coreDecks[4],
 	}
 
-	categoryKeyToSlot = map[string]string{
-		"facts1": "facts1",
-		"facts2": "facts2",
-	}
-
-	categoryKeyToLabel = map[string]string{
-		"profession": "Профессия",
-		"health":     "Здоровье",
-		"hobby":      "Хобби",
-		"baggage":    "Багаж",
-		"facts":      "Факт №1",
-		"facts1":     "Факт №1",
-		"facts2":     "Факт №2",
-		"biology":    "Биология",
-	}
-
-	specialDeckCategoryName  = "Особые условия"
+	specialDeckCategoryName  = "special"
 	devChoiceEffectType      = "devChooseSpecial"
-	devChoiceTitle           = "Тест особого условия (DEV)"
-	specialAssetFallbackByID = map[string]string{
-		"redeal_facts":   "decks/Особые условия/Давайте на чистоту фактов.jpg",
-		"silence":        "decks/Особые условия/Молчание.jpg",
-		"redeal_biology": "decks/Особые условия/Давайте на чистоту биология.jpg",
-		"protect_brave":  "decks/Особые условия/Защити смелого.jpg",
-	}
+	specialAssetFallbackByID = map[string]string{}
 )
 
 type effectiveVoteRecord struct {
@@ -77,6 +55,27 @@ func normalizeSpecialKey(value string) string {
 		}
 	}
 	return b.String()
+}
+
+func categorySlotKey(categoryKey string) string {
+	key := strings.TrimSpace(categoryKey)
+	switch key {
+	case "facts1", "facts2":
+		return key
+	default:
+		return ""
+	}
+}
+
+func canonicalCategoryKey(categoryKey string) string {
+	key := strings.TrimSpace(categoryKey)
+	if key == "" {
+		return ""
+	}
+	if slot := categorySlotKey(key); slot != "" {
+		return slot
+	}
+	return key
 }
 
 func specialImageURL(def specialDefinition) string {
@@ -162,7 +161,7 @@ func copyVotes(input map[string]voteRecord) map[string]voteRecord {
 func (g *gameSession) playerName(playerID string) string {
 	player := g.Players[playerID]
 	if player == nil {
-		return "игрок"
+		return scenarioUnknownPlayerLabel(g.Scenario)
 	}
 	return player.Name
 }
@@ -378,8 +377,8 @@ func (g *gameSession) buildDevChoiceDefinition(playerID string) (specialDefiniti
 	}
 	return specialDefinition{
 		ID:      fmt.Sprintf("dev-choice-%s", playerID),
-		Title:   devChoiceTitle,
-		Text:    "Выберите любое особое условие для теста. После применения карта DEV снова доступна.",
+		Title:   scenarioDevChoiceTitle(g.Scenario),
+		Text:    scenarioDevChoiceText(g.Scenario),
 		Trigger: "active",
 		Effect: specialEffect{
 			Type: devChoiceEffectType,
@@ -401,8 +400,8 @@ func (g *gameSession) drawSpecialFromPool() specialDefinition {
 	if len(g.specialPool) == 0 {
 		return specialDefinition{
 			ID:          "missing-special",
-			Title:       "Нет доступного условия",
-			Text:        "Колода особых условий пуста.",
+			Title:       scenarioSpecialNoneTitle(g.Scenario),
+			Text:        scenarioSpecialNoneText(g.Scenario),
 			Trigger:     "active",
 			Implemented: false,
 			Effect:      specialEffect{Type: "none"},
@@ -564,7 +563,7 @@ func (g *gameSession) revealedBunkerIndices() []int {
 	return indices
 }
 
-func (g *gameSession) resolveBunkerIndex(payload map[string]any, allowRandom bool) (int, string) {
+func (g *gameSession) resolveBunkerIndex(payload map[string]any, allowRandom bool) (int, localizedRuntimeError) {
 	raw, hasValue := payload["bunkerIndex"]
 	missingSelection := !hasValue || raw == nil
 	if !missingSelection {
@@ -574,22 +573,22 @@ func (g *gameSession) resolveBunkerIndex(payload map[string]any, allowRandom boo
 	}
 	if missingSelection {
 		if !allowRandom {
-			return -1, "Нужно выбрать карту бункера."
+			return -1, localizedRuntimeError{Message: "You need to select a bunker card.", Key: "error.bunker.pickRequired"}
 		}
 		revealed := g.revealedBunkerIndices()
 		if len(revealed) == 0 {
-			return -1, "Нет раскрытых карт бункера."
+			return -1, localizedRuntimeError{Message: "There are no revealed bunker cards.", Key: "error.bunker.noRevealed"}
 		}
-		return revealed[g.rng.Intn(len(revealed))], ""
+		return revealed[g.rng.Intn(len(revealed))], localizedRuntimeError{}
 	}
 	index := asInt(raw, -1)
 	if index < 0 || index >= len(g.World.Bunker) {
-		return -1, "Некорректная карта бункера."
+		return -1, localizedRuntimeError{Message: "Invalid bunker card.", Key: "error.bunker.invalid"}
 	}
 	if !g.IsDev && !g.World.Bunker[index].IsRevealed {
-		return -1, "Можно выбрать только раскрытую карту бункера."
+		return -1, localizedRuntimeError{Message: "You can only select a revealed bunker card.", Key: "error.bunker.revealedOnly"}
 	}
-	return index, ""
+	return index, localizedRuntimeError{}
 }
 
 func (g *gameSession) clearActiveTimer() {
@@ -686,7 +685,7 @@ func (g *gameSession) enterRevealDiscussion() gameActionResult {
 
 func (g *gameSession) advanceAfterDiscussion() gameActionResult {
 	if g.Phase != scenarioPhaseRevealDiscussion {
-		return gameActionResult{Error: "Сейчас нельзя продолжить ход."}
+		return runtimeError("Cannot continue the turn right now.", g.scenarioTextKey("error.continue.notNow", "classic.auto.078"), nil)
 	}
 	g.clearActiveTimer()
 
@@ -697,11 +696,11 @@ func (g *gameSession) advanceAfterDiscussion() gameActionResult {
 		}
 		g.CurrentTurnID = nextTurn
 		g.Phase = scenarioPhaseReveal
-		g.LastStageText = "Следующий ход раскрытия."
+		g.setLastStage(scenarioText(g.Scenario, "event.reveal.nextTurn", "Next reveal turn."), g.scenarioTextKey("event.reveal.nextTurn", "event.reveal.nextTurn"), nil)
 		g.scheduleRevealTimeoutIfNeeded()
 		return gameActionResult{
 			StateChanged: true,
-			Events:       []gameEvent{g.makeEvent("info", g.LastStageText)},
+			Events:       []gameEvent{g.makeEventLocalized("info", g.LastStageText, g.LastStageKey, g.LastStageVars)},
 		}
 	}
 	if g.VotesRemaining > 0 {
@@ -738,14 +737,11 @@ func (g *gameSession) handleRevealPhaseTimeout() gameActionResult {
 			cardIndex := hidden[g.rng.Intn(len(hidden))]
 			card := &player.Hand[cardIndex]
 			card.Revealed = true
-			if card.Deck == "Здоровье" && g.FirstHealthRevealerID == "" {
+			if card.Deck == healthDeckName() && g.FirstHealthRevealerID == "" {
 				g.FirstHealthRevealerID = actorID
 			}
-			g.RevealedThisRnd[actorID] = true
-			g.LastRevealerID = actorID
-			g.LastStageText = fmt.Sprintf("Таймаут: %s автоматически раскрыл карту.", player.Name)
 			enterResult := g.enterRevealDiscussion()
-			events := []gameEvent{g.makeEvent("info", g.LastStageText)}
+			events := []gameEvent{g.makeEventLocalized("info", scenarioText(g.Scenario, "event.reveal.timeoutAuto", fmt.Sprintf("%s auto-revealed a card due to timeout.", player.Name)), "event.reveal.timeoutAuto", map[string]any{"name": player.Name})}
 			events = append(events, enterResult.Events...)
 			return gameActionResult{StateChanged: true, Events: events}
 		}
@@ -756,18 +752,22 @@ func (g *gameSession) handleRevealPhaseTimeout() gameActionResult {
 	if g.allAliveRevealed() {
 		if g.VotesRemaining > 0 {
 			g.startVoting()
-			g.LastStageText = fmt.Sprintf("Таймаут: ход %s пропущен.", player.Name)
+			g.setLastStage(
+				scenarioText(g.Scenario, "event.voting.startedAfterReveal", "Voting started after the reveal phase."),
+				"event.voting.startedAfterReveal",
+				nil,
+			)
 			return gameActionResult{
 				StateChanged: true,
 				Events: []gameEvent{
-					g.makeEvent("info", g.LastStageText),
-					g.makeEvent("votingStart", g.LastStageText),
+					g.makeEventLocalized("info", g.LastStageText, g.LastStageKey, g.LastStageVars),
+					g.makeEventLocalized("votingStart", g.LastStageText, g.LastStageKey, g.LastStageVars),
 				},
 			}
 		}
 		next := g.startNextRoundOrEnd()
-		if next.StateChanged {
-			next.Events = append([]gameEvent{g.makeEvent("info", fmt.Sprintf("Таймаут: ход %s пропущен.", player.Name))}, next.Events...)
+		if next.StateChanged && g.LastStageKey != "" {
+			next.Events = append([]gameEvent{g.makeEventLocalized("info", g.LastStageText, g.LastStageKey, g.LastStageVars)}, next.Events...)
 		}
 		return next
 	}
@@ -778,17 +778,17 @@ func (g *gameSession) handleRevealPhaseTimeout() gameActionResult {
 	}
 	g.CurrentTurnID = nextTurn
 	g.Phase = scenarioPhaseReveal
-	g.LastStageText = fmt.Sprintf("Таймаут: ход %s пропущен.", player.Name)
+	g.setLastStage(scenarioText(g.Scenario, "event.reveal.nextTurn", "Next reveal turn."), g.scenarioTextKey("event.reveal.nextTurn", "event.reveal.nextTurn"), nil)
 	g.scheduleRevealTimeoutIfNeeded()
 	return gameActionResult{
 		StateChanged: true,
-		Events:       []gameEvent{g.makeEvent("info", g.LastStageText)},
+		Events:       []gameEvent{g.makeEventLocalized("info", g.LastStageText, g.LastStageKey, g.LastStageVars)},
 	}
 }
 
 func (g *gameSession) markVoteWasted(voterID, reason string) {
 	if reason == "" {
-		reason = "Голос заблокирован."
+		reason = scenarioText(g.Scenario, "vote.spent", "Vote spent.")
 	}
 	g.AutoWastedVoters[voterID] = true
 	g.VoteDisabled[voterID] = reason
@@ -818,14 +818,18 @@ func (g *gameSession) markVoteSelf(voterID string) {
 func (g *gameSession) enterVoteSpecialWindow() gameActionResult {
 	g.BaseVotes = copyVotes(g.Votes)
 	g.VotePhase = votePhaseSpecialWindow
-	g.LastStageText = "Сбор голосов завершён. Окно спецусловий."
+	g.setLastStage(
+		scenarioText(g.Scenario, "event.voting.specialWindow", "Vote collection complete. Special-condition window is open."),
+		g.scenarioTextKey("event.voting.specialWindow", "event.voting.specialWindow"),
+		nil,
+	)
 	g.clearActiveTimer()
 	if g.Settings.EnablePostVoteDiscussion {
 		g.schedulePhaseTimer("post_vote", g.Settings.PostVoteDiscussionSeconds)
 	}
 	return gameActionResult{
 		StateChanged: true,
-		Events:       []gameEvent{g.makeEvent("info", g.LastStageText)},
+		Events:       []gameEvent{g.makeEventLocalized("info", g.LastStageText, g.LastStageKey, g.LastStageVars)},
 	}
 }
 
@@ -833,7 +837,7 @@ func (g *gameSession) resetVotesForRevote() {
 	g.Votes = map[string]voteRecord{}
 	g.BaseVotes = map[string]voteRecord{}
 	for voterID := range g.AutoWastedVoters {
-		g.markVoteWasted(voterID, "Голос потрачен.")
+		g.markVoteWasted(voterID, "Vote spent.")
 	}
 	// Secret forced-self vote applies only to one voting attempt.
 	g.AutoSelfVoteVoters = map[string]bool{}
@@ -848,8 +852,7 @@ func (g *gameSession) startTieBreakRevote(candidates []string) {
 	g.RevoteDisallowByVoter = map[string]map[string]bool{}
 	g.resetVotesForRevote()
 	g.VotePhase = votePhaseVoting
-	g.clearActiveTimer()
-	g.LastStageText = "Ничья. Переголосование между топ-кандидатами."
+	g.setLastStage(scenarioText(g.Scenario, "event.tie.revote", "Tie. Revote between top candidates."), g.scenarioTextKey("event.tie.revote", "classic.auto.061"), nil)
 }
 
 func (g *gameSession) buildEffectiveVotes(source map[string]voteRecord) map[string]effectiveVoteRecord {
@@ -888,14 +891,14 @@ func (g *gameSession) buildEffectiveVotes(source map[string]voteRecord) map[stri
 			if disallow := g.RevoteDisallowByVoter[playerID]; disallow != nil && disallow[info.TargetID] {
 				info.Status = "invalid"
 				if info.ReasonText == "" {
-					info.ReasonText = "Нельзя голосовать за этого кандидата."
+					info.ReasonText = "You cannot vote for this candidate."
 				}
 			}
 		}
 		if info.TargetID != "" && !g.VoteCandidates[info.TargetID] {
 			info.Status = "invalid"
 			if info.ReasonText == "" {
-				info.ReasonText = "Кандидат недоступен."
+				info.ReasonText = "Invalid candidate."
 			}
 		}
 		if info.TargetID != "" {
@@ -903,7 +906,7 @@ func (g *gameSession) buildEffectiveVotes(source map[string]voteRecord) map[stri
 			if target != nil && target.BannedAgainst[playerID] {
 				info.Status = "invalid"
 				if info.ReasonText == "" {
-					info.ReasonText = "Голос против этого игрока запрещён."
+					info.ReasonText = "You cannot vote against this player."
 				}
 			}
 		}
@@ -1065,21 +1068,19 @@ func (g *gameSession) neighborIDs(playerID string, includeEliminatedID string) (
 
 func (g *gameSession) parseRevealedAge(player *gamePlayer) (int, bool) {
 	var ageRegexp = regexp.MustCompile(`\d{1,3}`)
-	for _, card := range player.Hand {
-		if card.Deck != "Биология" || !card.Revealed {
-			continue
-		}
-		match := ageRegexp.FindString(card.Label)
-		if match == "" {
-			return 0, false
-		}
-		age := asInt(match, -1)
-		if age < 1 || age > 120 {
-			return 0, false
-		}
-		return age, true
+	cards := g.getCardsByCategoryKey(player, "biology", true)
+	if len(cards) == 0 {
+		return 0, false
 	}
-	return 0, false
+	match := ageRegexp.FindString(cards[0].Label)
+	if match == "" {
+		return 0, false
+	}
+	age := asInt(match, -1)
+	if age < 1 || age > 120 {
+		return 0, false
+	}
+	return age, true
 }
 
 func (g *gameSession) computeAgeExtremes() (youngestID string, oldestID string, ok bool) {
@@ -1145,13 +1146,11 @@ func (g *gameSession) handleSecretEliminationTriggers(eliminatedID string) []gam
 				player.ForcedWastedVoteNext = false
 				events = append(
 					events,
-					g.makeEvent(
+					g.makeEventLocalized(
 						"info",
-						fmt.Sprintf(
-							"У игрока %s раскрылось особое условие: %s. В следующем голосовании он обязан голосовать против себя.",
-							player.Name,
-							special.Definition.Title,
-						),
+						scenarioText(g.Scenario, "event.special.secretForcedSelfVote", fmt.Sprintf("%s triggers a secret effect: %s.", player.Name, special.Definition.Title)),
+						"event.special.secretForcedSelfVote",
+						map[string]any{"name": player.Name, "title": special.Definition.Title},
 					),
 				)
 			}
@@ -1172,7 +1171,7 @@ func (g *gameSession) resolveNeighborChoice(actorID string, payload map[string]a
 		if targetID == right {
 			return right, "right", ""
 		}
-		return "", "", "Недопустимый сосед."
+		return "", "", scenarioText(g.Scenario, "error.neighbor.invalid", "Invalid neighbor.")
 	}
 	if side == "left" && left != "" {
 		return left, "left", ""
@@ -1180,9 +1179,8 @@ func (g *gameSession) resolveNeighborChoice(actorID string, payload map[string]a
 	if side == "right" && right != "" {
 		return right, "right", ""
 	}
-	return "", "", "Сосед не найден."
+	return "", "", scenarioText(g.Scenario, "error.neighbor.notFound", "Neighbor not found.")
 }
-
 func (g *gameSession) getTargetCandidates(scope, actorID string) []string {
 	switch scope {
 	case "self":
@@ -1209,7 +1207,7 @@ func (g *gameSession) getCardsByCategoryKey(player *gamePlayer, categoryKey stri
 	if deckName == "" {
 		deckName = categoryKey
 	}
-	slot := categoryKeyToSlot[categoryKey]
+	slot := categorySlotKey(categoryKey)
 	out := make([]*handCard, 0, 2)
 	for i := range player.Hand {
 		card := &player.Hand[i]
@@ -1232,7 +1230,10 @@ func resolveCategoryKey(input string) string {
 	if raw == "" {
 		return ""
 	}
-	if _, ok := categoryKeyToLabel[raw]; ok {
+	if _, ok := categoryKeyToDeck[raw]; ok {
+		return raw
+	}
+	if slot := categorySlotKey(raw); slot != "" {
 		return raw
 	}
 
@@ -1240,8 +1241,8 @@ func resolveCategoryKey(input string) string {
 	if normalized == "" {
 		return ""
 	}
-	for key, label := range categoryKeyToLabel {
-		if normalizeSpecialKey(key) == normalized || normalizeSpecialKey(label) == normalized {
+	for key := range categoryKeyToDeck {
+		if normalizeSpecialKey(key) == normalized || normalizeSpecialKey(canonicalCategoryKey(key)) == normalized {
 			return key
 		}
 		if deckName := categoryKeyToDeck[key]; deckName != "" && normalizeSpecialKey(deckName) == normalized {
@@ -1299,31 +1300,31 @@ func (g *gameSession) drawCardFromDeck(deckName string) (assetCard, bool) {
 func (g *gameSession) applySpecial(actorID, specialInstanceID string, payload map[string]any) gameActionResult {
 	player := g.Players[actorID]
 	if player == nil || player.Status != playerAlive {
-		return gameActionResult{Error: "Игрок не найден."}
+		return runtimeError("You are not an active player.", "error.player.excluded", nil)
 	}
 	if g.Phase == scenarioPhaseEnded {
-		return gameActionResult{Error: "Игра уже завершена."}
+		return runtimeError("Game has already ended.", "error.game.alreadyEnded", nil)
 	}
 	if specialInstanceID == "" {
-		return gameActionResult{Error: "Особое условие не найдено."}
+		return runtimeError("Special condition not found.", "error.special.notFound", nil)
 	}
 
 	special := g.findPlayerSpecialByInstance(player, specialInstanceID)
 	if special == nil {
-		return gameActionResult{Error: "Особое условие не найдено."}
+		return runtimeError("Special condition not found.", "error.special.notFound", nil)
 	}
 	if !special.Definition.Implemented {
-		return gameActionResult{Error: "Эта карта ещё не реализована."}
+		return runtimeError("This card is not implemented yet.", "error.special.unimplemented", nil)
 	}
 	if special.Used {
-		return gameActionResult{Error: "Эта карта уже использована."}
+		return runtimeError("This card has already been used.", "error.special.alreadyUsed", nil)
 	}
 
 	if !g.IsDev && g.Settings.SpecialUsage == "only_during_voting" && g.Phase != scenarioPhaseVoting {
-		return gameActionResult{Error: "Особые условия можно использовать только во время голосования."}
+		return runtimeError("Special conditions can only be used during voting.", "error.special.onlyVoting", nil)
 	}
 	if special.Definition.Trigger == "onOwnerEliminated" || special.Definition.Trigger == "secret_onEliminate" {
-		return gameActionResult{Error: "Эта карта срабатывает автоматически."}
+		return runtimeError("This card triggers automatically.", "error.special.autoTrigger", nil)
 	}
 
 	effectivePayload := map[string]any{}
@@ -1340,7 +1341,7 @@ func (g *gameSession) applySpecial(actorID, specialInstanceID string, payload ma
 			allowImplicitChoice = effectType == "discardBunkerCard" || effectType == "stealBunkerCardToExiled"
 		}
 		if !allowImplicitChoice {
-			return gameActionResult{Error: "Нужен выбор для применения карты."}
+			return runtimeError("A choice is required to apply this card.", "error.special.payloadRequired", nil)
 		}
 	}
 
@@ -1357,22 +1358,22 @@ func (g *gameSession) applySpecial(actorID, specialInstanceID string, payload ma
 		candidates := g.getTargetCandidates(targetScope, actorID)
 		targetID := strings.TrimSpace(asString(effectivePayload["targetPlayerId"]))
 		if targetID == "" {
-			return gameActionResult{Error: "Нужно выбрать цель."}
+			return runtimeError("You need to choose a target.", "error.target.required", nil)
 		}
 		if !slices.Contains(candidates, targetID) {
-			return gameActionResult{Error: "Недопустимая цель."}
+			return runtimeError("Invalid target.", "error.target.invalid", nil)
 		}
 	}
 
 	if choiceKind == "player" && !special.Definition.AllowSelf {
 		targetID := strings.TrimSpace(asString(effectivePayload["targetPlayerId"]))
 		if targetID != "" && targetID == actorID {
-			return gameActionResult{Error: "Нельзя выбрать себя."}
+			return runtimeError("You cannot choose yourself.", "error.target.cannotSelf", nil)
 		}
 	}
 
-	if errText := g.validateSpecialRequires(player, special, effectivePayload); errText != "" {
-		return gameActionResult{Error: errText}
+	if validationErr := g.validateSpecialRequires(special, effectivePayload); !validationErr.isEmpty() {
+		return validationErr.asActionResult()
 	}
 
 	wasDevChoiceCard := g.IsDev && isDevChoiceSpecialID(special.Definition.ID)
@@ -1399,7 +1400,7 @@ func (g *gameSession) applySpecial(actorID, specialInstanceID string, payload ma
 	}
 	if !special.RevealedPublic {
 		special.RevealedPublic = true
-		result.Events = append(result.Events, g.makeEvent("info", fmt.Sprintf("%s применяет особое условие: %s.", player.Name, special.Definition.Title)))
+		result.Events = append(result.Events, g.makeEventLocalized("info", scenarioText(g.Scenario, "event.special.applied", fmt.Sprintf("%s applies a special condition: %s.", player.Name, special.Definition.Title)), "event.special.applied", map[string]any{"name": player.Name, "title": special.Definition.Title}))
 	}
 	return result
 }
@@ -1407,43 +1408,40 @@ func (g *gameSession) applySpecial(actorID, specialInstanceID string, payload ma
 func (g *gameSession) applySpecialWithPending(actorID, specialInstanceID string, payload map[string]any) gameActionResult {
 	player := g.Players[actorID]
 	if player == nil {
-		return gameActionResult{Error: "Игрок не найден."}
+		return runtimeError("Player special condition was not found.", "error.special.playerMissing", nil)
 	}
 	if specialInstanceID == "" {
-		return gameActionResult{Error: "Особое условие не найдено."}
+		return runtimeError("Special condition not found.", "error.special.notFound", nil)
 	}
 
 	special := g.findPlayerSpecialByInstance(player, specialInstanceID)
 	if special == nil {
-		return gameActionResult{Error: "Особое условие не найдено."}
+		return runtimeError("Special condition not found.", "error.special.notFound", nil)
 	}
 	if !special.Definition.Implemented {
-		return gameActionResult{Error: "Эта карта ещё не реализована."}
+		return runtimeError("This card is not implemented yet.", "error.special.unimplemented", nil)
 	}
 	if special.Used {
-		return gameActionResult{Error: "Эта карта уже использована."}
+		return runtimeError("This card has already been used.", "error.special.alreadyUsed", nil)
 	}
 
 	trigger := special.Definition.Trigger
 	if trigger == "secret_onEliminate" {
-		return gameActionResult{Error: "Эта карта срабатывает автоматически."}
+		return runtimeError("This card triggers automatically.", "error.special.autoTrigger", nil)
 	}
 	if trigger == "onOwnerEliminated" {
 		if player.Status != playerEliminated {
-			return gameActionResult{Error: "Эта карта доступна только после вашего изгнания."}
-		}
-		if !special.PendingActivation {
-			return gameActionResult{Error: "Эту карту сейчас нельзя применить."}
+			return runtimeError("This card can only be activated after the owner is eliminated.", "error.special.autoTrigger", nil)
 		}
 	} else {
 		if player.Status != playerAlive {
-			return gameActionResult{Error: "Игрок не может выполнить действие."}
+			return runtimeError("You are not an active player.", "error.player.excluded", nil)
 		}
 		if g.Phase == scenarioPhaseEnded {
-			return gameActionResult{Error: "Игра уже завершена."}
+			return runtimeError("Game has already ended.", "error.game.alreadyEnded", nil)
 		}
 		if !g.IsDev && g.Settings.SpecialUsage == "only_during_voting" && g.Phase != scenarioPhaseVoting {
-			return gameActionResult{Error: "Особые условия можно использовать только во время голосования."}
+			return runtimeError("Special conditions can only be used during voting.", "error.special.onlyVoting", nil)
 		}
 	}
 
@@ -1461,7 +1459,7 @@ func (g *gameSession) applySpecialWithPending(actorID, specialInstanceID string,
 			allowImplicitChoice = effectType == "discardBunkerCard" || effectType == "stealBunkerCardToExiled"
 		}
 		if !allowImplicitChoice {
-			return gameActionResult{Error: "Нужен выбор для применения карты."}
+			return runtimeError("A choice is required to apply this card.", "error.special.payloadRequired", nil)
 		}
 	}
 
@@ -1478,22 +1476,22 @@ func (g *gameSession) applySpecialWithPending(actorID, specialInstanceID string,
 		candidates := g.getTargetCandidates(targetScope, actorID)
 		targetID := strings.TrimSpace(asString(effectivePayload["targetPlayerId"]))
 		if targetID == "" {
-			return gameActionResult{Error: "Нужно выбрать цель."}
+			return runtimeError("You need to choose a target.", "error.target.required", nil)
 		}
 		if !slices.Contains(candidates, targetID) {
-			return gameActionResult{Error: "Недопустимая цель."}
+			return runtimeError("Invalid target.", "error.target.invalid", nil)
 		}
 	}
 
 	if choiceKind == "player" && !special.Definition.AllowSelf {
 		targetID := strings.TrimSpace(asString(effectivePayload["targetPlayerId"]))
 		if targetID != "" && targetID == actorID {
-			return gameActionResult{Error: "Нельзя выбрать себя."}
+			return runtimeError("You cannot choose yourself.", "error.target.cannotSelf", nil)
 		}
 	}
 
-	if errText := g.validateSpecialRequires(player, special, effectivePayload); errText != "" {
-		return gameActionResult{Error: errText}
+	if validationErr := g.validateSpecialRequires(special, effectivePayload); !validationErr.isEmpty() {
+		return validationErr.asActionResult()
 	}
 
 	wasDevChoiceCard := g.IsDev && isDevChoiceSpecialID(special.Definition.ID)
@@ -1526,7 +1524,7 @@ func (g *gameSession) applySpecialWithPending(actorID, specialInstanceID string,
 	if trigger == "onOwnerEliminated" {
 		result.Events = append(
 			result.Events,
-			g.makeEvent("info", fmt.Sprintf("%s применяет особое условие: %s.", player.Name, special.Definition.Title)),
+			g.makeEventLocalized("info", scenarioText(g.Scenario, "event.special.applied", fmt.Sprintf("%s applies a special condition: %s.", player.Name, special.Definition.Title)), "event.special.applied", map[string]any{"name": player.Name, "title": special.Definition.Title}),
 		)
 		loggedSpecialUseEvent = true
 	}
@@ -1535,7 +1533,7 @@ func (g *gameSession) applySpecialWithPending(actorID, specialInstanceID string,
 		if !loggedSpecialUseEvent {
 			result.Events = append(
 				result.Events,
-				g.makeEvent("info", fmt.Sprintf("%s применяет особое условие: %s.", player.Name, special.Definition.Title)),
+				g.makeEventLocalized("info", scenarioText(g.Scenario, "event.special.applied", fmt.Sprintf("%s applies a special condition: %s.", player.Name, special.Definition.Title)), "event.special.applied", map[string]any{"name": player.Name, "title": special.Definition.Title}),
 			)
 		}
 		result.StateChanged = true
@@ -1546,62 +1544,84 @@ func (g *gameSession) applySpecialWithPending(actorID, specialInstanceID string,
 	return result
 }
 
-func (g *gameSession) validateSpecialRequires(player *gamePlayer, special *specialConditionState, payload map[string]any) string {
+type localizedRuntimeError struct {
+	Message string
+	Key     string
+	Vars    map[string]any
+}
+
+func runtimeError(message, key string, vars map[string]any) gameActionResult {
+	return gameActionResult{
+		Error:     message,
+		ErrorKey:  key,
+		ErrorVars: vars,
+	}
+}
+
+func (e localizedRuntimeError) isEmpty() bool {
+	return e.Message == "" && e.Key == "" && len(e.Vars) == 0
+}
+
+func (e localizedRuntimeError) asActionResult() gameActionResult {
+	return runtimeError(e.Message, e.Key, e.Vars)
+}
+
+func (g *gameSession) validateSpecialRequires(special *specialConditionState, payload map[string]any) localizedRuntimeError {
 	for _, requirement := range special.Definition.Requires {
 		switch requirement {
 		case "phase=voting":
 			if !g.IsDev && g.Phase != scenarioPhaseVoting {
-				return "Эту карту можно использовать только в фазе голосования."
+				return localizedRuntimeError{Message: "This card can only be used during voting.", Key: "error.special.onlyVoting"}
 			}
 		case "phase=reveal":
 			if !g.IsDev && g.Phase != scenarioPhaseReveal {
-				return "Эту карту можно использовать только в фазе раскрытия."
+				return localizedRuntimeError{Message: "This card can only be used during reveal.", Key: "validate.phase.reveal"}
 			}
 		case "votingStarted":
 			if !g.IsDev && len(g.Votes) == 0 && len(g.BaseVotes) == 0 {
-				return "Голосование ещё не началось."
+				return localizedRuntimeError{Message: "Voting has not started yet.", Key: "error.voting.notNow"}
 			}
 		case "targetHasBaggage":
 			targetID := strings.TrimSpace(asString(payload["targetPlayerId"]))
 			target := g.Players[targetID]
 			if target == nil || len(g.getCardsByCategoryKey(target, "baggage", false)) == 0 {
-				return "У выбранного игрока нет багажа."
+				return localizedRuntimeError{Message: "The selected player has no baggage.", Key: "validate.target.noBaggage"}
 			}
 		case "targetHasRevealedHealth":
 			targetID := strings.TrimSpace(asString(payload["targetPlayerId"]))
 			target := g.Players[targetID]
 			if target == nil || len(g.getCardsByCategoryKey(target, "health", !g.IsDev)) == 0 {
-				return "У выбранного игрока нет раскрытого здоровья."
+				return localizedRuntimeError{Message: "The selected player has no revealed health card.", Key: "validate.target.noRevealedHealth"}
 			}
 		case "targetHasRevealedProfession":
 			targetID := strings.TrimSpace(asString(payload["targetPlayerId"]))
 			target := g.Players[targetID]
 			if target == nil || len(g.getCardsByCategoryKey(target, "profession", !g.IsDev)) == 0 {
-				return "У выбранного игрока нет раскрытой профессии."
+				return localizedRuntimeError{Message: "The selected player has no revealed profession card.", Key: "validate.target.noRevealedProfession"}
 			}
 		case "targetHasRevealedSameCategory":
 			categoryKey := asString(special.Definition.Effect.Params["category"])
 			targetID := strings.TrimSpace(asString(payload["targetPlayerId"]))
 			target := g.Players[targetID]
 			if target == nil || len(g.getCardsByCategoryKey(target, categoryKey, !g.IsDev)) == 0 {
-				return "У соседа нет раскрытой карты этой категории."
+				return localizedRuntimeError{Message: "The neighbor has no revealed card in this category.", Key: "validate.neighbor.noRevealedCard"}
 			}
 		case "needsNeighborIndexing":
 			if len(g.Order) <= 1 {
-				return "Недостаточно игроков для соседей."
+				return localizedRuntimeError{Message: "Not enough players for neighbor targeting.", Key: "validate.neighbor.notEnoughPlayers"}
 			}
 		case "ageFieldAvailable", "someRevealedAges":
 			_, _, ok := g.computeAgeExtremes()
 			if !ok {
-				return "Возраст ещё не раскрыт ни у одного игрока."
+				return localizedRuntimeError{Message: "No one has revealed age yet.", Key: "validate.age.noneRevealed"}
 			}
 		case "trackFirstRevealHealth":
 			if g.FirstHealthRevealerID == "" {
-				return "Ещё нет первого раскрытия здоровья."
+				return localizedRuntimeError{Message: "The first health reveal has not happened yet.", Key: "validate.health.firstRevealMissing"}
 			}
 		}
 	}
-	return ""
+	return localizedRuntimeError{}
 }
 
 func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialConditionState, payload map[string]any) gameActionResult {
@@ -1609,21 +1629,21 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 	effectType := def.Effect.Type
 
 	if !g.IsDev && votingWindowEffectTypes[effectType] && g.VotePhase != votePhaseSpecialWindow {
-		return gameActionResult{Error: "Эту карту можно использовать только в окне спецусловий голосования."}
+		return runtimeError("This card can only be used in the voting special-condition window.", "error.special.onlyVoting", nil)
 	}
 
 	switch effectType {
 	case devChoiceEffectType:
 		if !g.IsDev {
-			return gameActionResult{Error: "DEV-карта доступна только в dev_test."}
+			return runtimeError("This action is only available in dev mode.", "error.dev.only", nil)
 		}
 		selectedID := strings.TrimSpace(asString(payload["specialId"]))
 		if selectedID == "" {
-			return gameActionResult{Error: "Нужно выбрать особое условие."}
+			return runtimeError("You need to choose a special condition.", "error.special.choiceRequired", nil)
 		}
 		selectedDef, ok := g.findSpecialDefinitionForDevChoice(selectedID)
 		if !ok {
-			return gameActionResult{Error: "Выбранное особое условие не найдено."}
+			return runtimeError("The selected special condition was not found.", "error.special.choiceNotFound", nil)
 		}
 		assetLookup := g.buildSpecialAssetLookup()
 		nextDef := g.buildDevSpecialFromTemplate(special.Definition.ID, selectedDef)
@@ -1639,28 +1659,36 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 		return gameActionResult{
 			StateChanged: true,
 			Events: []gameEvent{
-				g.makeEvent("info", fmt.Sprintf("%s выбирает для DEV-карты: %s.", player.Name, selectedDef.Title)),
+				g.makeEventLocalized("info", scenarioText(g.Scenario, "event.devChoice.selected", fmt.Sprintf("%s selected for the DEV card: %s.", player.Name, selectedDef.Title)), "event.devChoice.selected", map[string]any{"name": player.Name, "title": selectedDef.Title}),
 			},
 		}
 	case "banVoteAgainst":
 		if g.Phase != scenarioPhaseVoting {
-			return gameActionResult{Error: "Сейчас нет голосования."}
+			return runtimeError("There is no voting right now.", "error.voting.notNow", nil)
 		}
 		targetID := strings.TrimSpace(asString(payload["targetPlayerId"]))
+		if targetID == "" {
+			return runtimeError("You need to choose a target.", "error.target.required", nil)
+		}
 		target := g.Players[targetID]
 		if target == nil || target.Status != playerAlive {
-			return gameActionResult{Error: "Цель не в игре."}
+			return runtimeError("The target is not in the game.", "error.target.notAlive", nil)
 		}
 		if targetID == player.PlayerID && !def.AllowSelf {
-			return gameActionResult{Error: "Нельзя выбрать себя."}
+			return runtimeError("You cannot choose yourself.", "error.target.cannotSelf", nil)
 		}
 		player.BannedAgainst[targetID] = true
 		special.Used = true
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s использует карту \"%s\".", player.Name, def.Title))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.vote.banAgainst", fmt.Sprintf("%s forbids voting against %s for themselves.", player.Name, target.Name)),
+			"event.vote.banAgainst",
+			map[string]any{"name": player.Name, "target": target.Name},
+		)}}
 
 	case "voteWeight":
 		if g.Phase != scenarioPhaseVoting {
-			return gameActionResult{Error: "Сейчас нет голосования."}
+			return runtimeError("There is no voting right now.", "error.voting.notNow", nil)
 		}
 		weight := asInt(def.Effect.Params["weight"], 2)
 		if weight <= 0 {
@@ -1668,48 +1696,69 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 		}
 		g.VoteWeights[player.PlayerID] = weight
 		special.Used = true
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s усиливает свой голос.", player.Name))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.vote.weightBoost", fmt.Sprintf("%s boosts their vote.", player.Name)),
+			"event.vote.weightBoost",
+			map[string]any{"name": player.Name},
+		)}}
 
 	case "disableVote":
 		if g.Phase != scenarioPhaseVoting {
-			return gameActionResult{Error: "Сейчас нет голосования."}
+			return runtimeError("There is no voting right now.", "error.voting.notNow", nil)
 		}
 		targetID := strings.TrimSpace(asString(payload["targetPlayerId"]))
+		if targetID == "" {
+			return runtimeError("You need to choose a target.", "error.target.required", nil)
+		}
 		target := g.Players[targetID]
 		if target == nil || target.Status != playerAlive {
-			return gameActionResult{Error: "Цель не в игре."}
+			return runtimeError("The target is not in the game.", "error.target.notAlive", nil)
 		}
 		if targetID == player.PlayerID && !def.AllowSelf {
-			return gameActionResult{Error: "Нельзя выбрать себя."}
+			return runtimeError("You cannot choose yourself.", "error.target.cannotSelf", nil)
 		}
-		g.markVoteWasted(targetID, "Голос заблокирован.")
+		g.markVoteWasted(targetID, "vote.blocked.bySpecial")
 		special.Used = true
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s блокирует голос игрока %s.", player.Name, target.Name))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.vote.disable", fmt.Sprintf("%s blocks %s's vote.", player.Name, target.Name)),
+			"event.vote.disable",
+			map[string]any{"name": player.Name, "target": target.Name},
+		)}}
 
 	case "doubleVotesAgainst_and_disableSelfVote":
 		if g.Phase != scenarioPhaseVoting {
-			return gameActionResult{Error: "Сейчас нет голосования."}
+			return runtimeError("There is no voting right now.", "error.voting.notNow", nil)
 		}
 		targetID := strings.TrimSpace(asString(payload["targetPlayerId"]))
+		if targetID == "" {
+			return runtimeError("You need to choose a target.", "error.target.required", nil)
+		}
 		target := g.Players[targetID]
 		if target == nil || target.Status != playerAlive {
-			return gameActionResult{Error: "Цель не в игре."}
+			return runtimeError("The target is not in the game.", "error.target.notAlive", nil)
 		}
 		if targetID == player.PlayerID && !def.AllowSelf {
-			return gameActionResult{Error: "Нельзя выбрать себя."}
+			return runtimeError("You cannot choose yourself.", "error.target.cannotSelf", nil)
 		}
 		g.DoubleAgainst = targetID
-		g.markVoteWasted(player.PlayerID, "Ваш голос потрачен.")
+		g.markVoteWasted(player.PlayerID, "vote.spent.bySpecial")
 		special.Used = true
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s усиливает голоса против %s.", player.Name, target.Name))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.vote.doubleAgainst", fmt.Sprintf("%s boosts votes against %s.", player.Name, target.Name)),
+			"event.vote.doubleAgainst",
+			map[string]any{"name": player.Name, "target": target.Name},
+		)}}
 
 	case "forceRevote":
 		if g.Phase != scenarioPhaseVoting {
-			return gameActionResult{Error: "Сейчас нет голосования."}
+			return runtimeError("There is no voting right now.", "error.voting.notNow", nil)
 		}
 		source := g.currentVoteSource()
 		if len(source) == 0 {
-			return gameActionResult{Error: "Нет данных голосования."}
+			return runtimeError("Voting data is unavailable.", "error.voting.noSource", nil)
 		}
 		if asBool(def.Effect.Params["disallowPreviousCandidate"]) {
 			disallowByVoter := make(map[string]map[string]bool, len(source))
@@ -1730,49 +1779,72 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 		g.VotePhase = votePhaseVoting
 		g.clearActiveTimer()
 		special.Used = true
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s запускает переголосование.", player.Name))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.vote.forceRevote", fmt.Sprintf("%s starts a revote.", player.Name)),
+			"event.vote.forceRevote",
+			map[string]any{"name": player.Name},
+		)}}
 
 	case "swapRevealedWithNeighbor":
 		categoryKey := asString(def.Effect.Params["category"])
+		if strings.TrimSpace(categoryKey) == "" {
+			return runtimeError("You need to choose a category.", "error.category.required", nil)
+		}
 		targetID := strings.TrimSpace(asString(payload["targetPlayerId"]))
+		if targetID == "" {
+			return runtimeError("You need to choose a target.", "error.target.required", nil)
+		}
 		target := g.Players[targetID]
 		if target == nil || target.Status != playerAlive {
-			return gameActionResult{Error: "Сосед не найден."}
+			return runtimeError("Invalid target.", "error.target.invalid", nil)
 		}
 		requestedActorCardID := strings.TrimSpace(asString(payload["actorCardId"]))
 		requestedTargetCardID := strings.TrimSpace(asString(payload["targetCardId"]))
+
 		var yourCard *handCard
 		if requestedActorCardID != "" {
 			yourCard = g.getCardByCategoryInstance(player, categoryKey, requestedActorCardID)
 			if yourCard == nil {
-				return gameActionResult{Error: "Нужно выбрать корректную свою карту категории."}
+				return runtimeError("You need to choose one of your cards in this category.", "error.target.invalid", map[string]any{"field": "actorCardId"})
 			}
 			if !g.IsDev && !yourCard.Revealed {
-				return gameActionResult{Error: "Нужно выбрать раскрытую свою карту категории."}
+				return runtimeError("You can only choose a revealed card in this category.", "error.target.noRevealedCategory", map[string]any{"field": "actorCardId"})
 			}
 		} else {
 			yourCard = g.getFirstCardForSpecial(player, categoryKey)
-		}
-		var theirCard *handCard
-		if requestedTargetCardID != "" {
-			theirCard = g.getCardByCategoryInstance(target, categoryKey, requestedTargetCardID)
-			if theirCard == nil {
-				return gameActionResult{Error: "Нужно выбрать корректную карту цели в этой категории."}
+			if yourCard == nil {
+				return runtimeError("You do not have a revealed card in this category.", "error.target.noRevealedCategory", map[string]any{"field": "actorCardId"})
 			}
-			if !g.IsDev && !theirCard.Revealed {
-				return gameActionResult{Error: "Нужно выбрать раскрытую карту цели в этой категории."}
+		}
+
+		var revealedCard *handCard
+		if requestedTargetCardID != "" {
+			revealedCard = g.getCardByCategoryInstance(target, categoryKey, requestedTargetCardID)
+			if revealedCard == nil {
+				return runtimeError("The target does not have that card in this category.", "error.target.invalid", map[string]any{"field": "targetCardId"})
+			}
+			if !g.IsDev && !revealedCard.Revealed {
+				return runtimeError("The target has no revealed card in that category.", "error.target.noRevealedCategory", map[string]any{"field": "targetCardId"})
 			}
 		} else {
-			theirCard = g.getFirstCardForSpecial(target, categoryKey)
+			revealedCard = g.getFirstCardForSpecial(target, categoryKey)
+			if revealedCard == nil {
+				return runtimeError("The target has no revealed card in that category.", "error.target.noRevealedCategory", nil)
+			}
 		}
-		if yourCard == nil || theirCard == nil {
-			return gameActionResult{Error: "Нужны раскрытые карты у обоих игроков."}
-		}
-		yourCard.CardID, theirCard.CardID = theirCard.CardID, yourCard.CardID
-		yourCard.Label, theirCard.Label = theirCard.Label, yourCard.Label
-		yourCard.Missing, theirCard.Missing = theirCard.Missing, yourCard.Missing
+
+		yourCard.CardID, revealedCard.CardID = revealedCard.CardID, yourCard.CardID
+		yourCard.Label, revealedCard.Label = revealedCard.Label, yourCard.Label
+		yourCard.Missing, revealedCard.Missing = revealedCard.Missing, yourCard.Missing
+		yourCard.Revealed, revealedCard.Revealed = revealedCard.Revealed, yourCard.Revealed
 		special.Used = true
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s меняется раскрытой картой с %s.", player.Name, target.Name))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.swap.revealedWithNeighbor", fmt.Sprintf("%s swaps a revealed card with %s.", player.Name, target.Name)),
+			"event.swap.revealedWithNeighbor",
+			map[string]any{"name": player.Name, "target": target.Name},
+		)}}
 
 	case "replaceRevealedCard":
 		targetID := strings.TrimSpace(asString(payload["targetPlayerId"]))
@@ -1780,36 +1852,41 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 		categoryKey := asString(def.Effect.Params["category"])
 		deckName := categoryKeyToDeck[categoryKey]
 		if target == nil || target.Status != playerAlive {
-			return gameActionResult{Error: "Цель не в игре."}
+			return runtimeError("The target is not in the game.", "error.target.notAlive", nil)
 		}
 		if deckName == "" {
-			return gameActionResult{Error: "Неизвестная категория."}
+			return runtimeError("Deck is unavailable for this category.", "error.deck.unavailable", map[string]any{"category": categoryKey})
 		}
 		requestedTargetCardID := strings.TrimSpace(asString(payload["targetCardId"]))
 		var revealedCard *handCard
 		if requestedTargetCardID != "" {
 			revealedCard = g.getCardByCategoryInstance(target, categoryKey, requestedTargetCardID)
 			if revealedCard == nil {
-				return gameActionResult{Error: "Нужно выбрать корректную карту цели в этой категории."}
+				return runtimeError("The target does not have that card in this category.", "error.target.invalid", map[string]any{"field": "targetCardId"})
 			}
 			if !g.IsDev && !revealedCard.Revealed {
-				return gameActionResult{Error: "Нужно выбрать раскрытую карту цели в этой категории."}
+				return runtimeError("The target has no revealed card in that category.", "error.target.noRevealedCategory", map[string]any{"field": "targetCardId"})
 			}
 		} else {
 			revealedCard = g.getFirstCardForSpecial(target, categoryKey)
 		}
 		if revealedCard == nil {
-			return gameActionResult{Error: "У цели нет раскрытой карты этой категории."}
+			return runtimeError("The target has no revealed card in that category.", "error.target.noRevealedCategory", nil)
 		}
 		newCard, ok := g.drawCardFromDeck(deckName)
 		if !ok {
-			return gameActionResult{Error: fmt.Sprintf("В колоде категории \"%s\" больше нет карт.", deckName)}
+			return runtimeError(scenarioText(g.Scenario, "error.deck.emptyCategory", fmt.Sprintf("No more cards remain in category \"%s\".", deckName)), "error.deck.emptyCategory", map[string]any{"deckName": deckName})
 		}
 		revealedCard.CardID = newCard.ID
 		revealedCard.Label = newCard.Label
 		revealedCard.Missing = false
 		special.Used = true
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s заменяет раскрытую карту у %s.", player.Name, target.Name))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.card.replaced", fmt.Sprintf("%s replaces %s's revealed card.", player.Name, target.Name)),
+			"event.card.replaced",
+			map[string]any{"name": player.Name, "target": target.Name},
+		)}}
 
 	case "discardRevealedAndDealHidden":
 		targetID := strings.TrimSpace(asString(payload["targetPlayerId"]))
@@ -1817,43 +1894,48 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 		categoryKey := asString(def.Effect.Params["category"])
 		deckName := categoryKeyToDeck[categoryKey]
 		if target == nil || target.Status != playerAlive {
-			return gameActionResult{Error: "Цель не в игре."}
+			return runtimeError("The target is not in the game.", "error.target.notAlive", nil)
 		}
 		if deckName == "" {
-			return gameActionResult{Error: "Неизвестная категория."}
+			return runtimeError("Deck is unavailable for this category.", "error.deck.unavailable", map[string]any{"category": categoryKey})
 		}
 		requestedTargetCardID := strings.TrimSpace(asString(payload["targetCardId"]))
 		var revealedCard *handCard
 		if requestedTargetCardID != "" {
 			revealedCard = g.getCardByCategoryInstance(target, categoryKey, requestedTargetCardID)
 			if revealedCard == nil {
-				return gameActionResult{Error: "Нужно выбрать корректную карту цели в этой категории."}
+				return runtimeError("The target does not have that card in this category.", "error.target.invalid", map[string]any{"field": "targetCardId"})
 			}
 			if !g.IsDev && !revealedCard.Revealed {
-				return gameActionResult{Error: "Нужно выбрать раскрытую карту цели в этой категории."}
+				return runtimeError("The target has no revealed card in that category.", "error.target.noRevealedCategory", map[string]any{"field": "targetCardId"})
 			}
 		} else {
 			revealedCard = g.getFirstCardForSpecial(target, categoryKey)
 		}
 		if revealedCard == nil {
-			return gameActionResult{Error: "У цели нет раскрытой карты этой категории."}
+			return runtimeError("The target has no revealed card in that category.", "error.target.noRevealedCategory", nil)
 		}
 		newCard, ok := g.drawCardFromDeck(deckName)
 		if !ok {
-			return gameActionResult{Error: fmt.Sprintf("В колоде категории \"%s\" больше нет карт.", deckName)}
+			return runtimeError(scenarioText(g.Scenario, "error.deck.emptyCategory", fmt.Sprintf("No more cards remain in category \"%s\".", deckName)), "error.deck.emptyCategory", map[string]any{"deckName": deckName})
 		}
 		revealedCard.CardID = newCard.ID
 		revealedCard.Label = newCard.Label
 		revealedCard.Missing = false
 		revealedCard.Revealed = false
 		special.Used = true
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s сбрасывает раскрытую карту у %s.", player.Name, target.Name))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.card.discardedDealHidden", fmt.Sprintf("%s discards %s's revealed card and deals a hidden one.", player.Name, target.Name)),
+			"event.card.discardedDealHidden",
+			map[string]any{"name": player.Name, "target": target.Name},
+		)}}
 
 	case "redealAllRevealed":
 		categoryKey := asString(def.Effect.Params["category"])
 		deckName := categoryKeyToDeck[categoryKey]
 		if deckName == "" {
-			return gameActionResult{Error: "Неизвестная категория."}
+			return runtimeError("Deck is unavailable for this category.", "error.deck.unavailable", map[string]any{"category": categoryKey})
 		}
 		revealedSlots := make([]*handCard, 0, 16)
 		for _, targetID := range g.Order {
@@ -1868,7 +1950,7 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 			revealedSlots = append(revealedSlots, targetCards...)
 		}
 		if len(revealedSlots) == 0 {
-			return gameActionResult{Error: "Нет раскрытых карт для перераздачи."}
+			return runtimeError(scenarioText(g.Scenario, "error.redeal.none", "There are no revealed cards to redeal."), "error.redeal.none", nil)
 		}
 		shuffled := append([]*handCard(nil), revealedSlots...)
 		for i := len(shuffled) - 1; i > 0; i-- {
@@ -1883,20 +1965,25 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 			to.Missing = from.Missing
 		}
 		special.Used = true
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s перераздаёт раскрытые карты категории %s.", player.Name, deckName))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.redeal.category", fmt.Sprintf("%s redeals revealed cards in category %s.", player.Name, deckName)),
+			"event.redeal.category",
+			map[string]any{"name": player.Name, "deckName": deckName},
+		)}}
 
 	case "replaceBunkerCard":
-		index, errText := g.resolveBunkerIndex(payload, false)
-		if errText != "" {
-			return gameActionResult{Error: errText}
+		index, bunkerErr := g.resolveBunkerIndex(payload, false)
+		if !bunkerErr.isEmpty() {
+			return bunkerErr.asActionResult()
 		}
 		bunkerDeck, _, _ := resolveWorldDeckNames(g.DeckPools)
 		if bunkerDeck == "" {
-			return gameActionResult{Error: "Нет колоды бункера для замены."}
+			return runtimeError("Bunker deck is unavailable.", "error.deck.unavailable", map[string]any{"deckName": "bunker"})
 		}
 		replacement, nextPool, ok := drawRandomCard(g.DeckPools[bunkerDeck], g.rng)
 		if !ok {
-			return gameActionResult{Error: "Нет доступных карт бункера для замены."}
+			return runtimeError(scenarioText(g.Scenario, "error.bunker.noReplacement", "No bunker cards are available for replacement."), "error.bunker.noReplacement", nil)
 		}
 		g.DeckPools[bunkerDeck] = nextPool
 		target := &g.World.Bunker[index]
@@ -1905,6 +1992,7 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 		target.Description = replacement.Label
 		target.Text = ""
 		target.ImageID = replacement.ID
+		target.ImgURL = "/assets/" + replacement.ID
 		target.IsRevealed = true
 		target.RevealedBy = player.PlayerID
 		if target.RevealedAtRound == nil {
@@ -1912,19 +2000,25 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 			target.RevealedAtRound = &revealRound
 		}
 		special.Used = true
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s заменяет карту бункера.", player.Name))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.bunker.replaced", fmt.Sprintf("%s replaces a bunker card.", player.Name)),
+			"event.bunker.replaced",
+			map[string]any{"name": player.Name},
+		)}}
 
 	case "discardBunkerCard":
-		index, errText := g.resolveBunkerIndex(payload, true)
-		if errText != "" {
-			return gameActionResult{Error: errText}
+		index, bunkerErr := g.resolveBunkerIndex(payload, true)
+		if !bunkerErr.isEmpty() {
+			return bunkerErr.asActionResult()
 		}
 		target := &g.World.Bunker[index]
 		target.ID = fmt.Sprintf("bunker-discarded-%d-%d", time.Now().UnixMilli(), g.rng.Intn(1_000_000))
-		target.Title = "Карта бункера потеряна"
-		target.Description = "Карта бункера была сброшена спецусловием."
+		target.Title = scenarioText(g.Scenario, "world.bunker.lost.title", "Bunker card lost")
+		target.Description = scenarioText(g.Scenario, "world.bunker.lost.description", "The bunker card was discarded by a special condition.")
 		target.Text = ""
 		target.ImageID = ""
+		target.ImgURL = ""
 		target.IsRevealed = true
 		target.RevealedBy = player.PlayerID
 		if target.RevealedAtRound == nil {
@@ -1932,19 +2026,25 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 			target.RevealedAtRound = &revealRound
 		}
 		special.Used = true
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("Спецусловие \"%s\" сбрасывает карту бункера.", def.Title))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.bunker.discardedBySpecial", fmt.Sprintf("Special condition \"%s\" discards a bunker card.", special.Definition.Title)),
+			"event.bunker.discardedBySpecial",
+			map[string]any{"title": special.Definition.Title},
+		)}}
 
 	case "stealBunkerCardToExiled":
-		index, errText := g.resolveBunkerIndex(payload, true)
-		if errText != "" {
-			return gameActionResult{Error: errText}
+		index, bunkerErr := g.resolveBunkerIndex(payload, true)
+		if !bunkerErr.isEmpty() {
+			return bunkerErr.asActionResult()
 		}
 		target := &g.World.Bunker[index]
 		target.ID = fmt.Sprintf("bunker-stolen-%d-%d", time.Now().UnixMilli(), g.rng.Intn(1_000_000))
-		target.Title = "Карта бункера украдена"
-		target.Description = "Карта бункера была забрана изгнанным игроком."
+		target.Title = scenarioText(g.Scenario, "world.bunker.removed.title", "Bunker card removed")
+		target.Description = scenarioText(g.Scenario, "world.bunker.removed.description", "The bunker card was removed from play by a special condition.")
 		target.Text = ""
 		target.ImageID = ""
+		target.ImgURL = ""
 		target.IsRevealed = true
 		target.RevealedBy = player.PlayerID
 		if target.RevealedAtRound == nil {
@@ -1952,7 +2052,12 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 			target.RevealedAtRound = &revealRound
 		}
 		special.Used = true
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("Спецусловие \"%s\" убирает карту бункера из стола.", def.Title))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.bunker.removedBySpecial", fmt.Sprintf("Card \"%s\" applied: the bunker card was removed from the table.", special.Definition.Title)),
+			"event.bunker.removedBySpecial",
+			map[string]any{"title": special.Definition.Title},
+		)}}
 
 	case "forceRevealCategoryForAll":
 		categoryKey := resolveCategoryKey(asString(payload["category"]))
@@ -1960,9 +2065,9 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 			categoryKey = resolveCategoryKey(asString(def.Effect.Params["category"]))
 		}
 		if categoryKey == "" {
-			return gameActionResult{Error: "Нужно выбрать категорию."}
+			return runtimeError("You need to choose a category.", "error.category.required", nil)
 		}
-		forcedLabel := categoryKeyToLabel[categoryKey]
+		forcedLabel := canonicalCategoryKey(categoryKey)
 		if forcedLabel == "" {
 			deckName := categoryKeyToDeck[categoryKey]
 			if deckName == "" {
@@ -1972,7 +2077,12 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 		}
 		g.RoundRules.ForcedCategory = forcedLabel
 		special.Used = true
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s требует раскрыть категорию %s.", player.Name, forcedLabel))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.category.forcedAll", fmt.Sprintf("%s forces everyone to reveal category %s.", player.Name, forcedLabel)),
+			"event.category.forcedAll",
+			map[string]any{"name": player.Name, "category": forcedLabel},
+		)}}
 
 	case "setRoundRule":
 		if raw, ok := def.Effect.Params["noTalkUntilVoting"]; ok {
@@ -1981,20 +2091,25 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 			g.RoundRules.NoTalkUntilVoting = true
 		}
 		special.Used = true
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s вводит правило раунда.", player.Name))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.round.ruleSet", fmt.Sprintf("%s sets a round rule.", player.Name)),
+			"event.round.ruleSet",
+			map[string]any{"name": player.Name},
+		)}}
 
 	case "stealBaggage_and_giveSpecial":
 		targetID := strings.TrimSpace(asString(payload["targetPlayerId"]))
 		target := g.Players[targetID]
 		if target == nil || target.Status != playerAlive {
-			return gameActionResult{Error: "Цель не в игре."}
+			return runtimeError("The target is not in the game.", "error.target.notAlive", nil)
 		}
 		if targetID == player.PlayerID && !def.AllowSelf {
-			return gameActionResult{Error: "Нельзя выбрать себя."}
+			return runtimeError("You cannot choose yourself.", "error.target.cannotSelf", nil)
 		}
 		targetBaggage := g.getCardsByCategoryKey(target, "baggage", false)
 		if len(targetBaggage) == 0 {
-			return gameActionResult{Error: "У цели нет багажа."}
+			return runtimeError("The target has no baggage cards.", "error.baggage.none", nil)
 		}
 		requestedBaggageCardID := strings.TrimSpace(asString(payload["baggageCardId"]))
 		stolen := targetBaggage[0]
@@ -2007,7 +2122,7 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 				}
 			}
 			if stolen == nil {
-				return gameActionResult{Error: "Нужно выбрать конкретную карту багажа."}
+				return runtimeError("You need to choose a specific baggage card.", "error.baggage.pickSpecific", nil)
 			}
 		}
 		giveCount := asInt(def.Effect.Params["giveSpecialCount"], 1)
@@ -2015,7 +2130,7 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 			giveCount = 1
 		}
 		if len(g.specialPool) < giveCount {
-			return gameActionResult{Error: "В колоде особых условий больше нет карт."}
+			return runtimeError("There are no special conditions to give.", "error.special.poolEmpty", nil)
 		}
 
 		stolenCard := *stolen
@@ -2068,10 +2183,15 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 				ImgURL:       imgURL,
 				Revealed:     stolenVisible,
 				Hidden:       !stolenVisible,
-				BackCategory: categoryKeyToLabel["baggage"],
+				BackCategory: canonicalCategoryKey("baggage"),
 			},
 		}
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s забирает багаж у %s.", player.Name, target.Name))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.special.stealBaggageAndGive", fmt.Sprintf("%s steals baggage from %s and gives a special condition.", player.Name, target.Name)),
+			"event.special.stealBaggageAndGive",
+			map[string]any{"name": player.Name, "target": target.Name},
+		)}}
 
 	case "addFinalThreat":
 		threatKey := asString(def.Effect.Params["threatKey"])
@@ -2080,10 +2200,15 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 		}
 		g.FinalThreats = append(g.FinalThreats, threatKey)
 		special.Used = true
-		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEvent("info", fmt.Sprintf("%s добавляет угрозу в финал.", player.Name))}}
+		return gameActionResult{StateChanged: true, Events: []gameEvent{g.makeEventLocalized(
+			"info",
+			scenarioText(g.Scenario, "event.finalThreat.added", fmt.Sprintf("%s adds a threat to the finale.", player.Name)),
+			"event.finalThreat.added",
+			map[string]any{"name": player.Name},
+		)}}
 
 	default:
-		return gameActionResult{Error: "Эффект не поддерживается"}
+		return runtimeError("Effect is not supported.", "error.effect.unsupported", nil)
 	}
 }
 

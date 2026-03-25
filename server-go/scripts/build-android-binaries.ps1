@@ -1,9 +1,26 @@
 $ErrorActionPreference = "Stop"
 
-$RootDir = Resolve-Path (Join-Path $PSScriptRoot "..\\..")
+$RootDir = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $ServerDir = Join-Path $RootDir "server-go"
-$AssetsDir = Join-Path $RootDir "android-app\\app\\src\\main\\assets\\server-binaries"
 $AndroidAppDir = Join-Path $RootDir "android-app"
+
+$CandidateAssetsDirs = @(
+    (Join-Path $RootDir "android-app\src\main\assets\server-binaries"),
+    (Join-Path $RootDir "android-app\app\src\main\assets\server-binaries")
+)
+
+$AssetsDir = $null
+foreach ($candidate in $CandidateAssetsDirs) {
+    if (Test-Path $candidate) {
+        $AssetsDir = $candidate
+        break
+    }
+}
+if (-not $AssetsDir) {
+    $AssetsDir = $CandidateAssetsDirs[0]
+}
+
+Write-Host "Using Android assets dir: $AssetsDir"
 
 function Resolve-SdkRoot {
     if ($env:ANDROID_SDK_ROOT) { return $env:ANDROID_SDK_ROOT }
@@ -15,7 +32,7 @@ function Resolve-SdkRoot {
             if ($line -match "^sdk\.dir=(.+)$") {
                 $raw = $Matches[1].Trim()
                 if (-not $raw) { continue }
-                $normalized = $raw -replace "\\\\", "\" -replace "\\:", ":"
+                $normalized = $raw -replace "\\", "" -replace "\:", ":"
                 return $normalized
             }
         }
@@ -36,7 +53,7 @@ function Resolve-NdkLlvmBin {
     if (-not $ndkVersionDir) {
         throw "No NDK versions found in $ndkRoot."
     }
-    $llvmBin = Join-Path $ndkVersionDir.FullName "toolchains\\llvm\\prebuilt\\windows-x86_64\\bin"
+    $llvmBin = Join-Path $ndkVersionDir.FullName "toolchains\llvm\prebuilt\windows-x86_64\bin"
     if (-not (Test-Path $llvmBin)) {
         throw "NDK LLVM toolchain not found: $llvmBin"
     }
@@ -52,9 +69,9 @@ function Build-One {
         [string]$GoArm = ""
     )
 
-    $OutputPath = Join-Path $AssetsDir "$Abi\\server-go"
+    $OutputPath = Join-Path $AssetsDir "$Abi\server-go"
     New-Item -ItemType Directory -Force (Split-Path $OutputPath -Parent) | Out-Null
-    Write-Host "Building $Abi..."
+    Write-Host "Building $Abi -> $OutputPath"
 
     $cc = Join-Path $LlvmBinDir "$ClangTarget.cmd"
     if (-not (Test-Path $cc)) {

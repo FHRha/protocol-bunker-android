@@ -1,4 +1,5 @@
 import React from "react";
+import { useUiLocaleNamespace, useUiLocaleNamespacesActivation } from "../localization";
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -10,7 +11,17 @@ interface ErrorBoundaryState {
   errorMessage?: string;
 }
 
-export default class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+interface ErrorBoundaryText {
+  title: string;
+  unknown: string;
+  reload: string;
+  exit: string;
+}
+
+class ErrorBoundaryImpl extends React.Component<
+  ErrorBoundaryProps & { text: ErrorBoundaryText },
+  ErrorBoundaryState
+> {
   state: ErrorBoundaryState = { hasError: false };
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
@@ -19,8 +30,6 @@ export default class ErrorBoundary extends React.Component<ErrorBoundaryProps, E
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     if (import.meta.env.DEV) {
-      // Keep detailed logs in dev only.
-      // eslint-disable-next-line no-console
       console.error("[ErrorBoundary]", error, errorInfo);
     }
   }
@@ -42,18 +51,31 @@ export default class ErrorBoundary extends React.Component<ErrorBoundaryProps, E
     return (
       <div className="fatalErrorScreen" role="alert">
         <div className="fatalErrorCard">
-          <h2>Что-то пошло не так</h2>
-          <p className="muted">{this.state.errorMessage ?? "Неизвестная ошибка интерфейса."}</p>
+          <h2>{this.props.text.title}</h2>
+          <p className="muted">{this.state.errorMessage ?? this.props.text.unknown}</p>
           <div className="fatalErrorActions">
             <button className="primary" onClick={this.handleReload}>
-              Перезагрузить страницу
+              {this.props.text.reload}
             </button>
             <button className="ghost" onClick={this.handleHome}>
-              Выйти в меню
+              {this.props.text.exit}
             </button>
           </div>
         </div>
       </div>
     );
   }
+}
+
+export default function ErrorBoundary(props: ErrorBoundaryProps) {
+  useUiLocaleNamespacesActivation(["reconnect", "misc", "common"]);
+  const locale = useUiLocaleNamespace("reconnect", { fallbacks: ["misc", "common"] });
+  const text: ErrorBoundaryText = {
+    title: locale.t("fatalErrorTitle"),
+    unknown: locale.t("fatalErrorUnknown"),
+    reload: locale.t("fatalErrorReload"),
+    exit: locale.t("errorScreenExitToMenu"),
+  };
+
+  return <ErrorBoundaryImpl {...props} text={text} />;
 }

@@ -1,17 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   type GameSettings,
   type ManualRulesConfig,
   type RoomState,
 } from "@bunker/shared";
-import { ru } from "../i18n/ru";
+import { useUiLocaleNamespace, useUiLocaleNamespacesActivation } from "../localization";
 import InfoTip from "../components/InfoTip";
 import RulesModal from "../components/RulesModal";
+import Modal from "../components/Modal";
 
 interface LobbyPageProps {
   roomState: RoomState | null;
   playerId: string | null;
   isControl: boolean;
+  showHints: boolean;
   wsInteractive: boolean;
   onStart: () => void;
   onUpdateSettings: (settings: GameSettings) => void;
@@ -20,12 +22,13 @@ interface LobbyPageProps {
     presetPlayerCount?: number;
     manualConfig?: ManualRulesConfig;
   }) => void;
-  onKickPlayer: (targetPlayerId: string) => void;
-  onTransferHost: (targetPlayerId?: string) => void;
+  onKickPlayer: (targetPlayerId: string, options?: { skipConfirm?: boolean }) => void;
+  onTransferHost: (targetPlayerId: string) => void;
 }
 
+type LobbyPlayer = RoomState["players"][number];
+
 const GITHUB_URL = "https://github.com/FHRha";
-const RANDOM_DISASTER_ID = "__random__";
 
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -152,18 +155,19 @@ function hasSuspiciousPlayerNameChars(value: string): boolean {
   return /[\u0000-\u001f\u007f]/.test(value);
 }
 
-function getSafePlayerName(name: string, fallbackIndex: number): string {
-  const trimmed = name.trim();
-  if (!trimmed || hasSuspiciousPlayerNameChars(trimmed)) {
-    return `Игрок ${fallbackIndex + 1}`;
-  }
-  return trimmed;
+function getSafePlayerName(
+  playerName: string | null | undefined,
+  fallbackName: string
+): string {
+  const trimmed = typeof playerName === "string" ? playerName.trim() : "";
+  return trimmed || fallbackName;
 }
 
 export default function LobbyPage({
   roomState,
   playerId,
   isControl,
+  showHints,
   wsInteractive,
   onStart,
   onUpdateSettings,
@@ -171,20 +175,176 @@ export default function LobbyPage({
   onKickPlayer,
   onTransferHost,
 }: LobbyPageProps) {
+  useUiLocaleNamespacesActivation([
+    "lobby",
+    "common",
+    "room-settings",
+    "rules",
+    "format",
+    "maps",
+    "dev",
+    "reconnect",
+    "misc",
+    "game",
+  ]);
+  const lobbyTexts = useUiLocaleNamespace("lobby", {
+    fallbacks: [
+      "common",
+      "room-settings",
+      "rules",
+      "format",
+      "maps",
+      "dev",
+      "reconnect",
+      "misc",
+      "game",
+    ],
+  });
+  const lobbyLocale = useMemo(() => {
+    const rawPresetOptions = lobbyTexts.getRaw("rulesPresetOptions");
+    const rulesPresetOptions = Array.isArray(rawPresetOptions)
+      ? rawPresetOptions.map((value) => Number(value)).filter((value) => Number.isFinite(value))
+      : [];
+
+    return {
+      authorGithubAria: lobbyTexts.t("authorGithubAria"),
+      authorGithubLabel: lobbyTexts.t("authorGithubLabel"),
+      controlMarker: lobbyTexts.t("controlMarker"),
+      copiedButton: lobbyTexts.t("copiedButton"),
+      copyButton: lobbyTexts.t("copyButton"),
+      copyFailed: lobbyTexts.t("copyFailed"),
+      devKickNoTargets: lobbyTexts.t("devKickNoTargets"),
+      externalLabel: lobbyTexts.t("externalLabel"),
+      externalLinksHint: lobbyTexts.t("externalLinksHint"),
+      hiddenValue: lobbyTexts.t("hiddenValue"),
+      hideSecret: lobbyTexts.t("hideSecret"),
+      hostMarker: lobbyTexts.t("hostMarker"),
+      hostOnlyHint: lobbyTexts.t("hostOnlyHint"),
+      lobbyKickAgreeLabel: lobbyTexts.t("lobbyKickAgreeLabel"),
+      lobbyKickButton: lobbyTexts.t("lobbyKickButton"),
+      lobbyKickSelectPlaceholder: lobbyTexts.t("lobbyKickSelectPlaceholder"),
+      lobbyKickTitle: lobbyTexts.t("lobbyKickTitle"),
+      lobbyLoading: lobbyTexts.t("lobbyLoading"),
+      lobbyTitle: lobbyTexts.t("lobbyTitle"),
+      manualAdjust: lobbyTexts.t("manualAdjust"),
+      manualBunkerSlotsLabel: lobbyTexts.t("manualBunkerSlotsLabel"),
+      manualFillFromTemplate: lobbyTexts.t("manualFillFromTemplate"),
+      manualGenerate: lobbyTexts.t("manualGenerate"),
+      manualModeTitle: lobbyTexts.t("manualModeTitle"),
+      manualRevealsPlanLabel: lobbyTexts.t("manualRevealsPlanLabel"),
+      manualRevealsRecommended: lobbyTexts.t("manualRevealsRecommended"),
+      manualRevealsRequiredLabel: lobbyTexts.t("manualRevealsRequiredLabel"),
+      manualRevealsWarning: lobbyTexts.t("manualRevealsWarning"),
+      manualRoundAdd: lobbyTexts.t("manualRoundAdd"),
+      manualRoundRemove: lobbyTexts.t("manualRoundRemove"),
+      manualVotesFormatHint: lobbyTexts.t("manualVotesFormatHint"),
+      maxPlayersHint: lobbyTexts.t("maxPlayersHint"),
+      modalCancel: lobbyTexts.t("modalCancel"),
+      offlineMarker: lobbyTexts.t("offlineMarker"),
+      openButton: lobbyTexts.t("openButton"),
+      playersTitle: lobbyTexts.t("playersTitle"),
+      rulesButtonShort: lobbyTexts.t("rulesButtonShort"),
+      rulesModeAuto: lobbyTexts.t("rulesModeAuto"),
+      rulesModeLabel: lobbyTexts.t("rulesModeLabel"),
+      rulesModeManual: lobbyTexts.t("rulesModeManual"),
+      rulesNeedMinPlayers: lobbyTexts.t("rulesNeedMinPlayers"),
+      rulesPresetLabel: lobbyTexts.t("rulesPresetLabel"),
+      rulesPresetOptions,
+      rulesTitle: lobbyTexts.t("rulesTitle"),
+      settingsAutomationAuto: lobbyTexts.t("settingsAutomationAuto"),
+      settingsAutomationManual: lobbyTexts.t("settingsAutomationManual"),
+      settingsAutomationMode: lobbyTexts.t("settingsAutomationMode"),
+      settingsAutomationModeHint: lobbyTexts.t("settingsAutomationModeHint"),
+      settingsAutomationSemi: lobbyTexts.t("settingsAutomationSemi"),
+      settingsContinueAnyone: lobbyTexts.t("settingsContinueAnyone"),
+      settingsContinueHost: lobbyTexts.t("settingsContinueHost"),
+      settingsContinuePermission: lobbyTexts.t("settingsContinuePermission"),
+      settingsContinueRevealer: lobbyTexts.t("settingsContinueRevealer"),
+      settingsContinueTipText: lobbyTexts.t("settingsContinueTipText"),
+      settingsFinalThreatReveal: lobbyTexts.t("settingsFinalThreatReveal"),
+      settingsForcedDisaster: lobbyTexts.t("settingsForcedDisaster"),
+      settingsForcedDisasterRandom: lobbyTexts.t("settingsForcedDisasterRandom"),
+      settingsMaxPlayers: lobbyTexts.t("settingsMaxPlayers"),
+      settingsOff: lobbyTexts.t("settingsOff"),
+      settingsOn: lobbyTexts.t("settingsOn"),
+      settingsOtherBlock: lobbyTexts.t("settingsOtherBlock"),
+      settingsPostVoteTimer: lobbyTexts.t("settingsPostVoteTimer"),
+      settingsPreVoteTimer: lobbyTexts.t("settingsPreVoteTimer"),
+      settingsRevealDiscussionTimer: lobbyTexts.t("settingsRevealDiscussionTimer"),
+      settingsRevealTimeoutAction: lobbyTexts.t("settingsRevealTimeoutAction"),
+      settingsRevealTimeoutRandom: lobbyTexts.t("settingsRevealTimeoutRandom"),
+      settingsRevealTimeoutSkip: lobbyTexts.t("settingsRevealTimeoutSkip"),
+      settingsSpecialAnytime: lobbyTexts.t("settingsSpecialAnytime"),
+      settingsSpecialUsage: lobbyTexts.t("settingsSpecialUsage"),
+      settingsSpecialVotingOnly: lobbyTexts.t("settingsSpecialVotingOnly"),
+      settingsThreatAnyone: lobbyTexts.t("settingsThreatAnyone"),
+      settingsThreatHost: lobbyTexts.t("settingsThreatHost"),
+      settingsThreatTipText: lobbyTexts.t("settingsThreatTipText"),
+      settingsTimersBlock: lobbyTexts.t("settingsTimersBlock"),
+      settingsTitle: lobbyTexts.t("settingsTitle"),
+      showSecret: lobbyTexts.t("showSecret"),
+      startButton: lobbyTexts.t("startButton"),
+      transferHostButton: lobbyTexts.t("transferHostButton"),
+      transferHostSelectPlaceholder: lobbyTexts.t("transferHostSelectPlaceholder"),
+      transferHostTitle: lobbyTexts.t("transferHostTitle"),
+      votesByRoundLabel: lobbyTexts.t("votesByRoundLabel"),
+      wsActionDisabledHint: lobbyTexts.t("wsActionDisabledHint"),
+      scenarioLabel: (name: string) => lobbyTexts.t("scenarioLabel", { name }),
+      rulesPlayers: (count: number) => lobbyTexts.t("rulesPlayers", { count }),
+      rulesSeats: (count: number) => lobbyTexts.t("rulesSeats", { count }),
+      rulesVotes: (votes: number[]) => lobbyTexts.t("rulesVotes", { values: votes.join(" / ") }),
+      rulesExiles: (count: number) => lobbyTexts.t("rulesExiles", { count }),
+      playerExtra: (count: number) => lobbyTexts.t("playerExtra", { count }),
+      playerFallback: (index: number) => lobbyTexts.t("playerFallback", { index }),
+      manualVotesRequired: (count: number) => lobbyTexts.t("manualVotesRequired", { count }),
+      manualVotesSumHint: (sum: number, required: number) =>
+        lobbyTexts.t("manualVotesSumHint", { sum, required }),
+    };
+  }, [lobbyTexts]);
+
   const [draft, setDraft] = useState<GameSettings | null>(roomState?.settings ?? null);
   const [kickTargetId, setKickTargetId] = useState("");
-  const [hostTransferTargetId, setHostTransferTargetId] = useState("");
+  const [kickModalOpen, setKickModalOpen] = useState(false);
+  const [kickAgree, setKickAgree] = useState(false);
+  const [transferHostTargetId, setTransferHostTargetId] = useState("");
   const [manualTemplatePlayers, setManualTemplatePlayers] = useState(4);
   const [manualVotesInput, setManualVotesInput] = useState("0");
   const [rulesOpen, setRulesOpen] = useState(false);
 
   const canControl = Boolean(isControl);
+  const roomCode = roomState?.roomCode ?? "";
   const controlsDisabled = !wsInteractive;
 
   useEffect(() => {
     if (!roomState) return;
     setDraft(roomState.settings);
   }, [roomState?.settings]);
+
+  useEffect(() => {
+    if (!roomState) {
+      setTransferHostTargetId("");
+      return;
+    }
+    const candidateIds = roomState.players
+      .map((player) => player.playerId)
+      .filter((playerId) => playerId !== roomState.hostId);
+    setTransferHostTargetId((prev) => (candidateIds.includes(prev) ? prev : candidateIds[0] ?? ""));
+  }, [roomState?.players, roomState?.hostId]);
+
+  useEffect(() => {
+    if (!roomState) {
+      setKickTargetId("");
+      return;
+    }
+    const candidateIds = roomState.players
+      .map((player) => player.playerId)
+      .filter((playerId) => playerId !== roomState.controlId);
+    setKickTargetId((prev) => (candidateIds.includes(prev) ? prev : candidateIds[0] ?? ""));
+    if (candidateIds.length === 0) {
+      setKickAgree(false);
+      setKickModalOpen(false);
+    }
+  }, [roomState?.players, roomState?.controlId]);
 
   useEffect(() => {
     if (!roomState) return;
@@ -210,24 +370,34 @@ export default function LobbyPage({
   if (!roomState) {
     return (
       <section className="panel">
-        <h2>{ru.lobbyTitle}</h2>
-        <p className="muted">{ru.lobbyLoading}</p>
+        <h2>{lobbyLocale.lobbyTitle}</h2>
+        <p className="muted">{lobbyLocale.lobbyLoading}</p>
       </section>
     );
   }
 
   const settings = draft ?? roomState.settings;
-  const settingsAny = settings as GameSettings & { selectedDisasterId?: string };
+  const disasterOptions = roomState.disasterOptions ?? [];
+  const supportsForcedDisaster = disasterOptions.length > 0;
+  const disasterTitleById = new Map(disasterOptions.map((option) => [option.id, option.title]));
+  const normalizedForcedDisasterId =
+    settings.forcedDisasterId === "random" || disasterTitleById.has(settings.forcedDisasterId)
+      ? settings.forcedDisasterId
+      : "random";
+  const forcedDisasterTitle =
+    normalizedForcedDisasterId === "random"
+      ? lobbyLocale.settingsForcedDisasterRandom
+      : disasterTitleById.get(normalizedForcedDisasterId) ?? normalizedForcedDisasterId;
   const isClassic = roomState.scenarioMeta.id === "classic";
   const ruleset = roomState.ruleset;
   const rulesMode: "auto" | "manual" = ruleset.rulesetMode === "auto" ? "auto" : "manual";
   const presetCount =
     roomState.rulesPresetCount ?? ruleset.manualConfig?.seedTemplatePlayers ?? ruleset.playerCount;
-  const rulesModeText = rulesMode === "manual" ? ru.rulesModeManual : ru.rulesModeAuto;
-  const votesSummary = ru.rulesVotes(ruleset.votesPerRound);
+  const rulesModeText = rulesMode === "manual" ? lobbyLocale.rulesModeManual : lobbyLocale.rulesModeAuto;
+  const votesSummary = lobbyLocale.rulesVotes(ruleset.votesPerRound);
   const votesSeparatorIndex = votesSummary.indexOf(":");
   const votesLabel =
-    votesSeparatorIndex >= 0 ? votesSummary.slice(0, votesSeparatorIndex + 1) : "Голосования по раундам:";
+    votesSeparatorIndex >= 0 ? votesSummary.slice(0, votesSeparatorIndex + 1) : lobbyLocale.votesByRoundLabel;
   const votesValue =
     votesSeparatorIndex >= 0
       ? votesSummary.slice(votesSeparatorIndex + 1).trim()
@@ -251,23 +421,11 @@ export default function LobbyPage({
   const revealPlanText = revealPlan.join("/");
   const manualRevealNotRecommended = manualConfig.targetReveals !== 7;
   const canStart = !isClassic || roomState.players.length >= 4;
-  const disasterOptions = roomState.disasterOptions ?? [];
-  const selectedDisasterIdRaw = (settingsAny.forcedDisasterId ?? settingsAny.selectedDisasterId ?? "").trim();
-  const selectedDisasterId = selectedDisasterIdRaw || RANDOM_DISASTER_ID;
-  const isDisasterSelected = selectedDisasterId.length > 0;
-  const canStartWithDisaster = canStart && isDisasterSelected;
-  const selectedDisasterLabel =
-    selectedDisasterId === RANDOM_DISASTER_ID
-      ? ru.settingsDisasterRandom
-      : disasterOptions.find((option) => option.id === selectedDisasterId)?.title ??
-        ru.settingsDisasterUnknown;
   const minPlayersLimit = Math.max(isClassic ? 4 : 2, roomState.players.length);
-  const wsHint = controlsDisabled ? ru.wsActionDisabledHint : null;
-  const continueTipText =
-    "Определяет, кто может нажимать «Продолжить» после обсуждения: ведущий, раскрывший игрок или любой участник.";
-  const threatTipText =
-    "Определяет, кто может раскрывать карты угроз в финале игры: только ведущий или любой игрок.";
-  const rulesButtonLabel = "\u041f\u0440\u0430\u0432\u0438\u043b\u0430";
+  const wsHint = controlsDisabled ? lobbyLocale.wsActionDisabledHint : null;
+  const continueTipText = lobbyLocale.settingsContinueTipText;
+  const threatTipText = lobbyLocale.settingsThreatTipText;
+  const rulesButtonLabel = lobbyLocale.rulesButtonShort;
 
   const sendRulesUpdate = (payload: {
     mode: "auto" | "manual";
@@ -324,13 +482,12 @@ export default function LobbyPage({
   const visiblePlayers = roomState.players.slice(0, maxPlayersVisible);
   const extraPlayers = roomState.players.length - visiblePlayers.length;
   const kickCandidates = roomState.players.filter((player) => player.playerId !== roomState.controlId);
-  const hostTransferCandidates = roomState.players.filter(
-    (player) => player.playerId !== roomState.controlId && player.connected
-  );
+  const transferHostCandidates = roomState.players.filter((player) => player.playerId !== roomState.hostId);
   const playerIndexById = new Map(roomState.players.map((player, index) => [player.playerId, index]));
-  const currentHostIndex = playerIndexById.get(roomState.controlId) ?? 0;
-  const currentHostRawName = roomState.players.find((player) => player.playerId === roomState.controlId)?.name ?? "";
-  const currentHostName = getSafePlayerName(currentHostRawName, currentHostIndex);
+  const getFallbackPlayerName = (player: LobbyPlayer): string =>
+    lobbyLocale.playerFallback((playerIndexById.get(player.playerId) ?? 0) + 1);
+  const getLobbyPlayerName = (player: LobbyPlayer): string =>
+    getSafePlayerName(player.name, getFallbackPlayerName(player));
 
   const applySettings = (next: GameSettings) => {
     if (controlsDisabled) return;
@@ -343,152 +500,125 @@ export default function LobbyPage({
     applySettings({ ...draft, [key]: value });
   };
 
+  const updateAutomationMode = (mode: GameSettings["automationMode"]) => {
+    if (!draft) return;
+    applySettings({ ...draft, automationMode: mode });
+  };
+
   return (
     <div className={`lobby-page lobbyLayout ${canControl ? "lobby--host" : "lobby--player"}`}>
       <div className="lobbyGrid">
         <div className="lobbyLeftColumn">
           <section className="lobbyCard lobbyCard--players playersCard">
             <div className="lobbyCardHeader">
-              <h3 className="lobbyCardTitle">{ru.playersTitle}</h3>
+              <h3 className="lobbyCardTitle">{lobbyLocale.playersTitle}</h3>
             </div>
             <div className="lobbyCardBody">
               <ul className="player-list compact">
                 {visiblePlayers.map((player) => {
-                  const fallbackIndex = playerIndexById.get(player.playerId) ?? 0;
-                  const safeName = getSafePlayerName(player.name, fallbackIndex);
-                  const isHostPlayer = player.playerId === roomState.hostId;
-                  const isControlPlayer = player.playerId === roomState.controlId;
-                  const roleMarker =
-                    isHostPlayer && isControlPlayer
-                      ? ru.hostControlMarker
-                      : isControlPlayer
-                        ? ru.controlMarker
-                        : isHostPlayer
-                          ? ru.hostMarker
-                          : "";
+                  const safeName = getLobbyPlayerName(player);
                   return (
                     <li key={player.playerId}>
                       {safeName}
-                      {roleMarker}
-                      {player.connected ? "" : ru.offlineMarker}
+                      {player.playerId === roomState.hostId ? lobbyLocale.hostMarker : ""}
+                      {player.playerId === roomState.controlId ? lobbyLocale.controlMarker : ""}
+                      {player.connected ? "" : lobbyLocale.offlineMarker}
                     </li>
                   );
                 })}
               </ul>
-              {extraPlayers > 0 ? <div className="muted player-extra">+{extraPlayers} ещё</div> : null}
+              {extraPlayers > 0 ? <div className="muted player-extra">{lobbyLocale.playerExtra(extraPlayers)}</div> : null}
 
               {canControl && kickCandidates.length > 0 ? (
                 <div className="formRow">
-                  <span>{ru.lobbyKickTitle}</span>
+                  <span>{lobbyLocale.lobbyKickTitle}</span>
                   <div className="formControlRow">
-                    <select
-                      value={kickTargetId}
+                    <button
+                      className="ghost button-small"
                       disabled={controlsDisabled}
-                      onChange={(event) => setKickTargetId(event.target.value)}
-                    >
-                      <option value="" disabled>
-                        {ru.lobbyKickSelectPlaceholder}
-                      </option>
-                      {kickCandidates.map((player) => {
-                        const fallbackIndex = playerIndexById.get(player.playerId) ?? 0;
-                        const safeName = getSafePlayerName(player.name, fallbackIndex);
-                        return (
-                          <option key={player.playerId} value={player.playerId}>
-                            {safeName}
-                          </option>
-                        );
-                      })}
-                    </select>
-                    <button
-                      className="ghost button-small"
-                      disabled={!kickTargetId || controlsDisabled}
                       onClick={() => {
                         if (controlsDisabled) return;
-                        if (!kickTargetId) return;
-                        onKickPlayer(kickTargetId);
-                        setKickTargetId("");
+                        setKickAgree(false);
+                        setKickModalOpen(true);
                       }}
                     >
-                      {ru.lobbyKickButton}
+                      {lobbyLocale.lobbyKickButton}
                     </button>
                   </div>
                 </div>
               ) : null}
 
               {canControl ? (
-                <div className="formRow">
-                  <span>{ru.lobbyHostTransferTitle}</span>
-                  <span className="muted">{ru.lobbyHostCurrent(currentHostName)}</span>
-                  <div className="formControlRow">
+                <div className="formRow formRow--transferHost">
+                  <span>{lobbyLocale.transferHostTitle}</span>
+                  <div className="formControlRow formControlRow--transferHost">
                     <select
-                      value={hostTransferTargetId}
-                      disabled={controlsDisabled || hostTransferCandidates.length === 0}
-                      onChange={(event) => setHostTransferTargetId(event.target.value)}
+                      value={transferHostTargetId}
+                      disabled={controlsDisabled || transferHostCandidates.length === 0}
+                      onChange={(event) => setTransferHostTargetId(event.target.value)}
                     >
-                      <option value="">{ru.lobbyHostTransferAuto}</option>
-                      {hostTransferCandidates.map((player) => {
-                        const fallbackIndex = playerIndexById.get(player.playerId) ?? 0;
-                        const safeName = getSafePlayerName(player.name, fallbackIndex);
+                      {transferHostCandidates.length === 0 ? (
+                        <option value="" disabled>
+                          {lobbyLocale.transferHostSelectPlaceholder}
+                        </option>
+                      ) : null}
+                      {transferHostCandidates.map((player) => {
+                        const safeName = getLobbyPlayerName(player);
                         return (
                           <option key={player.playerId} value={player.playerId}>
                             {safeName}
+                            {player.playerId === roomState.controlId ? lobbyLocale.controlMarker : ""}
                           </option>
                         );
                       })}
                     </select>
                     <button
                       className="ghost button-small"
-                      disabled={controlsDisabled || hostTransferCandidates.length === 0}
+                      disabled={!transferHostTargetId || controlsDisabled || transferHostCandidates.length === 0}
                       onClick={() => {
                         if (controlsDisabled) return;
-                        onTransferHost(hostTransferTargetId || undefined);
-                        setHostTransferTargetId("");
+                        if (!transferHostTargetId) return;
+                        onTransferHost(transferHostTargetId);
                       }}
                     >
-                      {ru.lobbyHostTransferButton}
+                      {lobbyLocale.transferHostButton}
                     </button>
                   </div>
-                  {hostTransferCandidates.length === 0 ? (
-                    <span className="muted">{ru.lobbyHostTransferNoCandidates}</span>
-                  ) : null}
                 </div>
               ) : null}
 
               {canControl ? (
-                <>
-                  <div className="start-row">
-                    <button
-                      className="primary button-small"
-                      disabled={!canStartWithDisaster || controlsDisabled}
-                      onClick={() => {
-                        if (controlsDisabled) return;
-                        onStart();
-                      }}
-                    >
-                      {ru.startButton}
-                    </button>
-                    {!canStart && isClassic ? <span className="muted">{ru.rulesNeedMinPlayers}</span> : null}
-                    {!isDisasterSelected ? <span className="muted">{ru.settingsDisasterRequiredHint}</span> : null}
-                    {wsHint ? <span className="muted wsDisabledHint">{wsHint}</span> : null}
-                  </div>
-                </>
+                <div className="start-row">
+                  <button
+                    className="primary button-small"
+                    disabled={!canStart || controlsDisabled}
+                    onClick={() => {
+                      if (controlsDisabled) return;
+                      onStart();
+                    }}
+                  >
+                    {lobbyLocale.startButton}
+                  </button>
+                  {!canStart && isClassic ? <span className="muted">{lobbyLocale.rulesNeedMinPlayers}</span> : null}
+                  {wsHint ? <span className="muted wsDisabledHint">{wsHint}</span> : null}
+                </div>
               ) : (
-                <div className="muted playerOnlyHint">{ru.hostOnlyHint}</div>
+                <div className="muted playerOnlyHint">{lobbyLocale.hostOnlyHint}</div>
               )}
             </div>
           </section>
 
           <section className="lobbyCard lobbyCard--rules rulesCard">
             <div className="lobbyCardHeader">
-              <h3 className="lobbyCardTitle">{ru.rulesTitle}</h3>
+              <h3 className="lobbyCardTitle">{lobbyLocale.rulesTitle}</h3>
             </div>
             <div className="lobbyCardBody">
               <div className="rulesTop">
                 <div className="lobbyMetaLine">
-                  <span className="muted">{ru.scenarioLabel(roomState.scenarioMeta.name)}</span>
+                  <span className="muted">{lobbyLocale.scenarioLabel(roomState.scenarioMeta.name)}</span>
                 </div>
                 <div className="rulesModeBox">
-                  <div className="rulesModeLabel">{ru.rulesModeLabel}</div>
+                  <div className="rulesModeLabel">{lobbyLocale.rulesModeLabel}</div>
                   {canControl && isClassic ? (
                     <select
                       className="rulesModeSelect"
@@ -496,8 +626,8 @@ export default function LobbyPage({
                       disabled={controlsDisabled}
                       onChange={(event) => applyRulesMode(event.target.value as "auto" | "manual")}
                     >
-                      <option value="auto">{ru.rulesModeAuto}</option>
-                      <option value="manual">{ru.rulesModeManual}</option>
+                      <option value="auto">{lobbyLocale.rulesModeAuto}</option>
+                      <option value="manual">{lobbyLocale.rulesModeManual}</option>
                     </select>
                   ) : (
                     <div className="rulesModeValue">{rulesModeText}</div>
@@ -505,10 +635,10 @@ export default function LobbyPage({
                 </div>
               </div>
               <div className="rulesStats">
-                <div className="ruleCell">{ru.rulesPlayers(roomState.players.length)}</div>
-                <div className="ruleCell">{ru.rulesSeats(ruleset.bunkerSeats)}</div>
+                <div className="ruleCell">{lobbyLocale.rulesPlayers(roomState.players.length)}</div>
+                <div className="ruleCell">{lobbyLocale.rulesSeats(ruleset.bunkerSeats)}</div>
                 <div className="ruleCell ruleCellGhost" aria-hidden="true"></div>
-                <div className="ruleCell">{ru.rulesExiles(ruleset.totalExiles)}</div>
+                <div className="ruleCell">{lobbyLocale.rulesExiles(ruleset.totalExiles)}</div>
                 <div className="ruleCell rulesSpan2">
                   <span className="ruleFactLabel">{votesLabel}</span>
                   <span className="ruleFactValue nowrap">{votesValue}</span>
@@ -521,15 +651,15 @@ export default function LobbyPage({
         <div className="lobbyRightColumn">
           <section className="lobbyCard lobbyCard--settings settingsCard">
             <div className="lobbyCardHeader">
-              <h3 className="lobbyCardTitle">{ru.settingsTitle}</h3>
+              <h3 className="lobbyCardTitle">{lobbyLocale.settingsTitle}</h3>
             </div>
             <div className="lobbyCardBody">
               {canControl ? (
                 <fieldset className="settingsFieldset" disabled={controlsDisabled}>
                   <div className="settings-grid compact">
-                  <div className="settings-section-title">{ru.settingsTimersBlock}</div>
+                  <div className="settings-section-title">{lobbyLocale.settingsTimersBlock}</div>
                   <label className="formRow settingsRow--timer">
-                    <span className="settingsLabel">{ru.settingsRevealDiscussionTimer}</span>
+                    <span className="settingsLabel">{lobbyLocale.settingsRevealDiscussionTimer}</span>
                     <div className="formControlRow settingsControls">
                       <input
                         type="checkbox"
@@ -548,7 +678,7 @@ export default function LobbyPage({
                     </div>
                   </label>
                   <label className="formRow settingsRow--timer">
-                    <span className="settingsLabel">{ru.settingsPreVoteTimer}</span>
+                    <span className="settingsLabel">{lobbyLocale.settingsPreVoteTimer}</span>
                     <div className="formControlRow settingsControls">
                       <input
                         type="checkbox"
@@ -567,7 +697,7 @@ export default function LobbyPage({
                     </div>
                   </label>
                   <label className="formRow settingsRow--timer">
-                    <span className="settingsLabel">{ru.settingsPostVoteTimer}</span>
+                    <span className="settingsLabel">{lobbyLocale.settingsPostVoteTimer}</span>
                     <div className="formControlRow settingsControls">
                       <input
                         type="checkbox"
@@ -585,11 +715,26 @@ export default function LobbyPage({
                       />
                     </div>
                   </label>
-
-                  <div className="settings-section-title">{ru.settingsOtherBlock}</div>
+                  <div className="settings-section-title">{lobbyLocale.settingsOtherBlock}</div>
                   <label className="formRow">
                     <span className="settingsLabelWithTip">
-                      <span>{ru.settingsContinuePermission}</span>
+                      <span>{lobbyLocale.settingsAutomationMode}</span>
+                      <InfoTip text={lobbyLocale.settingsAutomationModeHint} />
+                    </span>
+                    <select
+                      value={settings.automationMode}
+                      onChange={(event) =>
+                        updateAutomationMode(event.target.value as GameSettings["automationMode"])
+                      }
+                    >
+                      <option value="auto">{lobbyLocale.settingsAutomationAuto}</option>
+                      <option value="semi">{lobbyLocale.settingsAutomationSemi}</option>
+                      <option value="manual">{lobbyLocale.settingsAutomationManual}</option>
+                    </select>
+                  </label>
+                  <label className="formRow">
+                    <span className="settingsLabelWithTip">
+                      <span>{lobbyLocale.settingsContinuePermission}</span>
                       <InfoTip text={continueTipText} />
                     </span>
                     <select
@@ -601,13 +746,13 @@ export default function LobbyPage({
                         )
                       }
                     >
-                      <option value="host_only">{ru.settingsContinueHost}</option>
-                      <option value="revealer_only">{ru.settingsContinueRevealer}</option>
-                      <option value="anyone">{ru.settingsContinueAnyone}</option>
+                      <option value="host_only">{lobbyLocale.settingsContinueHost}</option>
+                      <option value="revealer_only">{lobbyLocale.settingsContinueRevealer}</option>
+                      <option value="anyone">{lobbyLocale.settingsContinueAnyone}</option>
                     </select>
                   </label>
                   <label className="formRow">
-                    <span>{ru.settingsRevealTimeoutAction}</span>
+                    <span>{lobbyLocale.settingsRevealTimeoutAction}</span>
                     <select
                       value={settings.revealTimeoutAction}
                       onChange={(event) =>
@@ -617,25 +762,25 @@ export default function LobbyPage({
                         )
                       }
                     >
-                      <option value="random_card">{ru.settingsRevealTimeoutRandom}</option>
-                      <option value="skip_player">{ru.settingsRevealTimeoutSkip}</option>
+                      <option value="random_card">{lobbyLocale.settingsRevealTimeoutRandom}</option>
+                      <option value="skip_player">{lobbyLocale.settingsRevealTimeoutSkip}</option>
                     </select>
                   </label>
                   <label className="formRow">
-                    <span>{ru.settingsSpecialUsage}</span>
+                    <span>{lobbyLocale.settingsSpecialUsage}</span>
                     <select
                       value={settings.specialUsage}
                       onChange={(event) =>
                         updateField("specialUsage", event.target.value as GameSettings["specialUsage"])
                       }
                     >
-                      <option value="anytime">{ru.settingsSpecialAnytime}</option>
-                      <option value="only_during_voting">{ru.settingsSpecialVotingOnly}</option>
+                      <option value="anytime">{lobbyLocale.settingsSpecialAnytime}</option>
+                      <option value="only_during_voting">{lobbyLocale.settingsSpecialVotingOnly}</option>
                     </select>
                   </label>
                   <label className="formRow">
                     <span className="settingsLabelWithTip">
-                      <span>{ru.settingsFinalThreatReveal}</span>
+                      <span>{lobbyLocale.settingsFinalThreatReveal}</span>
                       <InfoTip text={threatTipText} />
                     </span>
                     <select
@@ -647,31 +792,28 @@ export default function LobbyPage({
                         )
                       }
                     >
-                      <option value="host">{ru.settingsThreatHost}</option>
-                      <option value="anyone">{ru.settingsThreatAnyone}</option>
+                      <option value="host">{lobbyLocale.settingsThreatHost}</option>
+                      <option value="anyone">{lobbyLocale.settingsThreatAnyone}</option>
                     </select>
                   </label>
+                  {supportsForcedDisaster ? (
+                    <label className="formRow">
+                      <span>{lobbyLocale.settingsForcedDisaster}</span>
+                      <select
+                        value={normalizedForcedDisasterId}
+                        onChange={(event) => updateField("forcedDisasterId", event.target.value)}
+                      >
+                        <option value="random">{lobbyLocale.settingsForcedDisasterRandom}</option>
+                        {disasterOptions.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.title}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
                   <label className="formRow">
-                    <span>{ru.settingsDisaster}</span>
-                    <select
-                      value={selectedDisasterId}
-                      onChange={(event) =>
-                        updateField(
-                          "forcedDisasterId",
-                          event.target.value as GameSettings["forcedDisasterId"]
-                        )
-                      }
-                    >
-                      <option value={RANDOM_DISASTER_ID}>{ru.settingsDisasterRandom}</option>
-                      {disasterOptions.map((option) => (
-                        <option key={option.id} value={option.id}>
-                          {option.title}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="formRow">
-                    <span>{ru.settingsMaxPlayers}</span>
+                    <span>{lobbyLocale.settingsMaxPlayers}</span>
                     <div className="settingsMaxPlayersControl">
                       <input
                         type="number"
@@ -685,7 +827,7 @@ export default function LobbyPage({
                           )
                         }
                       />
-                      <small className="muted">Максимум 16</small>
+                      <small className="muted">{lobbyLocale.maxPlayersHint}</small>
                     </div>
                   </label>
                 </div>
@@ -693,42 +835,54 @@ export default function LobbyPage({
               ) : (
                 <div className="settings-readonly compact">
                   <div>
-                    {ru.settingsRevealDiscussionTimer}:{" "}
-                    {settings.enableRevealDiscussionTimer ? ru.settingsOn : ru.settingsOff} (
+                    {lobbyLocale.settingsAutomationMode}:{" "}
+                    {settings.automationMode === "manual"
+                      ? lobbyLocale.settingsAutomationManual
+                      : settings.automationMode === "semi"
+                        ? lobbyLocale.settingsAutomationSemi
+                        : lobbyLocale.settingsAutomationAuto}
+                  </div>
+                  <div>
+                  </div>
+                  <div>
+                    {lobbyLocale.settingsRevealDiscussionTimer}:{" "}
+                    {settings.enableRevealDiscussionTimer ? lobbyLocale.settingsOn : lobbyLocale.settingsOff} (
                     {settings.revealDiscussionSeconds}s)
                   </div>
                   <div>
-                    {ru.settingsPreVoteTimer}: {settings.enablePreVoteDiscussionTimer ? ru.settingsOn : ru.settingsOff} (
+                    {lobbyLocale.settingsPreVoteTimer}: {settings.enablePreVoteDiscussionTimer ? lobbyLocale.settingsOn : lobbyLocale.settingsOff} (
                     {settings.preVoteDiscussionSeconds}s)
                   </div>
                   <div>
-                    {ru.settingsPostVoteTimer}: {settings.enablePostVoteDiscussionTimer ? ru.settingsOn : ru.settingsOff} (
+                    {lobbyLocale.settingsPostVoteTimer}: {settings.enablePostVoteDiscussionTimer ? lobbyLocale.settingsOn : lobbyLocale.settingsOff} (
                     {settings.postVoteDiscussionSeconds}s)
                   </div>
                   <div>
-                    {ru.settingsContinuePermission}:{" "}
+                    {lobbyLocale.settingsContinuePermission}:{" "}
                     {settings.continuePermission === "host_only"
-                      ? ru.settingsContinueHost
+                      ? lobbyLocale.settingsContinueHost
                       : settings.continuePermission === "revealer_only"
-                        ? ru.settingsContinueRevealer
-                        : ru.settingsContinueAnyone}
+                        ? lobbyLocale.settingsContinueRevealer
+                        : lobbyLocale.settingsContinueAnyone}
                   </div>
                   <div>
-                    {ru.settingsRevealTimeoutAction}:{" "}
-                    {settings.revealTimeoutAction === "random_card" ? ru.settingsRevealTimeoutRandom : ru.settingsRevealTimeoutSkip}
+                    {lobbyLocale.settingsRevealTimeoutAction}:{" "}
+                    {settings.revealTimeoutAction === "random_card" ? lobbyLocale.settingsRevealTimeoutRandom : lobbyLocale.settingsRevealTimeoutSkip}
                   </div>
                   <div>
-                    {ru.settingsSpecialUsage}: {settings.specialUsage === "anytime" ? ru.settingsSpecialAnytime : ru.settingsSpecialVotingOnly}
+                    {lobbyLocale.settingsSpecialUsage}: {settings.specialUsage === "anytime" ? lobbyLocale.settingsSpecialAnytime : lobbyLocale.settingsSpecialVotingOnly}
                   </div>
                   <div>
-                    {ru.settingsFinalThreatReveal}:{" "}
-                    {settings.finalThreatReveal === "anyone" ? ru.settingsThreatAnyone : ru.settingsThreatHost}
+                    {lobbyLocale.settingsFinalThreatReveal}:{" "}
+                    {settings.finalThreatReveal === "anyone" ? lobbyLocale.settingsThreatAnyone : lobbyLocale.settingsThreatHost}
                   </div>
+                  {supportsForcedDisaster ? (
+                    <div>
+                      {lobbyLocale.settingsForcedDisaster}: {forcedDisasterTitle}
+                    </div>
+                  ) : null}
                   <div>
-                    {ru.settingsDisaster}: {selectedDisasterLabel}
-                  </div>
-                  <div>
-                    {ru.settingsMaxPlayers}: {settings.maxPlayers}
+                    {lobbyLocale.settingsMaxPlayers}: {settings.maxPlayers}
                   </div>
                 </div>
               )}
@@ -738,19 +892,19 @@ export default function LobbyPage({
           {canControl && isClassic && rulesMode === "manual" ? (
             <section className="lobbyCard lobbyCard--manual manualCard">
               <div className="lobbyCardHeader">
-                <h3 className="lobbyCardTitle">Ручной режим</h3>
+                <h3 className="lobbyCardTitle">{lobbyLocale.manualModeTitle}</h3>
               </div>
               <div className="lobbyCardBody">
                 <fieldset className="settingsFieldset" disabled={controlsDisabled}>
                 <div className="manualRulesBuilder">
                   <div className="manualRulesRow">
                     <label>
-                      <span>{ru.rulesPresetLabel}</span>
+                      <span>{lobbyLocale.rulesPresetLabel}</span>
                       <select
                         value={manualTemplatePlayers}
                         onChange={(event) => setManualTemplatePlayers(Number(event.target.value))}
                       >
-                        {ru.rulesPresetOptions.map((count) => (
+                        {lobbyLocale.rulesPresetOptions.map((count) => (
                           <option key={count} value={count}>
                             {count}
                           </option>
@@ -758,13 +912,13 @@ export default function LobbyPage({
                       </select>
                     </label>
                     <button className="ghost button-small" onClick={fillManualFromTemplate}>
-                      Заполнить
+                      {lobbyLocale.manualFillFromTemplate}
                     </button>
                   </div>
 
                   <div className="manualRulesRow manualRulesRow3Wide">
                     <label>
-                      <span>Мест в бункере</span>
+                      <span>{lobbyLocale.manualBunkerSlotsLabel}</span>
                       <input
                         type="number"
                         min={1}
@@ -776,10 +930,10 @@ export default function LobbyPage({
                       />
                     </label>
                     <div className="manualRequiredVotes" aria-live="polite">
-                      Требуется голосований: {requiredVotes}
+                      {lobbyLocale.manualVotesRequired(requiredVotes)}
                     </div>
                     <label className="manualRevealTargetField">
-                      <span>Требуется раскрытий</span>
+                      <span>{lobbyLocale.manualRevealsRequiredLabel}</span>
                       <select
                         value={manualConfig.targetReveals}
                         onChange={(event) =>
@@ -795,20 +949,20 @@ export default function LobbyPage({
 
                   <div className="manualRevealMeta">
                     <div className="manualRevealHint">
-                      Рекомендуем: 7 (останется 1 закрытая карта из 8)
+                      {lobbyLocale.manualRevealsRecommended}
                     </div>
                     {manualRevealNotRecommended ? (
                       <div className="manualRevealWarning">
-                        Внимание: выбрано не рекомендованное значение раскрытий.
+                        {lobbyLocale.manualRevealsWarning}
                       </div>
                     ) : null}
                     <div className="manualRevealPlan">
-                      Раскрытия по раундам: <span className="nowrap">{revealPlanText}</span>
+                      {lobbyLocale.manualRevealsPlanLabel} <span className="nowrap">{revealPlanText}</span>
                     </div>
                   </div>
 
                   <div className="manualVotesHeader">
-                    <div>Голосования по раундам</div>
+                    <div>{lobbyLocale.votesByRoundLabel}</div>
                     <div className="manualVotesActions">
                       <button
                         className="ghost button-small"
@@ -818,7 +972,7 @@ export default function LobbyPage({
                           })
                         }
                       >
-                        + раунд
+                        {lobbyLocale.manualRoundAdd}
                       </button>
                       <button
                         className="ghost button-small"
@@ -832,7 +986,7 @@ export default function LobbyPage({
                           })
                         }
                       >
-                        - раунд
+                        {lobbyLocale.manualRoundRemove}
                       </button>
                       <button
                         className="ghost button-small"
@@ -845,13 +999,13 @@ export default function LobbyPage({
                           })
                         }
                       >
-                        Сгенерировать
+                        {lobbyLocale.manualGenerate}
                       </button>
                     </div>
                   </div>
 
                   <label className="manualVotesTextField">
-                    <span>Голосования по раундам (формат: 0/0/1/1)</span>
+                    <span>{lobbyLocale.manualVotesFormatHint}</span>
                     <input
                       type="text"
                       value={manualVotesInput}
@@ -884,7 +1038,7 @@ export default function LobbyPage({
 
                   <div className={`manualVotesSummary${manualVotesMismatch ? " warning" : ""}`}>
                     <span>
-                      Сумма голосований по раундам: {manualVotesSum}. Требуется: {requiredVotes}.
+                      {lobbyLocale.manualVotesSumHint(manualVotesSum, requiredVotes)}
                     </span>
                     {manualVotesMismatch ? (
                       <button
@@ -895,7 +1049,7 @@ export default function LobbyPage({
                           })
                         }
                       >
-                        Подогнать
+                        {lobbyLocale.manualAdjust}
                       </button>
                     ) : null}
                   </div>
@@ -915,10 +1069,75 @@ export default function LobbyPage({
         href={GITHUB_URL}
         target="_blank"
         rel="noopener noreferrer"
-        aria-label="GitHub автора"
+        aria-label={lobbyLocale.authorGithubAria}
       >
-        Сделано FHR · GitHub
+        {lobbyLocale.authorGithubLabel}
       </a>
+      <Modal
+        open={kickModalOpen && canControl}
+        title={lobbyLocale.lobbyKickTitle}
+        onClose={() => {
+          setKickModalOpen(false);
+          setKickAgree(false);
+        }}
+        dismissible={true}
+      >
+        {kickCandidates.length === 0 ? (
+          <div className="muted">{lobbyLocale.devKickNoTargets}</div>
+        ) : (
+          <>
+            <label className="topbar-menu-field">
+              <span>{lobbyLocale.lobbyKickSelectPlaceholder}</span>
+              <select
+                value={kickTargetId}
+                disabled={controlsDisabled}
+                onChange={(event) => setKickTargetId(event.target.value)}
+              >
+                {kickCandidates.map((player) => {
+                  const safeName = getLobbyPlayerName(player);
+                  return (
+                    <option key={player.playerId} value={player.playerId}>
+                      {safeName}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <label className="topbar-menu-checkbox">
+              <input
+                type="checkbox"
+                checked={kickAgree}
+                onChange={(event) => setKickAgree(event.target.checked)}
+              />
+              <span>{lobbyLocale.lobbyKickAgreeLabel}</span>
+            </label>
+            <div className="modal-actions">
+              <button
+                className="ghost"
+                onClick={() => {
+                  setKickModalOpen(false);
+                  setKickAgree(false);
+                }}
+              >
+                {lobbyLocale.modalCancel}
+              </button>
+              <button
+                className="primary"
+                disabled={!kickTargetId || !kickAgree || controlsDisabled}
+                onClick={() => {
+                  if (controlsDisabled) return;
+                  if (!kickTargetId || !kickAgree) return;
+                  onKickPlayer(kickTargetId, { skipConfirm: true });
+                  setKickModalOpen(false);
+                  setKickAgree(false);
+                }}
+              >
+                {lobbyLocale.lobbyKickButton}
+              </button>
+            </div>
+          </>
+        )}
+      </Modal>
       <RulesModal open={rulesOpen} onClose={() => setRulesOpen(false)} />
     </div>
   );

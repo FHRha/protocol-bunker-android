@@ -6,7 +6,144 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
+
+type specialConditionLocaleEntry struct {
+	Title string `json:"title"`
+	Text  string `json:"text"`
+}
+
+var (
+	specialConditionLocaleMu    sync.RWMutex
+	specialConditionLocaleCache = map[string]map[string]map[string]specialConditionLocaleEntry{}
+)
+
+func specialConditionLocaleRootCandidates(scenarioID string) []string {
+	wd, _ := os.Getwd()
+	normalizedScenario := strings.TrimSpace(scenarioID)
+	if normalizedScenario == "" {
+		normalizedScenario = scenarioClassic
+	}
+	return []string{
+		filepath.Join(wd, "locales", "special_conditions", normalizedScenario),
+		filepath.Join(wd, "..", "locales", "special_conditions", normalizedScenario),
+		filepath.Join(wd, "..", "..", "locales", "special_conditions", normalizedScenario),
+		filepath.Join(wd, "locales", "special_conditions", scenarioClassic),
+		filepath.Join(wd, "..", "locales", "special_conditions", scenarioClassic),
+		filepath.Join(wd, "..", "..", "locales", "special_conditions", scenarioClassic),
+	}
+}
+
+func loadSpecialConditionLocaleData(scenarioID string) map[string]map[string]specialConditionLocaleEntry {
+	data := map[string]map[string]specialConditionLocaleEntry{}
+	for _, locale := range []string{"ru", "en"} {
+		dict := map[string]specialConditionLocaleEntry{}
+		for _, root := range specialConditionLocaleRootCandidates(scenarioID) {
+			filePath := filepath.Join(root, locale+".json")
+			raw, err := os.ReadFile(filePath)
+			if err != nil {
+				continue
+			}
+			parsed := map[string]specialConditionLocaleEntry{}
+			if err := json.Unmarshal(raw, &parsed); err != nil {
+				continue
+			}
+			for key, value := range parsed {
+				if _, exists := dict[key]; !exists {
+					dict[key] = value
+				}
+			}
+			break
+		}
+		data[locale] = dict
+	}
+	return data
+}
+
+func normalizeSpecialConditionLocaleKey(value string) string {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return ""
+	}
+	raw = strings.ReplaceAll(raw, "\\", "/")
+	raw = strings.TrimPrefix(raw, "/")
+	raw = strings.TrimPrefix(raw, "assets/")
+	raw = strings.TrimPrefix(raw, "decks/")
+	if strings.HasPrefix(raw, "1x/") {
+		parts := strings.SplitN(raw, "/", 3)
+		if len(parts) == 3 && (parts[1] == "ru" || parts[1] == "en") {
+			raw = parts[2]
+		}
+	}
+	raw = strings.TrimPrefix(raw, "./")
+	for _, ext := range []string{".png", ".jpg", ".jpeg", ".webp"} {
+		if strings.HasSuffix(strings.ToLower(raw), ext) {
+			raw = raw[:len(raw)-len(ext)]
+			break
+		}
+	}
+	return raw
+}
+
+func specialConditionLocaleEntryFor(scenarioID, locale, key string) (specialConditionLocaleEntry, bool) {
+	normalizedScenario := strings.TrimSpace(scenarioID)
+	if normalizedScenario == "" {
+		normalizedScenario = scenarioClassic
+	}
+	normalizedLocale := normalizeCardLocale(locale)
+	specialConditionLocaleMu.RLock()
+	scenarioData := specialConditionLocaleCache[normalizedScenario]
+	specialConditionLocaleMu.RUnlock()
+	if scenarioData == nil {
+		specialConditionLocaleMu.Lock()
+		scenarioData = specialConditionLocaleCache[normalizedScenario]
+		if scenarioData == nil {
+			scenarioData = loadSpecialConditionLocaleData(normalizedScenario)
+			specialConditionLocaleCache[normalizedScenario] = scenarioData
+		}
+		specialConditionLocaleMu.Unlock()
+	}
+	if dict := scenarioData[normalizedLocale]; dict != nil {
+		if entry, ok := dict[key]; ok {
+			return entry, true
+		}
+	}
+	if normalizedLocale != "ru" {
+		if dict := scenarioData["ru"]; dict != nil {
+			if entry, ok := dict[key]; ok {
+				return entry, true
+			}
+		}
+	}
+	return specialConditionLocaleEntry{}, false
+}
+
+func localizeSpecialDefinitions(definitions []specialDefinition, scenarioID, locale string) []specialDefinition {
+	out := cloneSpecialDefinitions(definitions)
+	for i := range out {
+		keys := []string{
+			normalizeSpecialConditionLocaleKey(out[i].AssetID),
+			normalizeSpecialConditionLocaleKey(out[i].ID),
+			normalizeSpecialConditionLocaleKey(out[i].Title),
+		}
+		for _, key := range keys {
+			if key == "" {
+				continue
+			}
+			if entry, ok := specialConditionLocaleEntryFor(scenarioID, locale, key); ok {
+				if entry.Title != "" {
+					out[i].Title = entry.Title
+				}
+				if entry.Text != "" {
+					out[i].Text = entry.Text
+				}
+				break
+			}
+		}
+	}
+	return out
+}
 
 type specialDefinitionRaw struct {
 	ID          string   `json:"id"`

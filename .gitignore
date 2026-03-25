@@ -7,6 +7,10 @@ desktop.ini
 .idea/
 .vscode/
 *.iml
+AGENTS.md
+
+# Local sync source from the main project
+MainProject/
 
 # Logs / temp
 *.log

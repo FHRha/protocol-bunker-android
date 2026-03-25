@@ -1,74 +1,49 @@
 import type { SpecialTargetScope } from "./index.js";
+import { TARGETING_TERMS } from "./targetingLocale.js";
 
-const includesAny = (value: string, terms: string[]) => terms.some((term) => value.includes(term));
+const includesAny = (value: string, terms: readonly string[]) => terms.some((term) => value.includes(term));
 
 const normalize = (value?: string) => (value ?? "").toLowerCase();
 
-export const computeTargetScope = (uiTargeting?: string, text?: string): SpecialTargetScope | null => {
-  const targeting = normalize(uiTargeting);
-  const body = `${targeting} ${normalize(text)}`.trim();
+const resolveScopeFromText = (value: string): SpecialTargetScope | null => {
+  if (!value) return null;
+  if (includesAny(value, TARGETING_TERMS.noTarget)) return null;
 
-  if (!body) return null;
-  if (includesAny(body, ["no target", "passive", "auto", "без цели", "пассивн"])) return null;
-
-  if (
-    includesAny(body, [
-      "neighbor",
-      "сосед",
-      "соседа",
-      "соседей",
-      "слева",
-      "справа",
-      "left",
-      "right",
-    ])
-  ) {
+  if (includesAny(value, TARGETING_TERMS.neighbors)) {
     return "neighbors";
   }
 
-  if (
-    includesAny(body, [
-      "only self",
-      "self only",
-      "only yourself",
-      "только себя",
-      "только себе",
-      "у себя",
-    ])
-  ) {
+  if (includesAny(value, TARGETING_TERMS.selfOnly)) {
     return "self";
   }
 
-  if (includesAny(body, ["including self", "можно себя", "включая себя", "self allowed"])) {
+  if (includesAny(value, TARGETING_TERMS.includingSelf)) {
     return "any_including_self";
   }
 
-  if (includesAny(body, ["not self", "кроме себя", "не себя", "not-self"])) {
+  if (includesAny(value, TARGETING_TERMS.notSelf)) {
     return "any_alive";
   }
 
-  if (
-    includesAny(body, [
-      "any player",
-      "any alive",
-      "alive player",
-      "любой игрок",
-      "любого игрока",
-      "любой из игроков",
-      "любой живой",
-      "любого участника",
-      "у любого игрока",
-      "у любого живого",
-    ])
-  ) {
-    return "any_alive";
+  if (includesAny(value, TARGETING_TERMS.anyPlayer)) {
+    return "any_including_self";
   }
 
-  if (targeting.startsWith("choose") || includesAny(body, ["выберите", "выбери"])) {
+  if (includesAny(value, TARGETING_TERMS.choose)) {
     return "any_alive";
   }
 
   return null;
+};
+
+export const computeTargetScope = (uiTargeting?: string, text?: string): SpecialTargetScope | null => {
+  const targeting = normalize(uiTargeting);
+  const body = normalize(text);
+
+  const targetingScope = resolveScopeFromText(targeting);
+  if (targetingScope !== null || targeting) return targetingScope;
+
+  return resolveScopeFromText(body);
 };
 
 export const computeNeighbors = (
@@ -131,4 +106,3 @@ export const getTargetCandidates = (
 
   return Array.from(aliveSet.values()).filter((id) => id !== actorId);
 };
-

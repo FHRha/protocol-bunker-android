@@ -20,7 +20,7 @@ type specialEffectContract struct {
 }
 
 func TestSpecialEffectContract_GoLoaderParity(t *testing.T) {
-	contractPath := filepath.Join("..", "shared-contract", "special_effect_contract.json")
+	contractPath := filepath.Join("..", "shared", "special_effect_contract.json")
 	rawContract, err := os.ReadFile(contractPath)
 	if err != nil {
 		t.Fatalf("failed to read contract file: %v", err)

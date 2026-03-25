@@ -12,7 +12,7 @@ const (
 	manualDefaultTargetReveals = 7
 	defaultScenarioID          = scenarioClassic
 	defaultScenarioName        = "Classic Bunker"
-	defaultScenarioDescription = "Базовый сценарий: раунды, голосование и особые условия."
+	defaultScenarioDescription = "Base scenario: rounds, voting, and special conditions."
 	randomDisasterID           = "__random__"
 )
 
@@ -45,7 +45,6 @@ func defaultSettings() gameSettings {
 		EnablePostVoteDiscussion:    false,
 		PostVoteDiscussionSeconds:   45,
 		AutomationMode:              "manual",
-		EnablePresenterMode:         false,
 		ContinuePermission:          "revealer_only",
 		RevealTimeoutAction:         "random_card",
 		RevealsBeforeVoting:         2,
@@ -53,6 +52,7 @@ func defaultSettings() gameSettings {
 		MaxPlayers:                  12,
 		FinalThreatReveal:           "host",
 		ForcedDisasterID:            randomDisasterID,
+		CardLocale:                  "ru",
 		SelectedDisasterID:          "",
 	}
 }

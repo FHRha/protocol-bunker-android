@@ -42,7 +42,7 @@ func TestGameSession_ApplySpecial_ForceRevealCategory(t *testing.T) {
 	if !result.StateChanged {
 		t.Fatalf("expected state changed")
 	}
-	if g.RoundRules.ForcedCategory != categoryKeyToLabel["profession"] {
+	if g.RoundRules.ForcedCategory != canonicalCategoryKey("profession") {
 		t.Fatalf("unexpected forced category: %q", g.RoundRules.ForcedCategory)
 	}
 	if !g.Players["p1"].Specials[0].Used {
@@ -479,7 +479,7 @@ func TestGameSession_ApplySpecial_StealBaggageAndGiveSpecial_FullFlow(t *testing
 	targetPublic := g.buildPublicCategories(g.Players["p2"])
 	var baggageSlot *publicCategorySlot
 	for i := range targetPublic {
-		if targetPublic[i].Category == categoryKeyToLabel["baggage"] {
+		if targetPublic[i].Category == canonicalCategoryKey("baggage") {
 			baggageSlot = &targetPublic[i]
 			break
 		}
@@ -643,9 +643,9 @@ func TestGameSession_ResolveBunkerIndex_AllowsDevUnrevealedCards(t *testing.T) {
 		g.World.Bunker[i].IsRevealed = false
 	}
 
-	index, errText := g.resolveBunkerIndex(map[string]any{"bunkerIndex": 0}, false)
-	if errText != "" {
-		t.Fatalf("resolveBunkerIndex returned error in dev: %s", errText)
+	index, errInfo := g.resolveBunkerIndex(map[string]any{"bunkerIndex": 0}, false)
+	if !errInfo.isEmpty() {
+		t.Fatalf("resolveBunkerIndex returned error in dev: %s", errInfo.Message)
 	}
 	if index != 0 {
 		t.Fatalf("unexpected index: %d", index)

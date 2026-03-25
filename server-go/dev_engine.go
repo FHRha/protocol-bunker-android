@@ -85,7 +85,7 @@ func (d *devTestSession) handleAction(actorID, actionType string, payload map[st
 		result := d.core.handleAction(actorID, actionType, payload)
 		return d.postProcess(result)
 	case "devKickPlayer":
-		return gameActionResult{Error: "Неизвестное действие."}
+		return d.core.actionErrorLocalized("Unknown action.", d.core.scenarioTextKey("error.action.unknown", "error.action.unknown"), nil)
 	case "devSkipRound":
 		result := d.devSkipRound(actorID)
 		return d.postProcess(result)
@@ -99,16 +99,16 @@ func (d *devTestSession) handleAction(actorID, actionType string, payload map[st
 	default:
 		player := d.core.Players[actorID]
 		if player == nil {
-			return gameActionResult{Error: "Игрок не найден."}
+			return d.core.actionErrorLocalized("Player not found.", d.core.scenarioTextKey("error.player.notFound", "error.player.notFound"), nil)
 		}
 		if player.Status != playerAlive {
-			return gameActionResult{Error: "Вы исключены из игры."}
+			return d.core.actionErrorLocalized("You are excluded from the game.", d.core.scenarioTextKey("error.player.excluded", "error.player.excluded"), nil)
 		}
 		if d.core.Phase == scenarioPhaseEnded {
-			return gameActionResult{Error: "Игра уже завершена."}
+			return d.core.actionErrorLocalized("The game has already ended.", d.core.scenarioTextKey("error.game.alreadyEnded", "error.game.alreadyEnded"), nil)
 		}
 		if actionType == "finalizeVoting" && d.core.VotePhase != votePhaseSpecialWindow {
-			return gameActionResult{Error: "Окно спецусловий ещё не открыто."}
+			return d.core.actionErrorLocalized("The special-condition window is not open yet.", d.core.scenarioTextKey("error.vote.specialWindowNotOpen", "error.vote.specialWindowNotOpen"), nil)
 		}
 		result := d.core.handleAction(actorID, actionType, payload)
 		return d.postProcess(result)
@@ -119,11 +119,14 @@ func (d *devTestSession) markLeftBunker(targetID string) gameActionResult {
 	targetID = asString(targetID)
 	targetID = strings.TrimSpace(targetID)
 	if targetID == "" {
-		return gameActionResult{Error: "Игрок не найден."}
+		return d.core.actionErrorLocalized("Player not found.", d.core.scenarioTextKey("error.player.notFound", "error.player.notFound"), nil)
 	}
 	target := d.core.Players[targetID]
-	if target == nil || target.Status == playerLeftBunker {
-		return gameActionResult{Error: "Игрок не найден."}
+	if target == nil {
+		return d.core.actionErrorLocalized("Player not found.", d.core.scenarioTextKey("error.player.notFound", "error.player.notFound"), nil)
+	}
+	if target.Status == playerLeftBunker {
+		return d.core.actionErrorLocalized("Player already left the bunker.", d.core.scenarioTextKey("error.player.alreadyLeftBunker", "error.player.alreadyLeftBunker"), nil)
 	}
 
 	target.Status = playerLeftBunker
@@ -151,13 +154,13 @@ func (d *devTestSession) removeFromVotingDev(targetID string) {
 
 func (d *devTestSession) devSkipRound(actorID string) gameActionResult {
 	if actorID != d.core.HostID {
-		return gameActionResult{Error: "Только хост может пропустить раунд."}
+		return d.core.actionErrorLocalized("Only the host can skip the round.", d.core.scenarioTextKey("error.host.onlySkipRound", "classic.auto.097"), nil)
 	}
 	if d.core.Phase == scenarioPhaseVoting || d.core.Phase == scenarioPhaseResolution {
-		return gameActionResult{Error: "Нельзя пропустить раунд во время голосования."}
+		return d.core.actionErrorLocalized("Cannot skip a round during voting.", d.core.scenarioTextKey("error.skipRound.voting", "classic.auto.055"), nil)
 	}
 	if d.core.Phase == scenarioPhaseEnded {
-		return gameActionResult{Error: "Игра уже завершена."}
+		return d.core.actionErrorLocalized("The game has already ended.", d.core.scenarioTextKey("error.game.alreadyEnded", "error.game.alreadyEnded"), nil)
 	}
 
 	for _, id := range d.core.aliveIDs() {
@@ -309,7 +312,7 @@ func (d *devTestSession) autoVoteBots() gameActionResult {
 			viable = append(viable, candidateID)
 		}
 		if len(viable) == 0 {
-			d.core.markVoteWasted(voterID, "Нет доступных кандидатов.")
+			d.core.markVoteWasted(voterID, "No valid targets available.")
 			changed = true
 			continue
 		}

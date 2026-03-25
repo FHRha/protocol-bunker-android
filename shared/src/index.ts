@@ -1,5 +1,6 @@
 import { z } from "zod";
 export * from "./targeting.js";
+export * from "./targetingLocale.js";
 export type RoomPhase = "lobby" | "game";
 export type ScenarioPhase = "reveal" | "reveal_discussion" | "voting" | "resolution" | "ended";
 export type VotePhase = "voting" | "voteSpecialWindow" | "voteResolve";
@@ -25,6 +26,7 @@ export type RevealTimeoutAction = "random_card" | "skip_player";
 export type SpecialUsageMode = "anytime" | "only_during_voting";
 export type FinalThreatReveal = "host" | "anyone";
 export type AutomationMode = "auto" | "semi" | "manual";
+export type CardLocale = "ru" | "en";
 export type SpecialTargetScope = "neighbors" | "any_alive" | "self" | "any_including_self";
 export type WorldCardKind = "bunker" | "disaster" | "threat";
 export type PostGameOutcome = "survived" | "failed";
@@ -39,6 +41,7 @@ export interface WorldCard {
   description: string;
   text?: string;
   imageId?: string;
+  imgUrl?: string;
 }
 
 export interface WorldFacedCard extends WorldCard {
@@ -71,118 +74,6 @@ export interface PostGameState {
   decidedAt?: number;
 }
 
-export interface OverlayTagView {
-  label: string;
-  revealed: boolean;
-  value: string;
-}
-
-export interface OverlayCategoryView {
-  key: string;
-  label: string;
-  revealed: boolean;
-  value: string;
-  imgUrl?: string;
-}
-
-export interface OverlayOverrideEnabled {
-  topBunker?: boolean;
-  topCatastrophe?: boolean;
-  topThreats?: boolean;
-  playerNames?: boolean;
-  playerTraits?: boolean;
-  playerCategories?: boolean;
-}
-
-export interface OverlayOverrideTop {
-  bunkerLines?: string[];
-  catastropheText?: string;
-  threatsLines?: string[];
-}
-
-export interface OverlayOverridePlayerTraits {
-  sex?: string;
-  age?: string;
-  orient?: string;
-}
-
-export interface OverlayOverridePlayerEnabled {
-  name?: boolean;
-  traits?: boolean;
-  categories?: Record<string, boolean>;
-}
-
-export interface OverlayOverridePlayer {
-  name?: string;
-  traits?: OverlayOverridePlayerTraits;
-  categories?: Record<string, string>;
-  enabled?: OverlayOverridePlayerEnabled;
-}
-
-export interface OverlayExtraText {
-  id: string;
-  text: string;
-  x: number;
-  y: number;
-  align?: "left" | "center" | "right";
-  size?: number;
-  color?: string;
-  shadow?: boolean;
-  visible?: boolean;
-}
-
-export interface OverlayOverrides {
-  enabled?: OverlayOverrideEnabled;
-  top?: OverlayOverrideTop;
-  players?: Record<string, OverlayOverridePlayer>;
-  extraTexts?: OverlayExtraText[];
-}
-
-export interface OverlayPlayerView {
-  id: string;
-  nickname: string;
-  connected?: boolean;
-  alive: boolean;
-  tags: {
-    sex: OverlayTagView;
-    age: OverlayTagView;
-    orientation: OverlayTagView;
-  };
-  categories: OverlayCategoryView[];
-}
-
-export interface OverlayTopCardItem {
-  title: string;
-  subtitle?: string;
-  imageId?: string;
-}
-
-export interface OverlayState {
-  roomId: string;
-  playerCount: number;
-  top: {
-    bunker: {
-      revealed: number;
-      total: number;
-      lines: string[];
-      items?: OverlayTopCardItem[];
-    };
-    catastrophe: {
-      text: string;
-      title?: string;
-      imageId?: string;
-    };
-    threats: {
-      revealed: number;
-      total: number;
-      lines: string[];
-      items?: OverlayTopCardItem[];
-    };
-  };
-  players: OverlayPlayerView[];
-  overrides?: OverlayOverrides;
-}
-
 export interface GameTimerState {
   kind: GameTimerKind;
   endsAt: number;
@@ -212,7 +103,6 @@ export interface GameSettings {
   enablePostVoteDiscussionTimer: boolean;
   postVoteDiscussionSeconds: number;
   automationMode: AutomationMode;
-  enablePresenterMode: boolean;
   continuePermission: ContinuePermission;
   revealTimeoutAction: RevealTimeoutAction;
   revealsBeforeVoting: number;
@@ -220,6 +110,7 @@ export interface GameSettings {
   maxPlayers: number;
   finalThreatReveal: FinalThreatReveal;
   forcedDisasterId: string;
+  cardLocale?: CardLocale;
 }
 
 export interface ScenarioMeta {
@@ -234,6 +125,7 @@ export interface CardRef {
   deck: string;
   instanceId?: string;
   labelShort?: string;
+  imgUrl?: string;
   secret?: boolean;
   missing?: boolean;
 }
@@ -282,7 +174,9 @@ export interface PublicCategoryCard {
 export interface YouCategoryCard {
   instanceId: string;
   labelShort: string;
+  deck?: string;
   revealed: boolean;
+  imgUrl?: string;
 }
 
 export interface PlayerSummary {
@@ -354,9 +248,20 @@ export interface VotingProgress {
   total: number;
 }
 
+export type LocalizedVars = Record<string, string | number>;
+
+export type VoteReasonCode =
+  | "VOTE_BLOCKED"
+  | "VOTE_FORCED_SELF"
+  | "VOTE_SPENT"
+  | "VOTE_TARGET_DISALLOWED"
+  | "VOTE_TARGET_UNAVAILABLE"
+  | "VOTE_BANNED_AGAINST_TARGET";
+
 export interface ThreatModifierView {
   delta: number;
   reasons: string[];
+  reasonCardIds?: string[];
   baseCount: number;
   finalCount: number;
 }
@@ -368,6 +273,10 @@ export interface VotePublic {
   targetName?: string;
   status: "voted" | "not_voted" | "invalid";
   reason?: string;
+  reasonKey?: string;
+  reasonVars?: LocalizedVars;
+  reasonCode?: VoteReasonCode;
+  weight?: number;
   submittedAt?: number;
 }
 
@@ -375,6 +284,8 @@ export interface GameEvent {
   id: string;
   kind: GameEventKind;
   message: string;
+  messageKey?: string;
+  messageVars?: LocalizedVars;
   createdAt: number;
 }
 
@@ -383,6 +294,8 @@ export interface GameView {
   round: number;
   categoryOrder: string[];
   lastStageText?: string;
+  lastStageTextKey?: string;
+  lastStageTextVars?: LocalizedVars;
   ruleset: GameRuleset;
   world?: WorldState30;
   worldEvent?: WorldEvent;
@@ -417,6 +330,8 @@ export interface GameView {
     lastEliminated?: string;
     winners?: string[];
     resolutionNote?: string;
+    resolutionNoteKey?: string;
+    resolutionNoteVars?: LocalizedVars;
     roundRules?: {
       noTalkUntilVoting?: boolean;
       forcedRevealCategory?: string;
@@ -428,6 +343,9 @@ export interface AssetCard {
   id: string;
   deck: string;
   labelShort: string;
+  deckId?: string;
+  cardId?: string;
+  locale?: string;
 }
 
 export interface AssetCatalog {
@@ -514,6 +432,8 @@ export type ScenarioAction =
 
 export interface ScenarioActionResult {
   error?: string;
+  errorKey?: string;
+  errorVars?: LocalizedVars;
   stateChanged?: boolean;
 }
 
@@ -618,123 +538,6 @@ export const PostGameStateSchema = z.object({
   decidedAt: z.number().int().nonnegative().optional(),
 });
 
-export const OverlayTagViewSchema = z.object({
-  label: z.string(),
-  revealed: z.boolean(),
-  value: z.string(),
-});
-
-export const OverlayCategoryViewSchema = z.object({
-  key: z.string(),
-  label: z.string(),
-  revealed: z.boolean(),
-  value: z.string(),
-  imgUrl: z.string().optional(),
-});
-
-export const OverlayOverrideEnabledSchema = z.object({
-  topBunker: z.boolean().optional(),
-  topCatastrophe: z.boolean().optional(),
-  topThreats: z.boolean().optional(),
-  playerNames: z.boolean().optional(),
-  playerTraits: z.boolean().optional(),
-  playerCategories: z.boolean().optional(),
-});
-
-export const OverlayOverrideTopSchema = z.object({
-  bunkerLines: z.array(z.string().max(120)).max(5).optional(),
-  catastropheText: z.string().max(600).optional(),
-  threatsLines: z.array(z.string().max(120)).max(6).optional(),
-});
-
-export const OverlayOverridePlayerTraitsSchema = z.object({
-  sex: z.string().max(120).optional(),
-  age: z.string().max(120).optional(),
-  orient: z.string().max(120).optional(),
-});
-
-export const OverlayOverridePlayerEnabledSchema = z.object({
-  name: z.boolean().optional(),
-  traits: z.boolean().optional(),
-  categories: z.record(z.string().max(40), z.boolean()).optional(),
-});
-
-export const OverlayOverridePlayerSchema = z.object({
-  name: z.string().max(24).optional(),
-  traits: OverlayOverridePlayerTraitsSchema.optional(),
-  categories: z.record(z.string().max(120)).optional(),
-  enabled: OverlayOverridePlayerEnabledSchema.optional(),
-});
-
-export const OverlayExtraTextSchema = z.object({
-  id: z.string().min(1).max(64),
-  text: z.string().max(120),
-  x: z.number().min(0).max(1),
-  y: z.number().min(0).max(1),
-  align: z.union([z.literal("left"), z.literal("center"), z.literal("right")]).optional(),
-  size: z.number().min(8).max(96).optional(),
-  color: z.string().max(32).optional(),
-  shadow: z.boolean().optional(),
-  visible: z.boolean().optional(),
-});
-
-export const OverlayOverridesSchema = z.object({
-  enabled: OverlayOverrideEnabledSchema.optional(),
-  top: OverlayOverrideTopSchema.optional(),
-  players: z.record(OverlayOverridePlayerSchema).optional(),
-  extraTexts: z.array(OverlayExtraTextSchema).optional(),
-});
-
-export const OverlayPlayerViewSchema = z.object({
-  id: z.string(),
-  nickname: z.string(),
-  connected: z.boolean().optional(),
-  alive: z.boolean(),
-  tags: z.object({
-    sex: OverlayTagViewSchema,
-    age: OverlayTagViewSchema,
-    orientation: OverlayTagViewSchema,
-  }),
-  categories: z.array(OverlayCategoryViewSchema),
-});
-
-export const OverlayStateSchema = z.object({
-  roomId: z.string(),
-  playerCount: z.number().int().nonnegative(),
-  top: z.object({
-    bunker: z.object({
-      revealed: z.number().int().nonnegative(),
-      total: z.number().int().nonnegative(),
-      lines: z.array(z.string()),
-      items: z.array(
-        z.object({
-          title: z.string(),
-          subtitle: z.string().optional(),
-          imageId: z.string().optional(),
-        })
-      ).optional(),
-    }),
-    catastrophe: z.object({
-      text: z.string(),
-      title: z.string().optional(),
-      imageId: z.string().optional(),
-    }),
-    threats: z.object({
-      revealed: z.number().int().nonnegative(),
-      total: z.number().int().nonnegative(),
-      lines: z.array(z.string()),
-      items: z.array(
-        z.object({
-          title: z.string(),
-          subtitle: z.string().optional(),
-          imageId: z.string().optional(),
-        })
-      ).optional(),
-    }),
-  }),
-  players: z.array(OverlayPlayerViewSchema),
-  overrides: OverlayOverridesSchema.optional(),
-});
 
 export const GameSettingsSchema = z.object({
   enableRevealDiscussionTimer: z.boolean(),
@@ -744,7 +547,6 @@ export const GameSettingsSchema = z.object({
   enablePostVoteDiscussionTimer: z.boolean(),
   postVoteDiscussionSeconds: z.number().int().min(5).max(600),
   automationMode: z.union([z.literal("auto"), z.literal("semi"), z.literal("manual")]),
-  enablePresenterMode: z.boolean(),
   continuePermission: z.union([
     z.literal("host_only"),
     z.literal("revealer_only"),
@@ -756,6 +558,7 @@ export const GameSettingsSchema = z.object({
   maxPlayers: z.number().int().min(2),
   finalThreatReveal: z.union([z.literal("host"), z.literal("anyone")]),
   forcedDisasterId: z.string().max(256),
+  cardLocale: z.union([z.literal("ru"), z.literal("en")]).optional(),
 });
 
 export const CardRefSchema = z.object({
@@ -763,6 +566,7 @@ export const CardRefSchema = z.object({
   deck: z.string(),
   instanceId: z.string().optional(),
   labelShort: z.string().optional(),
+  imgUrl: z.string().optional(),
   secret: z.boolean().optional(),
   missing: z.boolean().optional(),
 });
@@ -827,7 +631,9 @@ export const PublicCategoryCardSchema = z.object({
 export const YouCategoryCardSchema = z.object({
   instanceId: z.string(),
   labelShort: z.string(),
+  deck: z.string().optional(),
   revealed: z.boolean(),
+  imgUrl: z.string().optional(),
 });
 
 export const PublicCategorySlotSchema = z.object({
@@ -894,9 +700,12 @@ export const VotingProgressSchema = z.object({
   total: z.number().int().nonnegative(),
 });
 
+export const LocalizedVarsSchema = z.record(z.union([z.string(), z.number()]));
+
 export const ThreatModifierViewSchema = z.object({
   delta: z.number().int(),
   reasons: z.array(z.string()),
+  reasonCardIds: z.array(z.string()).optional(),
   baseCount: z.number().int().nonnegative(),
   finalCount: z.number().int().nonnegative(),
 });
@@ -908,6 +717,19 @@ export const VotePublicSchema = z.object({
   targetName: z.string().optional(),
   status: z.union([z.literal("voted"), z.literal("not_voted"), z.literal("invalid")]),
   reason: z.string().optional(),
+  reasonKey: z.string().optional(),
+  reasonVars: LocalizedVarsSchema.optional(),
+  reasonCode: z
+    .union([
+      z.literal("VOTE_BLOCKED"),
+      z.literal("VOTE_FORCED_SELF"),
+      z.literal("VOTE_SPENT"),
+      z.literal("VOTE_TARGET_DISALLOWED"),
+      z.literal("VOTE_TARGET_UNAVAILABLE"),
+      z.literal("VOTE_BANNED_AGAINST_TARGET"),
+    ])
+    .optional(),
+  weight: z.number().optional(),
   submittedAt: z.number().int().nonnegative().optional(),
 });
 
@@ -924,6 +746,8 @@ export const GameEventSchema = z.object({
     z.literal("playerLeftBunker"),
   ]),
   message: z.string(),
+  messageKey: z.string().optional(),
+  messageVars: LocalizedVarsSchema.optional(),
   createdAt: z.number().int().nonnegative(),
 });
 
@@ -938,6 +762,8 @@ export const GameViewSchema = z.object({
   round: z.number().int().nonnegative(),
   categoryOrder: z.array(z.string()),
   lastStageText: z.string().optional(),
+  lastStageTextKey: z.string().optional(),
+  lastStageTextVars: LocalizedVarsSchema.optional(),
   ruleset: GameRulesetSchema,
   world: WorldState30Schema.optional(),
   worldEvent: WorldEventSchema.optional(),
@@ -972,6 +798,8 @@ export const GameViewSchema = z.object({
     lastEliminated: z.string().optional(),
     winners: z.array(z.string()).optional(),
     resolutionNote: z.string().optional(),
+    resolutionNoteKey: z.string().optional(),
+    resolutionNoteVars: LocalizedVarsSchema.optional(),
     roundRules: z
       .object({
         noTalkUntilVoting: z.boolean().optional(),
@@ -986,6 +814,7 @@ export const ClientHelloSchema = z.object({
   roomCode: z.string().min(1).optional(),
   create: z.boolean().optional(),
   scenarioId: z.string().min(1).optional(),
+  locale: z.union([z.literal("ru"), z.literal("en")]).optional(),
   playerToken: z.string().min(1).optional(),
   tabId: z.string().min(1).optional(),
   sessionId: z.string().min(1).optional(),
@@ -1067,6 +896,12 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
     payload: GameSettingsSchema,
   }),
   z.object({
+    type: z.literal("updateLocale"),
+    payload: z.object({
+      locale: z.union([z.literal("ru"), z.literal("en")]),
+    }),
+  }),
+  z.object({
     type: z.literal("updateRules"),
     payload: z.object({
       mode: z.union([z.literal("auto"), z.literal("manual")]),
@@ -1090,13 +925,6 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("requestHostTransfer"),
     payload: z.object({
       targetPlayerId: z.string().min(1).optional(),
-    }),
-  }),
-  z.object({
-    type: z.literal("overlaySubscribe"),
-    payload: z.object({
-      roomCode: z.string().min(1),
-      token: z.string().min(1),
     }),
   }),
 ]);
@@ -1126,6 +954,8 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
       payload: z.object({
         message: z.string(),
         code: z.string().optional(),
+        errorKey: z.string().optional(),
+        errorVars: LocalizedVarsSchema.optional(),
         maxPlayers: z.number().int().min(2).max(64).optional(),
       }),
     }),
@@ -1134,8 +964,6 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
     payload: z.object({
       playerId: z.string(),
       playerToken: z.string(),
-      controlToken: z.string().optional(),
-      editToken: z.string().optional(),
     }),
   }),
   z.object({
@@ -1155,19 +983,6 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("pong"),
     payload: z.object({}).optional(),
   }),
-  z.object({
-    type: z.literal("overlayState"),
-    payload: z.object({
-      ok: z.boolean(),
-      unauthorized: z.boolean().optional(),
-      roomCode: z.string().optional(),
-      state: OverlayStateSchema.optional(),
-      presenter: z.any().optional(),
-      presenterModeEnabled: z.boolean().optional(),
-      role: z.union([z.literal("VIEW"), z.literal("PLAYER"), z.literal("CONTROL")]).optional(),
-      message: z.string().optional(),
-    }),
-  }),
 ]);
 
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
@@ -1176,5 +991,3 @@ export type ClientHelloPayload = z.infer<typeof ClientHelloSchema>;
 
 export { formatLabelShort } from "./labelFormat.js";
 export { getRulesetForPlayerCount, RULESET_PRESET_COUNTS, RULESET_TABLE } from "./ruleset.js";
-export { buildLinkSet, normalizeBase, LINK_PATHS } from "./urlBuilder.js";
-export type { BuildLinkSetInput, BuiltLinkSet, UrlPair } from "./urlBuilder.js";

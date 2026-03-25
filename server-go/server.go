@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -177,7 +178,6 @@ func newServer(cfg config) (*server, error) {
 		cfg:                cfg,
 		rooms:              map[string]*room{},
 		connToID:           map[*websocket.Conn]connInfo{},
-		companionConns:     map[*websocket.Conn]companionConnInfo{},
 		assets:             assets,
 		specialDefinitions: specialDefinitions,
 		upgrader: websocket.Upgrader{
@@ -282,8 +282,208 @@ func normalizeAutomationMode(raw string) string {
 	}
 }
 
+func normalizeCardLocale(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "en":
+		return "en"
+	default:
+		return "ru"
+	}
+}
+
+var (
+	serverLocaleOnce sync.Once
+	serverLocaleData map[string]map[string]string
+)
+
+func serverLocaleRootCandidates() []string {
+	wd, _ := os.Getwd()
+	return []string{
+		filepath.Join(wd, "locales", "server"),
+		filepath.Join(wd, "..", "locales", "server"),
+		filepath.Join(wd, "..", "..", "locales", "server"),
+	}
+}
+
+func loadServerLocaleData() {
+	serverLocaleData = map[string]map[string]string{}
+	for _, locale := range []string{"ru", "en"} {
+		dict := map[string]string{}
+		for _, root := range serverLocaleRootCandidates() {
+			filePath := filepath.Join(root, locale+".json")
+			raw, err := os.ReadFile(filePath)
+			if err != nil {
+				continue
+			}
+			parsed := map[string]string{}
+			if err := json.Unmarshal(raw, &parsed); err != nil {
+				continue
+			}
+			for key, value := range parsed {
+				dict[key] = value
+			}
+			break
+		}
+		serverLocaleData[locale] = dict
+	}
+}
+
+func serverText(locale, key, fallback string) string {
+	serverLocaleOnce.Do(loadServerLocaleData)
+	locale = normalizeCardLocale(locale)
+	if dict := serverLocaleData[locale]; dict != nil {
+		if value := dict[key]; value != "" {
+			return value
+		}
+	}
+	if locale != "ru" {
+		if dict := serverLocaleData["ru"]; dict != nil {
+			if value := dict[key]; value != "" {
+				return value
+			}
+		}
+	}
+	return fallback
+}
+
+func formatServerTemplate(template string, vars map[string]any) string {
+	if len(vars) == 0 {
+		return template
+	}
+	out := template
+	for key, value := range vars {
+		replacement := fmt.Sprint(value)
+		out = strings.ReplaceAll(out, "{"+key+"}", replacement)
+		out = strings.ReplaceAll(out, "{{"+key+"}}", replacement)
+	}
+	return out
+}
+
+func serverLocaleMessage(room *room, key, fallback string, vars map[string]any) string {
+	locale := "ru"
+	if room != nil {
+		locale = room.Settings.CardLocale
+	}
+	return formatServerTemplate(serverText(locale, key, fallback), vars)
+}
+
+func serverErrorLocaleKey(payloadKey, code string) string {
+	switch payloadKey {
+	case "errorHelloInvalidPayload", "errorResumeInvalidPayload", "errorSettingsInvalidPayload", "errorLocaleInvalidPayload", "errorRulesPayloadInvalid":
+		return "error.invalidMessageFormat"
+	case "errorNameRequired":
+		return "error.nameRequired"
+	case "errorRoomCodeRequired":
+		return "error.roomCodeRequired"
+	case "errorRoomNotFound":
+		return "error.roomNotFound"
+	case "errorReconnectFailed", "errorHelloAttachFailed", "errorResumePlayerMissing", "errorPlayerRestoreFailed":
+		return "error.playerRestoreFailedRejoin"
+	case "errorResumeSessionMismatch":
+		return "error.resumeSessionMismatch"
+	case "errorGameAlreadyStarted":
+		return "error.control.gameAlreadyStarted"
+	case "errorStartHostOnly":
+		return "error.onlyControlStartGame"
+	case "errorClassicMinPlayers":
+		return "error.control.minPlayersRequired"
+	case "errorDisasterInvalid":
+		return "error.disasterInvalid"
+	case "errorSettingsLobbyOnly":
+		return "error.settingsLobbyOnly"
+	case "errorSettingsHostOnly":
+		return "error.onlyControlChangeSettings"
+	case "errorSettingsMaxPlayersTooLow":
+		return "error.maxPlayersLowerThanCurrent"
+	case "errorRulesClassicOnly":
+		return "error.rulesClassicOnly"
+	case "errorRulesLobbyOnly":
+		return "error.rulesLobbyOnly"
+	case "errorRulesHostOnly":
+		return "error.onlyControlChangeRules"
+	case "errorRulesModeInvalid":
+		return "error.rulesModeInvalid"
+	case "errorHostTransferHostOnly":
+		return "error.onlyControlTransferRole"
+	case "errorHostTransferNoOnline":
+		return "error.noOtherPlayerForHostTransfer"
+	case "errorHostTransferSame":
+		return "error.alreadyHost"
+	case "errorHostTransferTargetNotFound", "errorKickTargetMissing":
+		return "error.targetPlayerNotFound"
+	case "errorHostTransferTargetOffline":
+		return "error.cannotTransferHostOffline"
+	case "errorKickLobbyOnly":
+		return "error.commandLobbyOnly"
+	case "errorKickHostOnly":
+		return "error.onlyControlKick"
+	case "errorKickTargetRequired":
+		return "error.control.kickTargetRequired"
+	case "errorKickTargetHost":
+		return "error.cannotKickHost"
+	case "errorControlOnlyAction":
+		return "error.actionControlOnly"
+	case "errorCreateRoomFailed":
+		return "error.createRoomFailed"
+	case "errorScenarioRequired":
+		return "error.scenarioIdRequired"
+	case "errorScenarioInvalid":
+		return "error.scenarioNotFound"
+	case "gameNotStarted":
+		return "error.gameNotStarted"
+	case "error.control.gameAlreadyStarted":
+		return "error.control.gameAlreadyStarted"
+	case "error.control.minPlayersRequired":
+		return "error.control.minPlayersRequired"
+	}
+
+	switch code {
+	case "INVALID_MESSAGE_TYPE", "UNKNOWN_MESSAGE_TYPE", "INVALID_RESUME_PAYLOAD", "INVALID_SETTINGS_PAYLOAD", "INVALID_LOCALE_PAYLOAD":
+		return "error.invalidMessageFormat"
+	case "ROOM_NOT_FOUND":
+		return "error.roomNotFound"
+	case "CONTROL_UNAVAILABLE":
+		return "error.control.noActiveHost"
+	case "GAME_ALREADY_STARTED":
+		return "error.control.gameAlreadyStarted"
+	case "NOT_ENOUGH_PLAYERS":
+		return "error.control.minPlayersRequired"
+	case "DISASTER_DECK_MISSING":
+		return "error.disasterDeckMissing"
+	case "INVALID_DISASTER":
+		return "error.disasterInvalid"
+	case "WRONG_PHASE":
+		return "error.settingsLobbyOnly"
+	case "INVALID_MAX_PLAYERS":
+		return "error.maxPlayersLowerThanCurrent"
+	case "RECONNECT_FORBIDDEN":
+		return "error.reconnectForbidden"
+	case "PLAYER_NOT_FOUND":
+		return "error.targetPlayerNotFound"
+	case "PLAYER_RESTORE_FAILED":
+		return "error.playerRestoreFailedRejoin"
+	case "NO_HOST_TRANSFER_TARGETS":
+		return "error.noOtherPlayerForHostTransfer"
+	case "HOST_TRANSFER_SAME_TARGET":
+		return "error.alreadyHost"
+	case "HOST_TRANSFER_TARGET_NOT_FOUND":
+		return "error.targetPlayerNotFound"
+	case "HOST_TRANSFER_TARGET_OFFLINE":
+		return "error.cannotTransferHostOffline"
+	case "ROOM_FULL":
+		return "error.roomFull"
+	case "LEFT_BUNKER":
+		return "info.playerLeftBunker"
+	case "GAME_NOT_STARTED":
+		return "error.gameNotStarted"
+	}
+
+	return ""
+}
+
 func (s *server) normalizeSettingsLocked(settings gameSettings) gameSettings {
 	settings.AutomationMode = normalizeAutomationMode(settings.AutomationMode)
+	settings.CardLocale = normalizeCardLocale(settings.CardLocale)
 	selected := strings.TrimSpace(settings.ForcedDisasterID)
 	if selected == "" {
 		selected = strings.TrimSpace(settings.SelectedDisasterID)
@@ -500,8 +700,6 @@ func (s *server) handleMessage(conn *websocket.Conn, raw map[string]any) {
 	if msgType == "hello" || msgType == "resume" || msgType == "startGame" {
 		if info, ok := s.connToID[conn]; ok {
 			log.Printf("[ws-in] type=%s room=%s player=%s", msgType, info.RoomCode, info.PlayerID)
-		} else if companion, ok := s.companionConns[conn]; ok {
-			log.Printf("[ws-in] type=%s room=%s player=companion", msgType, companion.RoomCode)
 		} else {
 			log.Printf("[ws-in] type=%s room=<none> player=<none>", msgType)
 		}
@@ -516,12 +714,12 @@ func (s *server) handleMessage(conn *websocket.Conn, raw map[string]any) {
 		s.handleStartGameLocked(conn)
 	case "updateSettings":
 		s.handleUpdateSettingsLocked(conn, payload)
+	case "updateLocale":
+		s.handleUpdateLocaleLocked(conn, payload)
 	case "updateRules":
 		s.handleUpdateRulesLocked(conn, payload)
 	case "requestHostTransfer":
 		s.handleHostTransferLocked(conn, payload)
-	case "overlaySubscribe":
-		s.handleOverlaySubscribeLocked(conn, payload)
 	case "kickFromLobby":
 		s.handleKickFromLobbyLocked(conn, payload)
 	case "ping":
@@ -529,187 +727,44 @@ func (s *server) handleMessage(conn *websocket.Conn, raw map[string]any) {
 	case "revealCard", "vote", "finalizeVoting", "applySpecial", "revealWorldThreat", "setBunkerOutcome", "setOutcome", "setBunkerResult", "setBunkerSurvived", "setBunkerFailed", "continueRound", "devSkipRound", "devKickPlayer", "devAddPlayer", "devRemovePlayer", "markLeftBunker":
 		s.handleGameActionLocked(conn, msgType, payload)
 	default:
-		log.Printf("[ws] unknown message type=%s payload=%s", msgType, summarizePayload(payload))
-		s.sendErrorLocked(conn, "Unknown message type.")
-	}
-}
-
-func resolveControlCompanionTokenFromHello(hello clientHelloPayload) string {
-	if token := strings.TrimSpace(hello.ControlToken); token != "" {
-		return token
-	}
-	if token := strings.TrimSpace(hello.EditToken); token != "" {
-		return token
-	}
-	return ""
-}
-
-func (s *server) isControlCompanionTokenLocked(room *room, rawToken string) bool {
-	if room == nil {
-		return false
-	}
-	token := strings.TrimSpace(rawToken)
-	if token == "" {
-		return false
-	}
-	if token == strings.TrimSpace(room.ControlToken) || token == strings.TrimSpace(room.EditToken) {
-		return true
-	}
-	if s.cfg.IdentityMode != "prod" {
-		control := room.Players[room.ControlID]
-		if control != nil && token == strings.TrimSpace(control.Token) {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *server) currentControlPlayerLocked(room *room) (string, *player) {
-	if room == nil {
-		return "", nil
-	}
-	controlID := strings.TrimSpace(room.ControlID)
-	if controlID != "" {
-		if control := room.Players[controlID]; control != nil {
-			return controlID, control
-		}
-	}
-	hostID := strings.TrimSpace(room.HostID)
-	if hostID != "" {
-		if host := room.Players[hostID]; host != nil {
-			return hostID, host
-		}
-	}
-	return "", nil
-}
-
-func (s *server) sendControlCompanionHelloAckLocked(room *room, conn *websocket.Conn) bool {
-	controlID, control := s.currentControlPlayerLocked(room)
-	if controlID == "" || control == nil {
-		return false
-	}
-	s.writeWSLocked(conn, wsServerMessage{
-		Type: "helloAck",
-		Payload: map[string]any{
-			"playerId":     controlID,
-			"playerToken":  control.Token,
-			"controlToken": room.ControlToken,
-			"editToken":    room.EditToken,
-		},
-	})
-	return true
-}
-
-func (s *server) detachControlCompanionLocked(conn *websocket.Conn) {
-	info, ok := s.companionConns[conn]
-	if !ok {
+		log.Printf("[ws] ignoring unknown message type=%s payload=%s", msgType, summarizePayload(payload))
 		return
 	}
-	delete(s.companionConns, conn)
-	if room := s.rooms[info.RoomCode]; room != nil && room.ControlCompanions != nil {
-		delete(room.ControlCompanions, conn)
-		s.rescheduleRoomCleanupTimerLocked(room)
-	}
-}
-
-func (s *server) attachControlCompanionLocked(room *room, conn *websocket.Conn) bool {
-	if room == nil {
-		s.sendErrorLocked(conn, "Room is not found.")
-		return false
-	}
-	controlID, control := s.currentControlPlayerLocked(room)
-	if controlID == "" || control == nil {
-		s.sendErrorLocked(conn, "Control player is not available.")
-		return false
-	}
-
-	if room.ControlCompanions == nil {
-		room.ControlCompanions = map[*websocket.Conn]struct{}{}
-	}
-	room.ControlCompanions[conn] = struct{}{}
-	s.companionConns[conn] = companionConnInfo{RoomCode: room.Code}
-
-	s.sendControlCompanionHelloAckLocked(room, conn)
-	s.writeWSLocked(conn, wsServerMessage{
-		Type:    "roomState",
-		Payload: s.buildRoomStateLocked(room),
-	})
-	if room.Phase == phaseGame && room.Game != nil {
-		view := room.Game.buildGameView(room, controlID)
-		s.writeWSLocked(conn, wsServerMessage{
-			Type:    "gameView",
-			Payload: view,
-		})
-	}
-	s.rescheduleRoomCleanupTimerLocked(room)
-	return true
-}
-func (s *server) handleOverlaySubscribeLocked(conn *websocket.Conn, payload map[string]any) {
-	var request clientOverlaySubscribePayload
-	if !decodePayload(payload, &request) {
-		s.sendErrorLocked(conn, "Operation failed.")
-		return
-	}
-	roomCode := strings.ToUpper(strings.TrimSpace(request.RoomCode))
-	token := strings.TrimSpace(request.Token)
-	if roomCode == "" || token == "" {
-		s.sendErrorLocked(conn, "Operation failed.")
-		return
-	}
-	room := s.rooms[roomCode]
-	if room == nil {
-		s.sendErrorLocked(conn, "Operation failed.")
-		return
-	}
-	if !s.isControlCompanionTokenLocked(room, token) {
-		s.sendErrorLocked(conn, "Operation failed.")
-		return
-	}
-	s.attachControlCompanionLocked(room, conn)
 }
 
 func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any) {
 	var hello clientHelloPayload
 	if !decodePayload(payload, &hello) {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Invalid hello payload.", "errorHelloInvalidPayload", nil)
 		return
 	}
 
 	if hello.Create {
 		hello.Name = strings.TrimSpace(hello.Name)
 		if hello.Name == "" {
-			s.sendErrorLocked(conn, "Operation failed.")
+			s.sendErrorDetailedLocked(conn, "Name is required.", "errorNameRequired", nil)
 			return
 		}
 		if err := s.createRoomAndAttachLocked(conn, hello); err != nil {
-			s.sendErrorLocked(conn, err.Error())
+			s.sendErrorDetailedLocked(conn, err.Error(), inferUiErrorKey(err.Error()), nil)
 		}
 		return
 	}
 
 	roomCode := strings.ToUpper(strings.TrimSpace(hello.RoomCode))
 	if roomCode == "" {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Room code is required.", "errorRoomCodeRequired", nil)
 		return
 	}
 	room := s.rooms[roomCode]
 	if room == nil {
-		s.sendErrorLocked(conn, "Operation failed.")
-		return
-	}
-
-	if companionToken := resolveControlCompanionTokenFromHello(hello); companionToken != "" {
-		if !s.isControlCompanionTokenLocked(room, companionToken) {
-			s.sendErrorLocked(conn, "Operation failed.")
-			return
-		}
-		s.attachControlCompanionLocked(room, conn)
+		s.sendErrorDetailedLocked(conn, "Room is not found.", "errorRoomNotFound", nil)
 		return
 	}
 
 	hello.Name = strings.TrimSpace(hello.Name)
 	if hello.Name == "" {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Name is required.", "errorNameRequired", nil)
 		return
 	}
 
@@ -726,7 +781,7 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 	}
 
 	if existing == nil && room.Phase == phaseGame {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Reconnection failed.", "errorReconnectFailed", nil)
 		return
 	}
 	if existing == nil && len(room.Players) >= s.effectiveMaxPlayers(room) {
@@ -734,7 +789,7 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 		s.writeWSLocked(conn, wsServerMessage{
 			Type: "error",
 			Payload: map[string]any{
-				"message":    fmt.Sprintf("Room is full (max %d).", maxPlayers),
+				"message":    serverLocaleMessage(room, "error.roomFull", fmt.Sprintf("Room is full (max %d).", maxPlayers), map[string]any{"maxPlayers": maxPlayers}),
 				"code":       "ROOM_FULL",
 				"maxPlayers": maxPlayers,
 			},
@@ -744,7 +799,7 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 
 	joined := s.attachPlayerLocked(room, hello, conn, existing)
 	if joined == nil {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Failed to attach the player to the room.", "errorHelloAttachFailed", nil)
 		return
 	}
 	s.broadcastRoomStateLocked(room)
@@ -756,7 +811,7 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 func (s *server) createRoomAndAttachLocked(conn *websocket.Conn, hello clientHelloPayload) error {
 	scenarioID := strings.TrimSpace(hello.ScenarioID)
 	if scenarioID == "" {
-		return fmt.Errorf("Operation failed.")
+		return fmt.Errorf("Scenario is required.")
 	}
 
 	var scenario scenarioMeta
@@ -769,29 +824,29 @@ func (s *server) createRoomAndAttachLocked(conn *websocket.Conn, hello clientHel
 		}
 	}
 	if !scenarioFound {
-		return fmt.Errorf("Operation failed.")
+		return fmt.Errorf("Selected scenario is invalid.")
 	}
 
 	roomCode := s.generateRoomCodeLocked()
 	initialRuleset := buildAutoRuleset(minClassicPlayers)
 	settings := s.normalizeSettingsLocked(defaultSettingsForScenario(scenario.ID))
+	if strings.TrimSpace(hello.Locale) != "" {
+		settings.CardLocale = normalizeCardLocale(hello.Locale)
+	}
 	room := &room{
-		Code:              roomCode,
-		CreatedAtMS:       time.Now().UnixMilli(),
-		Phase:             phaseLobby,
-		Scenario:          scenario,
-		Settings:          settings,
-		Ruleset:           initialRuleset,
-		RulesOverridden:   false,
-		Players:           map[string]*player{},
-		PlayersByToken:    map[string]string{},
-		PlayersBySession:  map[string]string{},
-		JoinOrder:         []string{},
-		IsDev:             scenario.ID == scenarioDevTest,
-		NoConnectedSince:  nil,
-		ControlToken:      randomToken(24),
-		EditToken:         randomToken(24),
-		ControlCompanions: map[*websocket.Conn]struct{}{},
+		Code:             roomCode,
+		CreatedAtMS:      time.Now().UnixMilli(),
+		Phase:            phaseLobby,
+		Scenario:         scenario,
+		Settings:         settings,
+		Ruleset:          initialRuleset,
+		RulesOverridden:  false,
+		Players:          map[string]*player{},
+		PlayersByToken:   map[string]string{},
+		PlayersBySession: map[string]string{},
+		JoinOrder:        []string{},
+		IsDev:            scenario.ID == scenarioDevTest,
+		NoConnectedSince: nil,
 	}
 	s.rooms[roomCode] = room
 	log.Printf("[room] created room=%s scenario=%s", room.Code, room.Scenario.ID)
@@ -799,7 +854,7 @@ func (s *server) createRoomAndAttachLocked(conn *websocket.Conn, hello clientHel
 	joined := s.attachPlayerLocked(room, hello, conn, nil)
 	if joined == nil {
 		delete(s.rooms, room.Code)
-		return fmt.Errorf("Operation failed.")
+		return fmt.Errorf("Failed to create room.")
 	}
 	s.broadcastRoomStateLocked(room)
 	return nil
@@ -809,23 +864,23 @@ func (s *server) handleResumeLocked(conn *websocket.Conn, payload map[string]any
 	roomCode := strings.ToUpper(strings.TrimSpace(asString(payload["roomCode"])))
 	sessionID := strings.TrimSpace(asString(payload["sessionId"]))
 	if roomCode == "" || sessionID == "" {
-		s.sendErrorLocked(conn, "Invalid resume payload.")
+		s.sendErrorDetailedLocked(conn, "Invalid resume payload.", "errorResumeInvalidPayload", nil)
 		return
 	}
 	room := s.rooms[roomCode]
 	if room == nil {
-		s.sendErrorLocked(conn, "Room is not found.")
+		s.sendErrorDetailedLocked(conn, "Room is not found.", "errorRoomNotFound", nil)
 		return
 	}
 
 	playerID, ok := room.PlayersBySession[sessionID]
 	if !ok {
-		s.sendErrorLocked(conn, "Session is not attached to this room.")
+		s.sendErrorDetailedLocked(conn, "Session is not attached to this room.", "errorResumeSessionMismatch", nil)
 		return
 	}
 	existing := room.Players[playerID]
 	if existing == nil {
-		s.sendErrorLocked(conn, "Player is not found in room.")
+		s.sendErrorDetailedLocked(conn, "Player is not found in room.", "errorResumePlayerMissing", nil)
 		return
 	}
 
@@ -838,7 +893,7 @@ func (s *server) handleResumeLocked(conn *websocket.Conn, payload map[string]any
 	}
 	joined := s.attachPlayerLocked(room, hello, conn, existing)
 	if joined == nil {
-		s.sendErrorLocked(conn, "Failed to restore player session.")
+		s.sendErrorDetailedLocked(conn, "Failed to restore player session.", "errorReconnectFailed", nil)
 		return
 	}
 	s.broadcastRoomStateLocked(room)
@@ -856,33 +911,37 @@ func (s *server) handleStartGameLocked(conn *websocket.Conn) {
 	}
 	if room.Phase != phaseLobby {
 		log.Printf("[startGame] reject room=%s player=%s reason=wrong_phase phase=%s", room.Code, playerID, room.Phase)
-		s.sendErrorLocked(conn, "Game is already started.")
+		s.sendErrorDetailedLocked(conn, "Game is already started.", "errorGameAlreadyStarted", nil)
 		return
 	}
 	if playerID != room.ControlID {
 		log.Printf("[startGame] reject room=%s player=%s control=%s reason=not_control", room.Code, playerID, room.ControlID)
-		s.sendErrorLocked(conn, "Only control player can start the game.")
+		s.sendErrorDetailedLocked(conn, "Only control player can start the game.", "errorStartHostOnly", nil)
 		return
 	}
 	if room.Scenario.ID == scenarioClassic && len(room.Players) < minClassicPlayers {
 		log.Printf("[startGame] reject room=%s reason=not_enough_players players=%d min=%d", room.Code, len(room.Players), minClassicPlayers)
-		s.sendErrorLocked(conn, fmt.Sprintf("Classic requires at least %d players.", minClassicPlayers))
+		s.sendErrorDetailedLocked(conn, fmt.Sprintf("Classic requires at least %d players.", minClassicPlayers), "errorClassicMinPlayers", map[string]any{"count": minClassicPlayers})
 		return
 	}
-	if len(s.disasterDeckCardsLocked()) == 0 {
-		log.Printf("[startGame] reject room=%s reason=missing_disaster_deck", room.Code)
-		s.sendErrorLocked(conn, "Disaster deck is not available.")
-		return
-	}
-
 	selectedDisasterID := strings.TrimSpace(room.Settings.ForcedDisasterID)
-	if selectedDisasterID == "" {
+	if room.Scenario.ID == scenarioClassic {
+		availableDisasters := s.disasterDeckCardsLocked()
+		if len(availableDisasters) == 0 {
+			log.Printf("[startGame] room=%s no disaster deck detected, using random fallback", room.Code)
+			selectedDisasterID = randomDisasterID
+		} else {
+			if selectedDisasterID == "" {
+				selectedDisasterID = randomDisasterID
+			}
+			if !s.isValidDisasterIDLocked(selectedDisasterID) {
+				log.Printf("[startGame] reject room=%s reason=invalid_disaster selected=%q", room.Code, selectedDisasterID)
+				s.sendErrorDetailedLocked(conn, "Selected disaster is invalid.", "errorDisasterInvalid", nil)
+				return
+			}
+		}
+	} else {
 		selectedDisasterID = randomDisasterID
-	}
-	if !s.isValidDisasterIDLocked(selectedDisasterID) {
-		log.Printf("[startGame] reject room=%s reason=invalid_disaster selected=%q", room.Code, selectedDisasterID)
-		s.sendErrorLocked(conn, "Selected disaster is invalid.")
-		return
 	}
 	room.Settings.ForcedDisasterID = selectedDisasterID
 	room.Settings.SelectedDisasterID = selectedDisasterID
@@ -953,17 +1012,17 @@ func (s *server) handleUpdateSettingsLocked(conn *websocket.Conn, payload map[st
 		return
 	}
 	if room.Phase != phaseLobby {
-		s.sendErrorLocked(conn, "Settings can be changed only in lobby.")
+		s.sendErrorDetailedLocked(conn, "Settings can be changed only in lobby.", "errorSettingsLobbyOnly", nil)
 		return
 	}
 	if playerID != room.ControlID {
-		s.sendErrorLocked(conn, "Only control player can update settings.")
+		s.sendErrorDetailedLocked(conn, "Only control player can update settings.", "errorSettingsHostOnly", nil)
 		return
 	}
 
 	next := room.Settings
 	if !decodePayload(payload, &next) {
-		s.sendErrorLocked(conn, "Invalid settings payload.")
+		s.sendErrorDetailedLocked(conn, "Invalid settings payload.", "errorSettingsInvalidPayload", nil)
 		return
 	}
 	next = s.normalizeSettingsLocked(next)
@@ -973,9 +1032,8 @@ func (s *server) handleUpdateSettingsLocked(conn *websocket.Conn, payload map[st
 		minAllowed = minClassicPlayers
 	}
 	next.MaxPlayers = clampInt(next.MaxPlayers, minAllowed, maxClassicPlayers)
-	next.EnablePresenterMode = false
 	if next.MaxPlayers < len(room.Players) {
-		s.sendErrorLocked(conn, "Max players cannot be lower than current players count.")
+		s.sendErrorDetailedLocked(conn, "Max players cannot be lower than current players count.", "errorSettingsMaxPlayersTooLow", nil)
 		return
 	}
 	selectedDisasterID := strings.TrimSpace(next.ForcedDisasterID)
@@ -983,7 +1041,7 @@ func (s *server) handleUpdateSettingsLocked(conn *websocket.Conn, payload map[st
 		selectedDisasterID = randomDisasterID
 	}
 	if !s.isValidDisasterIDLocked(selectedDisasterID) {
-		s.sendErrorLocked(conn, "Selected disaster is invalid.")
+		s.sendErrorDetailedLocked(conn, "Selected disaster is invalid.", "errorDisasterInvalid", nil)
 		return
 	}
 	next.ForcedDisasterID = selectedDisasterID
@@ -992,22 +1050,47 @@ func (s *server) handleUpdateSettingsLocked(conn *websocket.Conn, payload map[st
 	s.broadcastRoomStateLocked(room)
 }
 
+func (s *server) handleUpdateLocaleLocked(conn *websocket.Conn, payload map[string]any) {
+	room, _ := s.roomAndPlayerByConnLocked(conn)
+	if room == nil {
+		s.sendErrorLocked(conn, "Room not found.")
+		return
+	}
+
+	var request clientUpdateLocalePayload
+	if !decodePayload(payload, &request) {
+		s.sendErrorDetailedLocked(conn, "Invalid locale payload.", "errorLocaleInvalidPayload", nil)
+		return
+	}
+
+	nextLocale := normalizeCardLocale(request.Locale)
+	if room.Settings.CardLocale == nextLocale {
+		return
+	}
+
+	room.Settings.CardLocale = nextLocale
+	s.broadcastRoomStateLocked(room)
+	if room.Phase == phaseGame && room.Game != nil {
+		s.broadcastGameViewsLocked(room)
+	}
+}
+
 func (s *server) handleUpdateRulesLocked(conn *websocket.Conn, payload map[string]any) {
 	room, playerID := s.roomAndPlayerByConnLocked(conn)
 	if room == nil {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Room is not found.", "errorRoomNotFound", nil)
 		return
 	}
 	if room.Scenario.ID != scenarioClassic {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Rules can only be changed in the Classic scenario.", "errorRulesClassicOnly", nil)
 		return
 	}
 	if room.Phase != phaseLobby {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Rules can only be changed in the lobby.", "errorRulesLobbyOnly", nil)
 		return
 	}
 	if playerID != room.ControlID {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Only control player can update rules.", "errorRulesHostOnly", nil)
 		return
 	}
 
@@ -1030,19 +1113,19 @@ func (s *server) handleUpdateRulesLocked(conn *websocket.Conn, payload map[strin
 		}
 		manualMap, ok := manualRaw.(map[string]any)
 		if !ok {
-			s.sendErrorLocked(conn, "Operation failed.")
+			s.sendErrorDetailedLocked(conn, "Invalid manual rules payload.", "errorRulesPayloadInvalid", nil)
 			return
 		}
 		var manualCfg manualRulesConfig
 		if !decodePayload(manualMap, &manualCfg) {
-			s.sendErrorLocked(conn, "Operation failed.")
+			s.sendErrorDetailedLocked(conn, "Invalid manual rules payload.", "errorRulesPayloadInvalid", nil)
 			return
 		}
 		manualCfg = normalizeManualConfig(manualCfg, presetCount)
 		room.Ruleset = buildManualRuleset(manualCfg, len(room.Players))
 		room.RulesPresetCount = manualCfg.SeedTemplatePlayer
 	default:
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Invalid rules mode.", "errorRulesModeInvalid", nil)
 		return
 	}
 
@@ -1052,11 +1135,11 @@ func (s *server) handleUpdateRulesLocked(conn *websocket.Conn, payload map[strin
 func (s *server) handleHostTransferLocked(conn *websocket.Conn, payload map[string]any) {
 	room, playerID := s.roomAndPlayerByConnLocked(conn)
 	if room == nil {
-		s.sendErrorLocked(conn, "Room is not found.")
+		s.sendErrorDetailedLocked(conn, "Room is not found.", "errorRoomNotFound", nil)
 		return
 	}
 	if playerID != room.ControlID {
-		s.sendErrorLocked(conn, "Only current control player can transfer host role.")
+		s.sendErrorDetailedLocked(conn, "Only current control player can transfer host role.", "errorHostTransferHostOnly", nil)
 		return
 	}
 
@@ -1064,24 +1147,24 @@ func (s *server) handleHostTransferLocked(conn *websocket.Conn, payload map[stri
 	if targetID == "" {
 		next := s.pickNextOnlineHostLocked(room, room.ControlID)
 		if next == "" {
-			s.sendErrorLocked(conn, "No online players available for host transfer.")
+			s.sendErrorDetailedLocked(conn, "No online players available for host transfer.", "errorHostTransferNoOnline", nil)
 			return
 		}
 		s.transferHostLocked(room, next, "manual")
 		return
 	}
 	if targetID == room.ControlID {
-		s.sendErrorLocked(conn, "Cannot transfer host role to the current host.")
+		s.sendErrorDetailedLocked(conn, "Cannot transfer host role to the current host.", "errorHostTransferSame", nil)
 		return
 	}
 
 	target := room.Players[targetID]
 	if target == nil {
-		s.sendErrorLocked(conn, "Target player was not found.")
+		s.sendErrorDetailedLocked(conn, "Target player was not found.", "errorHostTransferTargetNotFound", nil)
 		return
 	}
 	if !s.playerIsOnlineLocked(target) {
-		s.sendErrorLocked(conn, "Target player is offline.")
+		s.sendErrorDetailedLocked(conn, "Target player is offline.", "errorHostTransferTargetOffline", nil)
 		return
 	}
 
@@ -1091,30 +1174,30 @@ func (s *server) handleHostTransferLocked(conn *websocket.Conn, payload map[stri
 func (s *server) handleKickFromLobbyLocked(conn *websocket.Conn, payload map[string]any) {
 	room, playerID := s.roomAndPlayerByConnLocked(conn)
 	if room == nil {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Room is not found.", "errorRoomNotFound", nil)
 		return
 	}
 	if room.Phase != phaseLobby {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Players can only be removed from the lobby.", "errorKickLobbyOnly", nil)
 		return
 	}
 	if playerID != room.ControlID {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Only control player can remove players from the lobby.", "errorKickHostOnly", nil)
 		return
 	}
 
 	targetID := strings.TrimSpace(asString(payload["targetPlayerId"]))
 	if targetID == "" {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Target player is required.", "errorKickTargetRequired", nil)
 		return
 	}
 	if targetID == room.HostID {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Current host cannot be removed from the lobby.", "errorKickTargetHost", nil)
 		return
 	}
 	target := room.Players[targetID]
 	if target == nil {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Target player was not found.", "errorKickTargetMissing", nil)
 		return
 	}
 	if target.Connection != nil {
@@ -1129,11 +1212,11 @@ func (s *server) handleKickFromLobbyLocked(conn *websocket.Conn, payload map[str
 func (s *server) handleGameActionLocked(conn *websocket.Conn, actionType string, payload map[string]any) {
 	room, playerID := s.roomAndPlayerByConnLocked(conn)
 	if room == nil {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Room is not found.", "errorRoomNotFound", nil)
 		return
 	}
 	if room.Phase != phaseGame || room.Game == nil {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Game has not started yet.", "gameNotStarted", nil)
 		return
 	}
 	actionType, payload = normalizeIncomingGameAction(actionType, payload)
@@ -1149,7 +1232,7 @@ func (s *server) handleGameActionLocked(conn *websocket.Conn, actionType string,
 		"markLeftBunker":   true,
 	}
 	if controlOnly[actionType] && playerID != room.ControlID {
-		s.sendErrorLocked(conn, "Operation failed.")
+		s.sendErrorDetailedLocked(conn, "Only control player can perform this action.", "errorControlOnlyAction", nil)
 		return
 	}
 	log.Printf(
@@ -1173,7 +1256,7 @@ func (s *server) handleGameActionLocked(conn *websocket.Conn, actionType string,
 			summarizePayload(payload),
 			summarizeGameState(room.Game),
 		)
-		s.sendErrorLocked(conn, result.Error)
+		s.sendErrorDetailedLocked(conn, result.Error, result.ErrorKey, result.ErrorVars)
 		return
 	}
 	if !result.StateChanged {
@@ -1252,15 +1335,10 @@ func (s *server) attachPlayerLocked(room *room, hello clientHelloPayload, conn *
 		existing.NeedsFullGameView = true
 	}
 
-	s.detachControlCompanionLocked(conn)
 	s.connToID[conn] = connInfo{RoomCode: room.Code, PlayerID: existing.ID}
 	helloPayload := map[string]any{
 		"playerId":    existing.ID,
 		"playerToken": existing.Token,
-	}
-	if existing.ID == room.ControlID {
-		helloPayload["controlToken"] = room.ControlToken
-		helloPayload["editToken"] = room.EditToken
 	}
 	s.writeWSLocked(conn, wsServerMessage{
 		Type:    "helloAck",
@@ -1283,20 +1361,7 @@ func (s *server) roomAndPlayerByConnLocked(conn *websocket.Conn) (*room, string)
 		}
 		return room, info.PlayerID
 	}
-	companion, ok := s.companionConns[conn]
-	if !ok {
-		return nil, ""
-	}
-	room := s.rooms[companion.RoomCode]
-	if room == nil {
-		delete(s.companionConns, conn)
-		return nil, ""
-	}
-	controlID, _ := s.currentControlPlayerLocked(room)
-	if controlID == "" {
-		return nil, ""
-	}
-	return room, controlID
+	return nil, ""
 }
 
 func (s *server) newPlayerIDLocked(room *room) string {
@@ -1344,11 +1409,6 @@ func (s *server) roomHasConnectedPlayersLocked(room *room) bool {
 			return true
 		}
 	}
-	for conn := range room.ControlCompanions {
-		if conn != nil {
-			return true
-		}
-	}
 	return false
 }
 
@@ -1377,13 +1437,6 @@ func (s *server) deleteRoomLocked(room *room, reason string) {
 		if player.Connection != nil {
 			delete(s.connToID, player.Connection)
 		}
-	}
-	for conn := range room.ControlCompanions {
-		if conn == nil {
-			continue
-		}
-		delete(s.companionConns, conn)
-		_ = conn.Close()
 	}
 	delete(s.rooms, room.Code)
 	log.Printf("[room] removed room=%s reason=%s", room.Code, reason)
@@ -1579,17 +1632,6 @@ func (s *server) transferHostLocked(room *room, newHostID string, reason string)
 			},
 		})
 	}
-	for companionConn := range room.ControlCompanions {
-		s.sendControlCompanionHelloAckLocked(room, companionConn)
-		s.writeWSLocked(companionConn, wsServerMessage{
-			Type: "hostChanged",
-			Payload: map[string]any{
-				"newHostId":    newHostID,
-				"newControlId": room.ControlID,
-				"reason":       reason,
-			},
-		})
-	}
 }
 
 func (s *server) clearDisconnectTimerLocked(player *player) {
@@ -1718,7 +1760,6 @@ func (s *server) handleDisconnect(conn *websocket.Conn) {
 
 	info, ok := s.connToID[conn]
 	if !ok {
-		s.detachControlCompanionLocked(conn)
 		return
 	}
 	delete(s.connToID, conn)
@@ -1845,10 +1886,6 @@ func (s *server) broadcastRoomStateLocked(room *room) {
 		}
 		p.NeedsFullState = false
 	}
-	for companionConn := range room.ControlCompanions {
-		s.sendControlCompanionHelloAckLocked(room, companionConn)
-		s.writeWSLocked(companionConn, wsServerMessage{Type: "roomState", Payload: state})
-	}
 	room.LastRoomStateSent = true
 }
 
@@ -1874,14 +1911,6 @@ func (s *server) broadcastGameViewsLocked(room *room) {
 		}
 		player.NeedsFullGameView = false
 	}
-	controlID, _ := s.currentControlPlayerLocked(room)
-	if controlID == "" {
-		return
-	}
-	companionView := room.Game.buildGameView(room, controlID)
-	for companionConn := range room.ControlCompanions {
-		s.writeWSLocked(companionConn, wsServerMessage{Type: "gameView", Payload: companionView})
-	}
 }
 
 func (s *server) broadcastEventLocked(room *room, event gameEvent) {
@@ -1890,12 +1919,6 @@ func (s *server) broadcastEventLocked(room *room, event gameEvent) {
 			continue
 		}
 		s.writeWSLocked(player.Connection, wsServerMessage{
-			Type:    "gameEvent",
-			Payload: event,
-		})
-	}
-	for companionConn := range room.ControlCompanions {
-		s.writeWSLocked(companionConn, wsServerMessage{
 			Type:    "gameEvent",
 			Payload: event,
 		})
@@ -1981,8 +2004,6 @@ func (s *server) writeWSLocked(conn *websocket.Conn, message wsServerMessage) {
 					s.handlePlayerConnectionLostLocked(room, player, conn)
 				}
 			}
-		} else {
-			s.detachControlCompanionLocked(conn)
 		}
 		_ = conn.Close()
 	}
@@ -1994,18 +2015,205 @@ func (s *server) sendError(conn *websocket.Conn, message string) {
 	s.sendErrorLocked(conn, message)
 }
 
+func inferErrorCode(message string) string {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	switch {
+	case normalized == "":
+		return "SERVER_ERROR"
+	case strings.Contains(normalized, "message type is required"):
+		return "INVALID_MESSAGE_TYPE"
+	case strings.Contains(normalized, "unknown message type"):
+		return "UNKNOWN_MESSAGE_TYPE"
+	case strings.Contains(normalized, "invalid resume payload"):
+		return "INVALID_RESUME_PAYLOAD"
+	case strings.Contains(normalized, "invalid settings payload"):
+		return "INVALID_SETTINGS_PAYLOAD"
+	case strings.Contains(normalized, "invalid locale payload"):
+		return "INVALID_LOCALE_PAYLOAD"
+	case strings.Contains(normalized, "game has not started yet"):
+		return "GAME_NOT_STARTED"
+	case strings.Contains(normalized, "room is not found") || strings.Contains(normalized, "room not found"):
+		return "ROOM_NOT_FOUND"
+	case strings.Contains(normalized, "control player is not available"):
+		return "CONTROL_UNAVAILABLE"
+	case strings.Contains(normalized, "only control player can start the game"),
+		strings.Contains(normalized, "only control player can update settings"),
+		strings.Contains(normalized, "only current control player can transfer host role"):
+		return "PERMISSION_DENIED"
+	case strings.Contains(normalized, "game is already started"):
+		return "GAME_ALREADY_STARTED"
+	case strings.Contains(normalized, "classic requires at least"):
+		return "NOT_ENOUGH_PLAYERS"
+	case strings.Contains(normalized, "disaster deck is not available"):
+		return "DISASTER_DECK_MISSING"
+	case strings.Contains(normalized, "selected disaster is invalid"):
+		return "INVALID_DISASTER"
+	case strings.Contains(normalized, "settings can be changed only in lobby"):
+		return "WRONG_PHASE"
+	case strings.Contains(normalized, "max players cannot be lower than current players count"):
+		return "INVALID_MAX_PLAYERS"
+	case strings.Contains(normalized, "session is not attached to this room"):
+		return "RECONNECT_FORBIDDEN"
+	case strings.Contains(normalized, "player is not found in room"):
+		return "PLAYER_NOT_FOUND"
+	case strings.Contains(normalized, "failed to restore player session"):
+		return "PLAYER_RESTORE_FAILED"
+	case strings.Contains(normalized, "no online players available for host transfer"):
+		return "NO_HOST_TRANSFER_TARGETS"
+	case strings.Contains(normalized, "cannot transfer host role to the current host"):
+		return "HOST_TRANSFER_SAME_TARGET"
+	case strings.Contains(normalized, "target player was not found"):
+		return "HOST_TRANSFER_TARGET_NOT_FOUND"
+	case strings.Contains(normalized, "target player is offline"):
+		return "HOST_TRANSFER_TARGET_OFFLINE"
+	case strings.Contains(normalized, "room is full"):
+		return "ROOM_FULL"
+	case strings.Contains(normalized, "left bunker"):
+		return "LEFT_BUNKER"
+	default:
+		return "SERVER_ERROR"
+	}
+}
+
+func inferUiErrorKey(message string) string {
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	switch {
+	case strings.Contains(normalized, "scenario is required"):
+		return "errorScenarioRequired"
+	case strings.Contains(normalized, "selected scenario is invalid"):
+		return "errorScenarioInvalid"
+	case strings.Contains(normalized, "failed to create room"):
+		return "errorCreateRoomFailed"
+	default:
+		return ""
+	}
+}
+
+func inferErrorLocalization(code, message string, room *room) (string, map[string]any) {
+	switch code {
+	case "INVALID_MESSAGE_TYPE", "UNKNOWN_MESSAGE_TYPE", "INVALID_RESUME_PAYLOAD", "INVALID_SETTINGS_PAYLOAD", "INVALID_LOCALE_PAYLOAD":
+		return "error.invalidMessageFormat", nil
+	case "ROOM_NOT_FOUND":
+		return "error.roomNotFound", nil
+	case "GAME_NOT_STARTED":
+		return "error.gameNotStarted", nil
+	case "PLAYER_RESTORE_FAILED":
+		return "errorReconnectFailed", nil
+	case "ROOM_FULL":
+		return "error.roomFull", nil
+	}
+
+	if room == nil || room.Scenario.ID != scenarioDevTest {
+		return "", nil
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	switch {
+	case strings.Contains(normalized, "there is no voting right now"),
+		strings.Contains(normalized, "сейчас нет голосования"):
+		return "error.voting.notNow", nil
+	case strings.Contains(normalized, "your vote is blocked"),
+		strings.Contains(normalized, "ваш голос заблокирован"):
+		return "error.vote.blocked", nil
+	case strings.Contains(normalized, "vote collection is finished"),
+		strings.Contains(normalized, "сбор голосов заверш"):
+		return "error.vote.collectionClosed", nil
+	case strings.Contains(normalized, "you cannot vote for yourself"),
+		strings.Contains(normalized, "нельзя голосовать за себя"):
+		return "error.vote.self", nil
+	case strings.Contains(normalized, "invalid candidate"),
+		strings.Contains(normalized, "некорректный кандидат"):
+		return "error.vote.invalidCandidate", nil
+	case strings.Contains(normalized, "you have already voted"),
+		strings.Contains(normalized, "вы уже проголосовали"):
+		return "error.vote.alreadySubmitted", nil
+	case strings.Contains(normalized, "you cannot vote for this candidate"),
+		strings.Contains(normalized, "нельзя голосовать за этого кандидата"):
+		return "error.vote.disallowedCandidate", nil
+	case strings.Contains(normalized, "candidate is not in the game"),
+		strings.Contains(normalized, "кандидат не находится в игре"):
+		return "error.vote.candidateNotAlive", nil
+	case strings.Contains(normalized, "you cannot vote against this player"),
+		strings.Contains(normalized, "нельзя голосовать против этого игрока"):
+		return "error.vote.cannotAgainst", nil
+	case strings.Contains(normalized, "the special-condition window is not open yet"),
+		strings.Contains(normalized, "окно особых условий"),
+		strings.Contains(normalized, "special window"):
+		return "error.vote.specialWindowNotOpen", nil
+	case strings.Contains(normalized, "unknown action"),
+		strings.Contains(normalized, "неизвестное действие"):
+		return "error.action.unknown", nil
+	case strings.Contains(normalized, "player not found"),
+		strings.Contains(normalized, "игрок не найден"):
+		return "error.player.notFound", nil
+	case strings.Contains(normalized, "you are eliminated"),
+		strings.Contains(normalized, "вы исключены"):
+		return "error.player.excluded", nil
+	case strings.Contains(normalized, "game is already over"),
+		strings.Contains(normalized, "игра уже завершена"):
+		return "error.game.alreadyEnded", nil
+	case strings.Contains(normalized, "only the host can skip the round"),
+		strings.Contains(normalized, "только хост может пропустить раунд"):
+		return "error.host.onlySkipRound", nil
+	case strings.Contains(normalized, "cannot skip the round during voting"),
+		strings.Contains(normalized, "нельзя пропустить раунд во время голосования"):
+		return "error.skipRound.voting", nil
+	case strings.Contains(normalized, "threats can only be revealed at the end of the game"),
+		strings.Contains(normalized, "угрозы раскрываются в конце игры"):
+		return "error.threats.onlyEnd", nil
+	case strings.Contains(normalized, "invalid threat card"),
+		strings.Contains(normalized, "некорректная карта угроз"):
+		return "error.threat.invalid", nil
+	case strings.Contains(normalized, "only the host can reveal threats"),
+		strings.Contains(normalized, "только хост может открывать угрозы"):
+		return "error.host.onlyThreatReveal", nil
+	case strings.Contains(normalized, "the game is not over yet"),
+		strings.Contains(normalized, "игра ещё не завершена"):
+		return "error.game.notOverYet", nil
+	case strings.Contains(normalized, "only the host can choose the bunker outcome"),
+		strings.Contains(normalized, "только хост может выбрать исход бункера"):
+		return "error.bunkerOutcome.hostOnly", nil
+	case strings.Contains(normalized, "bunker outcome is already selected"),
+		strings.Contains(normalized, "исход уже выбран"):
+		return "error.bunkerOutcome.alreadySelected", nil
+	case strings.Contains(normalized, "invalid bunker outcome"),
+		strings.Contains(normalized, "некорректный исход"):
+		return "error.bunkerOutcome.invalid", nil
+	}
+
+	return "", nil
+}
+
 func (s *server) sendErrorLocked(conn *websocket.Conn, message string) {
+	s.sendErrorDetailedLocked(conn, message, "", nil)
+}
+
+func (s *server) sendErrorDetailedLocked(conn *websocket.Conn, message, explicitKey string, explicitVars map[string]any) {
 	safeMessage := sanitizeHumanText(message, "Server error.")
 	if looksSuspiciousForClient(safeMessage) {
 		safeMessage = "Server error."
 	}
-	log.Printf("[ws-error] raw=%q sanitized=%q", message, safeMessage)
-	s.writeWSLocked(conn, wsServerMessage{
-		Type: "error",
-		Payload: map[string]any{
-			"message": safeMessage,
-		},
-	})
+	code := inferErrorCode(safeMessage)
+	room, _ := s.roomAndPlayerByConnLocked(conn)
+	errorKey, errorVars := explicitKey, explicitVars
+	if errorKey == "" {
+		errorKey, errorVars = inferErrorLocalization(code, safeMessage, room)
+	}
+	if localeKey := serverErrorLocaleKey(errorKey, code); localeKey != "" {
+		safeMessage = serverLocaleMessage(room, localeKey, safeMessage, errorVars)
+	}
+	log.Printf("[ws-error] raw=%q sanitized=%q code=%s", message, safeMessage, code)
+	payload := map[string]any{
+		"message": safeMessage,
+		"code":    code,
+	}
+	if errorKey != "" {
+		payload["errorKey"] = errorKey
+	}
+	if len(errorVars) > 0 {
+		payload["errorVars"] = errorVars
+	}
+	s.writeWSLocked(conn, wsServerMessage{Type: "error", Payload: payload})
 }
 
 func roomCodeOrUnknown(room *room) string {

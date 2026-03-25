@@ -1,16 +1,20 @@
 import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import type { GameEvent, GameView, RoomState, SpecialConditionInstance, SpecialTargetScope } from "@bunker/shared";
 import { computeNeighbors, getTargetCandidates } from "@bunker/shared";
-import { ru } from "../i18n/ru";
+import { type UiDictionary, useUiLocaleNamespace, useUiLocaleNamespacesActivation } from "../localization";
+import { resolveScenarioText } from "../localization/scenarioText";
 import Modal from "../components/Modal";
 import TableLayout from "../components/TableLayout";
 import DossierMiniCard from "../components/DossierMiniCard";
-import { getCardBackUrl, getCardFaceUrl, preloadCategoryBacks } from "../cards";
+import { getCardBackUrl, getCardFaceUrl, localizeSpecialCondition, localizeSpecialOptionLabel, preloadCategoryBacks } from "../cards";
+import { getLocalizedWorldCardLabel as resolveLocalizedWorldCardLabel, localizeOptionalCardLabel } from "../gamePageHelpers";
+import { buildGameContextHints, type BuildGameHintsParams } from "../gameContextHints";
 
 interface GamePageProps {
   roomState: RoomState | null;
   gameView: GameView | null;
   isControl: boolean;
+  showHints: boolean;
   wsInteractive: boolean;
   eventLog: GameEvent[];
   onRevealCard: (cardId: string) => void;
@@ -28,86 +32,80 @@ interface GamePageProps {
   onClearMobileDossierError?: () => void;
 }
 
-type SpecialDialogKind = "none" | "player" | "neighbor" | "category" | "bunker" | "special" | "baggage";
+type SpecialDialogKind = "none" | "player" | "neighbor" | "category" | "bunker" | "baggage" | "special";
 
-interface SpecialDialogOption {
-  id: string;
-  label: string;
-  detail?: string;
-  payload?: Record<string, string | number | boolean>;
+interface SpecialDialogCardPicker {
+  categoryKey: string;
+  requireSourceCard?: boolean;
 }
 
 interface SpecialDialogState {
   kind: SpecialDialogKind;
   specialInstanceId: string;
   title: string;
-  options: SpecialDialogOption[];
+  options: Array<{ id: string; label: string }>;
   description?: string;
-  targetPlayerId?: string;
+  cardPicker?: SpecialDialogCardPicker;
 }
 
-function getDialogTargetPlayerId(option: SpecialDialogOption): string {
-  const raw = option.payload?.targetPlayerId;
-  return typeof raw === "string" ? raw.trim() : "";
-}
-
-function hasStructuredCardChoice(option: SpecialDialogOption): boolean {
-  const payload = option.payload ?? {};
-  return (
-    typeof payload.targetCardId === "string" ||
-    typeof payload.actorCardId === "string" ||
-    typeof payload.baggageCardId === "string"
-  );
-}
-
-const CATEGORY_KEY_TO_RU: Record<string, string> = {
-  profession: "Профессия",
-  health: "Здоровье",
-  hobby: "Хобби",
-  baggage: "Багаж",
-  facts: "Факты",
-  facts1: "Факт №1",
-  facts2: "Факт №2",
-  biology: "Биология",
-};
-const CATEGORY_OPTIONS = [
-  "profession",
-  "health",
-  "hobby",
-  "baggage",
-  "facts1",
-  "facts2",
-  "biology",
-].map((id) => ({ id, label: CATEGORY_KEY_TO_RU[id] ?? id }));
-
-const CATEGORY_KEY_TO_LABELS: Record<string, string[]> = {
-  profession: ["Профессия"],
-  health: ["Здоровье"],
-  hobby: ["Хобби"],
-  baggage: ["Багаж"],
-  facts: ["Факт №1", "Факт №2"],
-  facts1: ["Факт №1"],
-  facts2: ["Факт №2"],
-  biology: ["Биология"],
-};
-
-const PUBLIC_CATEGORY_ORDER = [
-  "Профессия",
-  "Здоровье",
-  "Хобби",
-  "Багаж",
-  "Факт №1",
-  "Факт №2",
-  "Биология",
-  "Особые условия",
+const CATEGORY_KEY_ORDER = ["profession", "health", "hobby", "baggage", "facts1", "facts2", "biology"];
+const PUBLIC_CATEGORY_ORDER = [...CATEGORY_KEY_ORDER, "special"];
+const DOSSIER_MAIN_CATEGORY_KEY = "profession";
+const DOSSIER_GRID_ROW_KEYS: string[][] = [
+  ["health", "biology"],
+  ["baggage", "hobby"],
+  ["facts1", "facts2"],
 ];
 
-const DOSSIER_MAIN_CATEGORY = "Профессия";
-const DOSSIER_GRID_ROWS: string[][] = [
-  ["Здоровье", "Биология"],
-  ["Багаж", "Хобби"],
-  ["Факт №1", "Факт №2"],
-];
+const CATEGORY_KEY_ALIASES: Record<string, string> = {
+  fact1: "facts1",
+  fact2: "facts2",
+  facts: "facts1",
+  special_conditions: "special",
+  specialconditions: "special",
+  bio: "biology",
+};
+
+type GameCategoryLabels = Pick<UiDictionary,
+  | "categoryProfession"
+  | "categoryHealth"
+  | "categoryHobby"
+  | "categoryBaggage"
+  | "categoryFacts"
+  | "categoryFact1"
+  | "categoryFact2"
+  | "categoryBiology"
+  | "categorySpecial">;
+
+function getCategoryDisplayLabel(categoryKey: string, text: GameCategoryLabels): string {
+  const labels: Record<string, string> = {
+    profession: text.categoryProfession,
+    health: text.categoryHealth,
+    hobby: text.categoryHobby,
+    baggage: text.categoryBaggage,
+    facts: text.categoryFacts,
+    facts1: text.categoryFact1,
+    facts2: text.categoryFact2,
+    biology: text.categoryBiology,
+    special: text.categorySpecial,
+  };
+  return labels[categoryKey] ?? categoryKey;
+}
+
+function normalizeCategoryKey(category: string): string {
+  const raw = String(category ?? "").trim();
+  if (!raw) return "";
+  const lowered = raw.toLowerCase();
+  return CATEGORY_KEY_ALIASES[lowered] ?? lowered;
+}
+
+function getCategoryDisplayLabelFromRaw(category: string, text: GameCategoryLabels): string {
+  return getCategoryDisplayLabel(normalizeCategoryKey(category), text);
+}
+
+function getCategoryOptions(text: GameCategoryLabels): Array<{ id: string; label: string }> {
+  return CATEGORY_KEY_ORDER.map((id) => ({ id, label: getCategoryDisplayLabel(id, text) }));
+}
 
 const VOTING_ONLY_EFFECTS = new Set([
   "banVoteAgainst",
@@ -119,95 +117,21 @@ const VOTING_ONLY_EFFECTS = new Set([
 
 const REVEAL_ONLY_EFFECTS = new Set(["forceRevealCategoryForAll", "setRoundRule"]);
 
-type WorldPreviewCard = {
-  isRevealed: boolean;
-  imageId?: string;
-};
-
-function pickMobileWorldPreviewCard<T extends WorldPreviewCard>(cards: T[]): T | null {
-  if (!cards || cards.length === 0) return null;
-
-  for (let i = cards.length - 1; i >= 0; i -= 1) {
-    const card = cards[i];
-    if (card.isRevealed && (card.imageId ?? "").trim()) return card;
-  }
-  for (let i = cards.length - 1; i >= 0; i -= 1) {
-    if (cards[i].isRevealed) return cards[i];
-  }
-  for (let i = cards.length - 1; i >= 0; i -= 1) {
-    if ((cards[i].imageId ?? "").trim()) return cards[i];
-  }
-  return cards[cards.length - 1];
-}
-
 function formatPlayerNameShort(name: string, maxLen = 14): string {
   const normalized = (name ?? "").trim();
   if (!normalized) return "";
   if (normalized.length <= maxLen) return normalized;
-  return `${normalized.slice(0, maxLen - 1)}…`;
-}
-
-function normalizeCategoryToken(value: string): string {
-  return (value ?? "").trim().toLowerCase().replace(/ё/g, "е");
-}
-
-function resolveForcedCategoryLabels(raw: string | null | undefined): Set<string> | null {
-  const trimmed = (raw ?? "").trim();
-  if (!trimmed) return null;
-
-  const normalized = normalizeCategoryToken(trimmed);
-  const out = new Set<string>();
-  const addByKey = (key: string) => {
-    const labels = CATEGORY_KEY_TO_LABELS[key] ?? [CATEGORY_KEY_TO_RU[key] ?? key];
-    labels.forEach((label) => out.add(label));
-  };
-
-  if (CATEGORY_KEY_TO_LABELS[trimmed]) {
-    addByKey(trimmed);
-  }
-
-  for (const [key, label] of Object.entries(CATEGORY_KEY_TO_RU)) {
-    if (normalizeCategoryToken(key) === normalized || normalizeCategoryToken(label) === normalized) {
-      addByKey(key);
-    }
-  }
-
-  if (normalized === normalizeCategoryToken("Факты")) {
-    out.add("Факт №1");
-    out.add("Факт №2");
-  }
-
-  if (out.size === 0) {
-    out.add(trimmed);
-  }
-  return out;
-}
-
-function pickPreferredPublicCategoryCard(
-  slot: GameView["public"]["players"][number]["categories"][number] | undefined
-) {
-  if (!slot || slot.cards.length === 0) return undefined;
-  const normalizedSlotCategory = normalizeCategoryToken(slot.category);
-  const shiftedBack = slot.cards.find((card) => {
-    const backCategory = normalizeCategoryToken(card.backCategory ?? "");
-    return backCategory !== "" && backCategory !== normalizedSlotCategory;
-  });
-  if (shiftedBack) return shiftedBack;
-
-  const revealedCard = slot.cards.find((card) => !card.hidden && Boolean(card.imgUrl));
-  if (revealedCard) return revealedCard;
-
-  return slot.cards[0];
+  return `${normalized.slice(0, maxLen - 1)}...`;
 }
 
 
 interface CardTileProps {
   src?: string;
   fallback: string;
-  captionLabel?: string;
+  overlayLabel?: string;
 }
 
-function CardTile({ src, fallback, captionLabel }: CardTileProps) {
+function CardTile({ src, fallback, overlayLabel }: CardTileProps) {
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
@@ -226,12 +150,12 @@ function CardTile({ src, fallback, captionLabel }: CardTileProps) {
     <div className="card-tile">
       <img
         src={src}
-        alt={captionLabel ?? fallback}
+        alt={overlayLabel ?? fallback}
         loading="lazy"
         decoding="async"
         onError={() => setFailed(true)}
       />
-      {captionLabel ? <span className="card-tile-label">{captionLabel}</span> : null}
+      {overlayLabel ? <span className="card-tile-label">{overlayLabel}</span> : null}
     </div>
   );
 }
@@ -240,6 +164,7 @@ export default function GamePage({
   roomState,
   gameView,
   isControl,
+  showHints,
   wsInteractive,
   eventLog,
   onRevealCard,
@@ -256,6 +181,112 @@ export default function GamePage({
   onMarkDossierSpecialAction,
   onClearMobileDossierError,
 }: GamePageProps) {
+  const gameFallbacks = useMemo(
+    () => ["common", "voting", "special", "world", "dev", "format", "maps", "reconnect", "misc"] as const,
+    []
+  );
+  useUiLocaleNamespacesActivation(["game", ...gameFallbacks]);
+  const gameText = useUiLocaleNamespace("game", {
+    fallbacks: gameFallbacks,
+  });
+  const gameLocale = useMemo(
+    () => ({
+      categoryProfession: gameText.t("categoryProfession"),
+      categoryHealth: gameText.t("categoryHealth"),
+      categoryHobby: gameText.t("categoryHobby"),
+      categoryBaggage: gameText.t("categoryBaggage"),
+      categoryFacts: gameText.t("categoryFacts"),
+      categoryFact1: gameText.t("categoryFact1"),
+      categoryFact2: gameText.t("categoryFact2"),
+      categoryBiology: gameText.t("categoryBiology"),
+      categorySpecial: gameText.t("categorySpecial"),
+      phaseRevealDiscussionWithName: (name: string) =>
+        gameText.t("phaseRevealDiscussionWithName", { name }),
+      phaseRevealDiscussion: gameText.t("phaseRevealDiscussion"),
+      phaseText: (phase: string) => gameText.t(`phaseText.${phase}`),
+      noEvents: gameText.t("noEvents"),
+      threatModifierText: (delta: number, reasons: string) =>
+        gameText.t("threatModifierText", { delta: delta > 0 ? `+${delta}` : String(delta), reasons }),
+      voteReasonCode: (code: string) => gameText.t(`voteReasonCode.${code}`),
+      votingSummaryForcedSelf: (reason?: string) =>
+        reason
+          ? gameText.t("votingSummaryForcedSelfWithReason", { reason })
+          : gameText.t("votingSummaryForcedSelf"),
+      votingSummary: (name: string) => gameText.t("votingSummary", { name }),
+      devCheckSeatLayout: gameText.t("devCheckSeatLayout"),
+      devCheckStatePlayerSync: gameText.t("devCheckStatePlayerSync"),
+      devCheckPlayerIdsUnique: gameText.t("devCheckPlayerIdsUnique"),
+      devCheckHandIdsUnique: gameText.t("devCheckHandIdsUnique"),
+      devCheckRoundProgress: gameText.t("devCheckRoundProgress"),
+      devCheckThreatWindow: gameText.t("devCheckThreatWindow"),
+      devCheckBunkerCount: gameText.t("devCheckBunkerCount"),
+      devCheckBunkerCountNotSet: (total: number) => gameText.t("devCheckBunkerCountNotSet", { total }),
+      devCheckNoWorldState: gameText.t("devCheckNoWorldState"),
+      devCheckVoteDisallowedValid: gameText.t("devCheckVoteDisallowedValid"),
+      devCheckEntries: (count: number) => gameText.t("devCheckEntries", { count }),
+      devCheckUnknownTargets: (value: string) => gameText.t("devCheckUnknownTargets", { value }),
+      devCheckVoteAllowedTargets: gameText.t("devCheckVoteAllowedTargets"),
+      devCheckTargets: (count: number) => gameText.t("devCheckTargets", { count }),
+      devCheckVoteUnavailable: gameText.t("devCheckVoteUnavailable"),
+      devCheckSpecialButtonsValid: gameText.t("devCheckSpecialButtonsValid"),
+      devCheckCards: (count: number) => gameText.t("devCheckCards", { count }),
+      devCheckSelectPanel: gameText.t("devCheckSelectPanel"),
+      devCheckNoName: gameText.t("devCheckNoName"),
+      devCheckRevealPanel: gameText.t("devCheckRevealPanel"),
+      devCheckOk: gameText.t("devCheckOk"),
+      devCheckNoRevealedCards: gameText.t("devCheckNoRevealedCards"),
+      devCheckNoPlayers: gameText.t("devCheckNoPlayers"),
+      devCheckApplySpecialOpensChoice: gameText.t("devCheckApplySpecialOpensChoice"),
+      devCheckNoTargetCardAutofill: gameText.t("devCheckNoTargetCardAutofill"),
+      devCheckNoSourceCardAutofill: gameText.t("devCheckNoSourceCardAutofill"),
+      devCheckDialogOpenedApplied: gameText.t("devCheckDialogOpenedApplied"),
+      devCheckDialogNotClosed: gameText.t("devCheckDialogNotClosed"),
+      devCheckDialogNotOpened: gameText.t("devCheckDialogNotOpened"),
+      devCheckSkipNoChoiceCard: gameText.t("devCheckSkipNoChoiceCard"),
+      devCheckCardsNotCropped: gameText.t("devCheckCardsNotCropped"),
+      devCheckCropped: (count: number) => gameText.t("devCheckCropped", { count }),
+      devCheckHintPrefix: gameText.t("devCheckHintPrefix"),
+      hintWsOffline: gameText.t("hintWsOffline"),
+      hintRoundStartReveal: gameText.t("hintRoundStartReveal"),
+      hintPickCard: gameText.t("hintPickCard"),
+      hintRevealSelected: gameText.t("hintRevealSelected"),
+      hintContinueRound: gameText.t("hintContinueRound"),
+      hintWaitTurn: gameText.t("hintWaitTurn"),
+      hintOpenVoteModal: gameText.t("hintOpenVoteModal"),
+      hintVoteAlreadyDone: gameText.t("hintVoteAlreadyDone"),
+      hintFinalizeVoteHost: gameText.t("hintFinalizeVoteHost"),
+      hintFinalizeVoteWait: gameText.t("hintFinalizeVoteWait"),
+      hintRevealThreats: gameText.t("hintRevealThreats"),
+      hintDecideOutcome: gameText.t("hintDecideOutcome"),
+      devCheckMissingHint: (expected: string, actual: string) => gameText.t("devCheckMissingHint", { expected, actual }),
+      devCheckEmpty: gameText.t("devCheckEmpty"),
+      worldBunkerCard: (index: number) => gameText.t("worldBunkerCard", { index }),
+      unnamedCard: gameText.t("unnamedCard"),
+      devPlayersInGame: (count: number) => gameText.t("devPlayersInGame", { count }),
+      roundProgressLabel: (round: number, revealed: number, total: number) => gameText.t("roundProgressLabel", { round, revealed, total }),
+      turnLabel: (name: string) => gameText.t("turnLabel", { name }),
+      roundVoteIndexLabel: (current: number, total: number) => gameText.t("roundVoteIndexLabel", { current, total }),
+      roundVotesLabel: (count: number) => gameText.t("roundVotesLabel", { count }),
+      mandatoryCategory: (category: string) => gameText.t("mandatoryCategory", { category }),
+      ruleNoTalk: gameText.t("ruleNoTalk"),
+      wsActionDisabledHint: gameText.t("wsActionDisabledHint"),
+      timerLabel: (kind: string, seconds: number) => gameText.t("timerLabel", { kind: gameText.t(`timerKind.${kind}`), seconds }),
+      votePhaseLabel: (phase: string | null) => (phase ? gameText.t(`votePhase.${phase}`) : gameText.t("votePhaseNone")),
+      votingProgressText: (voted: number, total: number) => gameText.t("votingProgressText", { voted, total }),
+      worldThreatCard: (index: number) => gameText.t("worldThreatCard", { index }),
+      votingWeightHint: (weight: number) => gameText.t("votingWeightHint", { weight }),
+      slotHidden: gameText.t("slotHidden"),
+      voteAgainst: (name: string) => gameText.t("voteAgainst", { name }),
+      voteInvalid: (reason: string) => gameText.t("voteInvalid", { reason }),
+      voteNotVoted: gameText.t("voteNotVoted"),
+      dossierTitle: gameText.t("dossierTitle"),
+      specialDialogSummaryWithSource: (source: string, target: string) =>
+        gameText.t("specialDialogSummaryWithSource", { source, target }),
+      specialDialogSummaryTargetOnly: (target: string) =>
+        gameText.t("specialDialogSummaryTargetOnly", { target }),
+    }),
+    [gameText]
+  );
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
   const [voteTargetId, setVoteTargetId] = useState<string | null>(null);
@@ -263,7 +294,8 @@ export default function GamePage({
   const [autoVoteRound, setAutoVoteRound] = useState<number | null>(null);
   const [specialDialog, setSpecialDialog] = useState<SpecialDialogState | null>(null);
   const [dialogSelection, setDialogSelection] = useState<string>("");
-  const [dialogTargetSelection, setDialogTargetSelection] = useState<string>("");
+  const [dialogTargetCardSelection, setDialogTargetCardSelection] = useState<string>("");
+  const [dialogSourceCardSelection, setDialogSourceCardSelection] = useState<string>("");
   const [devRemoveTargetId, setDevRemoveTargetId] = useState<string>("");
   const [devChecks, setDevChecks] = useState<
     Array<{ id: string; label: string; status: "pass" | "fail"; detail?: string }>
@@ -295,81 +327,19 @@ export default function GamePage({
       }
     | null
   >(null);
+  const [specialActionLock, setSpecialActionLock] = useState(false);
   const specialDialogRef = useRef<SpecialDialogState | null>(null);
+  const specialActionLockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mobileActionBarRef = useRef<HTMLDivElement | null>(null);
   const lastWorldEventRef = useRef<string | null>(null);
   const lastPostGameRef = useRef<number | null>(null);
+
   const you = gameView?.you;
   const publicPlayers = gameView?.public.players ?? [];
-
-  const useStructuredPlayerDialog = useMemo(() => {
-    if (!specialDialog || specialDialog.kind !== "player") return false;
-    const hasTargetPlayerIds = specialDialog.options.some((option) => getDialogTargetPlayerId(option).length > 0);
-    const hasCardChoices = specialDialog.options.some(hasStructuredCardChoice);
-    return hasTargetPlayerIds && hasCardChoices;
-  }, [specialDialog]);
-
-  const structuredPlayerGroups = useMemo(() => {
-    if (!specialDialog || !useStructuredPlayerDialog) return [] as Array<{
-      id: string;
-      label: string;
-      options: SpecialDialogOption[];
-    }>;
-
-    const groups = new Map<string, { id: string; label: string; options: SpecialDialogOption[] }>();
-    specialDialog.options.forEach((option) => {
-      const targetPlayerId = getDialogTargetPlayerId(option);
-      if (!targetPlayerId) return;
-      const player = publicPlayers.find((entry) => entry.playerId === targetPlayerId);
-      const group = groups.get(targetPlayerId);
-      if (group) {
-        group.options.push(option);
-        return;
-      }
-      groups.set(targetPlayerId, {
-        id: targetPlayerId,
-        label: option.label || player?.name || targetPlayerId,
-        options: [option],
-      });
-    });
-
-    return Array.from(groups.values());
-  }, [specialDialog, useStructuredPlayerDialog, publicPlayers]);
-
-  const structuredSelectedGroup = useMemo(() => {
-    if (!useStructuredPlayerDialog || structuredPlayerGroups.length === 0) return null;
-    return (
-      structuredPlayerGroups.find((group) => group.id === dialogTargetSelection) ??
-      structuredPlayerGroups[0]
-    );
-  }, [useStructuredPlayerDialog, structuredPlayerGroups, dialogTargetSelection]);
-
-  const structuredOptionChoices = structuredSelectedGroup?.options ?? [];
-  const shortenDialogLabel = (value: string, maxLen = 28): string => {
-    const text = value.trim();
-    if (text.length <= maxLen) return text;
-    return `${text.slice(0, maxLen - 1)}…`;
-  };
-  const getStructuredOptionLabel = (option: SpecialDialogOption): string => {
-    const payload = option.payload ?? {};
-    const targetCardLabel =
-      typeof payload.targetCardLabel === "string" ? payload.targetCardLabel.trim() : "";
-    const actorCardLabel =
-      typeof payload.actorCardLabel === "string" ? payload.actorCardLabel.trim() : "";
-    const baggageLabel =
-      typeof payload.baggageLabel === "string" ? payload.baggageLabel.trim() : "";
-
-    if (targetCardLabel && actorCardLabel) {
-      return `Вы: ${shortenDialogLabel(actorCardLabel)} ⇄ Игрок: ${shortenDialogLabel(targetCardLabel)}`;
-    }
-    if (targetCardLabel) return `Игрок: ${shortenDialogLabel(targetCardLabel)}`;
-    if (baggageLabel) return `Игрок: ${shortenDialogLabel(baggageLabel)}`;
-    if (option.detail && option.detail.trim().length > 0) return option.detail;
-    return option.label;
-  };
-
   const world = gameView?.world;
   const worldEvent = gameView?.worldEvent;
   const postGame = gameView?.postGame;
+  const cardLocale = gameText.locale;
   const youStatus = publicPlayers.find((player) => player.playerId === you?.playerId)?.status ?? "alive";
   const youRevealedThisRound =
     gameView?.public.revealedThisRound.includes(you?.playerId ?? "") ?? false;
@@ -377,17 +347,31 @@ export default function GamePage({
   const votePhase = gameView?.public.votePhase ?? null;
   const votesPublic = gameView?.public.votesPublic ?? [];
   const votingProgress = gameView?.public.votingProgress;
-  const yourVoteWeight = gameView?.public.yourVoteWeight ?? 1;
+  const disallowedVoteTargetIdsForYou = gameView?.public.disallowedVoteTargetIdsForYou ?? [];
+  const disallowedVoteTargetSet = useMemo(
+    () => new Set(disallowedVoteTargetIdsForYou),
+    [disallowedVoteTargetIdsForYou]
+  );
   const voteModalOpenFlag = gameView?.public.voteModalOpen ?? false;
   const activeTimer = gameView?.public.activeTimer ?? null;
   const isHost = roomState?.hostId === you?.playerId;
   const categoryOrder = gameView?.categoryOrder ?? [];
-  const mainCategories = categoryOrder.filter((category) => category !== "Особые условия");
+  const mainCategories = useMemo(
+    () =>
+      categoryOrder
+        .map((category) => normalizeCategoryKey(category))
+        .filter((category) => Boolean(category) && category !== "special"),
+    [categoryOrder]
+  );
+  const handByInstanceId = useMemo(
+  () => new Map((you?.hand ?? []).map((card) => [card.instanceId, card] as const)),
+  [you?.hand]
+  );
   const orderedDossierCategories = useMemo(() => {
     const categorySet = new Set(mainCategories);
     const ordered = [
-      DOSSIER_MAIN_CATEGORY,
-      ...DOSSIER_GRID_ROWS.flat(),
+      DOSSIER_MAIN_CATEGORY_KEY,
+      ...DOSSIER_GRID_ROW_KEYS.flat(),
     ].filter((category) => categorySet.has(category));
     const rest = mainCategories.filter((category) => !ordered.includes(category));
     return [...ordered, ...rest];
@@ -395,7 +379,10 @@ export default function GamePage({
   const isDevScenario = Boolean(
     roomState?.scenarioMeta.devOnly || roomState?.scenarioMeta.id === "dev_test"
   );
-  const showDevControls = Boolean(roomState?.isDev && isControl);
+  const scenarioId = roomState?.scenarioMeta.id ?? "classic";
+
+  const localizeSpecial = (special: SpecialConditionInstance) =>
+    localizeSpecialCondition(scenarioId, special, cardLocale);
 
   const selectedCard = useMemo(
     () => you?.hand.find((card) => card.instanceId === selectedCardId) ?? null,
@@ -414,30 +401,50 @@ export default function GamePage({
     !youRevealedThisRound;
   const canRevealPostGame = phase === "ended" && youStatus !== "left_bunker";
   const canReveal = wsInteractive && (canRevealDuringGame || canRevealPostGame);
-  const forcedRevealLabels = useMemo(
-    () => (phase === "reveal" ? resolveForcedCategoryLabels(gameView?.public.roundRules?.forcedRevealCategory) : null),
-    [phase, gameView?.public.roundRules?.forcedRevealCategory]
-  );
+  const forcedRevealCategory = (gameView?.public.roundRules?.forcedRevealCategory ?? "").trim();
+  const forcedRevealCategoryKey = normalizeCategoryKey(forcedRevealCategory);
+  const forcedRevealCategoryHasHiddenCards = useMemo(() => {
+    if (!forcedRevealCategoryKey) return false;
+    const forcedSlot = you?.categories.find(
+      (entry) => normalizeCategoryKey(entry.category) === forcedRevealCategoryKey
+    );
+    if (!forcedSlot) return false;
+    return forcedSlot.cards.some((card) => !card.revealed && (canRevealPostGame || youStatus === "alive"));
+  }, [canRevealPostGame, forcedRevealCategoryKey, you?.categories, youStatus]);
+  const isCategoryLockedByForcedReveal = (category: string) =>
+    Boolean(
+      canRevealDuringGame &&
+        forcedRevealCategoryKey &&
+        forcedRevealCategoryHasHiddenCards &&
+        normalizeCategoryKey(category) !== forcedRevealCategoryKey
+    );
+  const isCardSelectableForReveal = (category: string, revealed: boolean) =>
+    Boolean(
+      canReveal &&
+        !revealed &&
+        (canRevealPostGame || youStatus === "alive") &&
+        !isCategoryLockedByForcedReveal(category)
+    );
+  const selectedCardCategory = useMemo(() => {
+    if (!selectedCardId) return null;
+    for (const slot of you?.categories ?? []) {
+      if (slot.cards.some((card) => card.instanceId === selectedCardId)) {
+        return normalizeCategoryKey(slot.category);
+      }
+    }
+    return null;
+  }, [selectedCardId, you?.categories]);
+  const canRevealSelectedCard =
+    selectedCard !== null &&
+    selectedCardCategory !== null &&
+    isCardSelectableForReveal(selectedCardCategory, selectedCard.revealed);
   const canVote =
     wsInteractive &&
     phase === "voting" &&
     votePhase === "voting" &&
     youStatus === "alive" &&
     !(gameView?.public.voting?.hasVoted ?? false);
-  const disallowedVoteTargetIds = gameView?.public.disallowedVoteTargetIdsForYou ?? [];
-  const disallowedVoteTargetSet = useMemo(
-    () => new Set(disallowedVoteTargetIds),
-    [disallowedVoteTargetIds]
-  );
   const selectedVoteTargetDisallowed = voteTargetId ? disallowedVoteTargetSet.has(voteTargetId) : false;
-  const disallowedVoteTargetNames = useMemo(
-    () =>
-      alivePlayers
-        .filter((player) => player.playerId !== you?.playerId && disallowedVoteTargetSet.has(player.playerId))
-        .map((player) => player.name),
-    [alivePlayers, disallowedVoteTargetSet, you?.playerId]
-  );
-
   const currentTurnName = currentTurnPlayerId
     ? publicPlayers.find((player) => player.playerId === currentTurnPlayerId)?.name ?? ""
     : "";
@@ -447,11 +454,17 @@ export default function GamePage({
       ? (() => {
           const shortName = formatPlayerNameShort(currentTurnName, 16);
           return shortName
-            ? `Обсуждение карты игрока ${shortName}`
-            : "Обсуждение карты игрока";
+            ? gameLocale.phaseRevealDiscussionWithName(shortName)
+            : gameLocale.phaseRevealDiscussion;
         })()
-      : ru.phaseText(phase);
-  const statusMessage = gameView?.lastStageText ?? latestEvent?.message ?? ru.noEvents;
+      : gameLocale.phaseText(phase);
+  const statusMessage = resolveScenarioText(
+    cardLocale,
+    scenarioId,
+    gameView?.lastStageTextKey ?? latestEvent?.messageKey,
+    gameView?.lastStageTextKey ? gameView.lastStageTextVars : latestEvent?.messageVars,
+    gameView?.lastStageText ?? latestEvent?.message ?? gameLocale.noEvents
+  );
   const votesTotalThisRound =
     gameView?.public.votesTotalThisRound ??
     gameView?.ruleset.votesPerRound[Math.max(0, (gameView?.round ?? 1) - 1)] ??
@@ -480,29 +493,35 @@ export default function GamePage({
   const worldThreatFinalCount = useMemo(() => {
     if (!world) return 0;
     const fromModifier = threatModifier?.finalCount;
-    if (typeof fromModifier === "number") {
-      return Math.max(0, Math.min(world.threats.length, fromModifier));
+    if (typeof fromModifier === "number" && Number.isFinite(fromModifier)) {
+      return Math.max(0, Math.min(world.threats.length, Math.trunc(fromModifier)));
     }
-    return Math.max(0, Math.min(world.threats.length, world.counts.threats));
-  }, [threatModifier?.finalCount, world]);
+    const fallbackCount = world.counts?.threats ?? world.threats.length;
+    return Math.max(0, Math.min(world.threats.length, Math.trunc(fallbackCount)));
+  }, [world, threatModifier?.finalCount]);
   const visibleWorldThreats = useMemo(
     () => (world ? world.threats.slice(0, worldThreatFinalCount) : []),
     [world, worldThreatFinalCount]
   );
-  const mobileBunkerPreview = useMemo(
-    () => pickMobileWorldPreviewCard(world?.bunker ?? []),
-    [world]
-  );
-  const mobileThreatPreview = useMemo(
-    () => pickMobileWorldPreviewCard(visibleWorldThreats),
-    [visibleWorldThreats]
-  );
+  const mobileBunkerPreview = useMemo(() => {
+    if (!world || world.bunker.length === 0) return null;
+    for (let i = world.bunker.length - 1; i >= 0; i -= 1) {
+      if (world.bunker[i].isRevealed) return world.bunker[i];
+    }
+    return world.bunker[0];
+  }, [world]);
+  const mobileThreatPreview = useMemo(() => {
+    if (visibleWorldThreats.length === 0) return null;
+    for (let i = visibleWorldThreats.length - 1; i >= 0; i -= 1) {
+      if (visibleWorldThreats[i].isRevealed) return visibleWorldThreats[i];
+    }
+    return visibleWorldThreats[0];
+  }, [visibleWorldThreats]);
   const showThreatModifier = phase === "ended" && (threatModifier?.delta ?? 0) !== 0;
   const threatModifierText = useMemo(() => {
     if (!showThreatModifier || !threatModifier) return "";
-    const sign = threatModifier.delta > 0 ? "+" : "";
     const reasons = threatModifier.reasons.join(", ");
-    return `Модификатор угроз: ${sign}${threatModifier.delta} (из: ${reasons})`;
+    return gameLocale.threatModifierText(threatModifier.delta, reasons);
   }, [showThreatModifier, threatModifier]);
 
   const openWorldDetail = (params: {
@@ -517,8 +536,8 @@ export default function GamePage({
 
   useEffect(() => {
     if (isMobile) return;
-    preloadCategoryBacks(PUBLIC_CATEGORY_ORDER);
-  }, [isMobile]);
+    preloadCategoryBacks(PUBLIC_CATEGORY_ORDER, cardLocale);
+  }, [cardLocale, isMobile]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     const query = window.matchMedia("(max-width: 1250px)");
@@ -553,7 +572,7 @@ export default function GamePage({
     }
   }, [isMobile]);
   useEffect(() => {
-    if (!isMobile || !dossierOpen || isMobileNarrow) return;
+    if (!isMobile || !dossierOpen) return;
     const body = document.body;
     const html = document.documentElement;
     const previous = body.style.overflow;
@@ -575,36 +594,54 @@ export default function GamePage({
       html.style.overflow = previousHtml;
       window.scrollTo(0, scrollY);
     };
-  }, [isMobile, dossierOpen, isMobileNarrow]);
+  }, [isMobile, dossierOpen]);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    const clear = () => root.style.setProperty("--mobile-action-bar-height", "0px");
+    if (!isMobile) {
+      clear();
+      return;
+    }
+    const node = mobileActionBarRef.current;
+    if (!node) {
+      clear();
+      return;
+    }
+
+    const updateHeight = () => {
+      const rect = node.getBoundingClientRect();
+      const reserved = Math.max(0, Math.ceil(rect.height + 20));
+      root.style.setProperty("--mobile-action-bar-height", `${reserved}px`);
+    };
+
+    updateHeight();
+    window.addEventListener("resize", updateHeight);
+
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(() => updateHeight());
+      observer.observe(node);
+    }
+
+    return () => {
+      window.removeEventListener("resize", updateHeight);
+      observer?.disconnect();
+      clear();
+    };
+  }, [isMobile, isMobileNarrow, phase, votePhase, canDecidePostGameOutcome, isDevScenario]);
   useEffect(() => {
     specialDialogRef.current = specialDialog;
   }, [specialDialog]);
-
-  useEffect(() => {
-    if (!specialDialog || !useStructuredPlayerDialog) {
-      setDialogTargetSelection("");
-      return;
-    }
-    if (structuredPlayerGroups.length === 0) {
-      setDialogTargetSelection("");
-      return;
-    }
-    setDialogTargetSelection((prev) =>
-      structuredPlayerGroups.some((group) => group.id === prev) ? prev : structuredPlayerGroups[0].id
-    );
-  }, [specialDialog, useStructuredPlayerDialog, structuredPlayerGroups]);
-
-  useEffect(() => {
-    if (!useStructuredPlayerDialog) return;
-    if (structuredOptionChoices.length === 0) {
-      if (dialogSelection) setDialogSelection("");
-      return;
-    }
-    const hasSelected = structuredOptionChoices.some((option) => option.id === dialogSelection);
-    if (!hasSelected) {
-      setDialogSelection(structuredOptionChoices[0].id);
-    }
-  }, [useStructuredPlayerDialog, structuredOptionChoices, dialogSelection]);
+  useEffect(
+    () => () => {
+      if (specialActionLockTimerRef.current) {
+        clearTimeout(specialActionLockTimerRef.current);
+        specialActionLockTimerRef.current = null;
+      }
+    },
+    []
+  );
   useEffect(() => {
     if (phase !== "reveal" && phase !== "ended") {
       setSelectedCardId(null);
@@ -614,29 +651,6 @@ export default function GamePage({
     }
   }, [phase]);
 
-  const isCategoryAllowedForReveal = (category: string): boolean =>
-    !forcedRevealLabels || forcedRevealLabels.has(category);
-
-  const isCardSelectableForReveal = (
-    card: { revealed?: boolean },
-    category: string
-  ): boolean =>
-    canReveal &&
-    !card.revealed &&
-    (canRevealPostGame || youStatus === "alive") &&
-    isCategoryAllowedForReveal(category);
-
-  useEffect(() => {
-    if (!selectedCardId || !you || !forcedRevealLabels) return;
-    for (const slot of you.categories) {
-      if (!slot.cards.some((card) => card.instanceId === selectedCardId)) continue;
-      if (!isCategoryAllowedForReveal(slot.category)) {
-        setSelectedCardId(null);
-      }
-      return;
-    }
-  }, [selectedCardId, you, forcedRevealLabels]);
-
   useEffect(() => {
     if (!votePhase) {
       setVoteModalOpen(false);
@@ -645,26 +659,12 @@ export default function GamePage({
       setVoteModalOpen(false);
     }
   }, [votePhase]);
-  useEffect(() => {
-    if (voteTargetId && disallowedVoteTargetSet.has(voteTargetId)) {
-      setVoteTargetId(null);
-    }
-  }, [voteTargetId, disallowedVoteTargetSet]);
 
   useEffect(() => {
     if (!worldEvent || worldEvent.type !== "bunker_revealed") return;
     const key = `${worldEvent.round}-${worldEvent.index}`;
     if (lastWorldEventRef.current === key) return;
     lastWorldEventRef.current = key;
-    if (isMobileNarrow) {
-      setMobileWorldBanner({
-        key,
-        kind: "bunker",
-        message: "Начался новый раунд — посмотри карты Бункера",
-        cta: "Открыть",
-      });
-      return;
-    }
     if (!isMobile) {
       setWorldModalOpen(true);
     }
@@ -679,8 +679,8 @@ export default function GamePage({
       setMobileWorldBanner({
         key: `postgame-${enteredAt}`,
         kind: "threat",
-        message: "Перед выбором исхода посмотри карты Угроз",
-        cta: "Открыть угрозы",
+        message: gameText.t("mobileBannerPostGameMessage"),
+        cta: gameText.t("mobileBannerPostGameCta"),
       });
       return;
     }
@@ -715,24 +715,52 @@ export default function GamePage({
     return map;
   }, [votesPublic]);
 
+  const yourVoteEntry = useMemo(() => votesByVoter.get(you?.playerId ?? ""), [votesByVoter, you?.playerId]);
+  const voteReasonText = (reasonCode?: string, reason?: string) => {
+    const direct = String(reason ?? "").trim();
+    if (direct) return direct;
+    const code = String(reasonCode ?? "").trim();
+    if (!code) return "";
+    return gameLocale.voteReasonCode(code);
+  };
+
   const yourVoteLabel = useMemo(() => {
-    const vote = votesByVoter.get(you?.playerId ?? "");
-    if (!vote || vote.status !== "voted" || !vote.targetName) return ru.votingSummaryNone;
-    if (vote.targetId && vote.targetId === you?.playerId) {
-      return ru.votingSummarySelf(vote.targetName);
+    const vote = yourVoteEntry;
+    if (!vote || vote.status !== "voted" || !vote.targetName) return gameText.t("votingSummaryNone");
+    if (vote.targetId === you?.playerId) {
+      return gameLocale.votingSummaryForcedSelf(voteReasonText(vote.reasonCode, vote.reason) || undefined);
     }
-    return ru.votingSummary(vote.targetName);
-  }, [votesByVoter, you?.playerId]);
+    return gameLocale.votingSummary(vote.targetName);
+  }, [yourVoteEntry, you?.playerId]);
+
+  const yourVoteWeight = useMemo(() => {
+    if (!yourVoteEntry) return 1;
+    const weight = Number(yourVoteEntry.weight ?? 1);
+    return Number.isFinite(weight) && weight > 0 ? weight : 1;
+  }, [yourVoteEntry]);
+  const yourVoteDisabledBySpecial = useMemo(() => {
+    if (!yourVoteEntry || yourVoteEntry.status !== "invalid") return false;
+    const reasonCode = String(yourVoteEntry.reasonCode ?? "");
+    return reasonCode === "VOTE_BLOCKED" || reasonCode === "VOTE_SPENT";
+  }, [yourVoteEntry]);
 
   const selectedVotePlayer = useMemo(
     () => publicPlayers.find((entry) => entry.playerId === voteTargetId) ?? null,
     [publicPlayers, voteTargetId]
   );
-  const selectedBoardPlayer = publicPlayers.find((entry) => entry.playerId === selectedPlayerId) ?? null;
 
+  useEffect(() => {
+    if (!voteTargetId) return;
+    if (!disallowedVoteTargetSet.has(voteTargetId)) return;
+    setVoteTargetId(null);
+  }, [disallowedVoteTargetSet, voteTargetId]);
+  const selectedBoardPlayer = publicPlayers.find((entry) => entry.playerId === selectedPlayerId) ?? null;
+  const selectedBoardIsYou = selectedBoardPlayer?.playerId === you?.playerId;
+  const showOwnSelectedFacesImmediately = roomState?.scenarioMeta.id !== "classic";
+  
   const selectedBoardLabel = selectedBoardPlayer
     ? selectedBoardPlayer.playerId === you?.playerId
-      ? `${selectedBoardPlayer.name} (${ru.youBadge})`
+      ? `${selectedBoardPlayer.name} (${gameText.t("youBadge")})`
       : selectedBoardPlayer.name
     : "";
 
@@ -743,15 +771,50 @@ export default function GamePage({
       (special) =>
         special.implemented &&
         !special.used &&
-        VOTING_ONLY_EFFECTS.has(special.effect.type) &&
         special.trigger !== "onOwnerEliminated" &&
         special.trigger !== "secret_onEliminate" &&
-        special.trigger !== "onRevealOrActive"
+        !(phase === "voting" && yourVoteDisabledBySpecial && VOTING_ONLY_EFFECTS.has(special.effect.type))
     );
-  }, [you?.specialConditions]);
+  }, [phase, you?.specialConditions, yourVoteDisabledBySpecial]);
   const showVotingSpecialsSection =
     votePhase === "voting" || votePhase === "voteSpecialWindow";
   const showFinalizeVoting = isControl && votePhase === "voteSpecialWindow";
+  const continueRoundBlockedBySpecial = specialActionLock || Boolean(specialDialog);
+  const canContinueRoundNow =
+    Boolean(wsInteractive && gameView?.public.canContinue && !continueRoundBlockedBySpecial);
+  const contextHints = showHints
+    ? buildGameContextHints({
+        wsInteractive,
+        phase,
+        votePhase,
+        youStatus,
+        round: gameView?.round ?? 1,
+        roundRevealedCount,
+        canReveal,
+        selectedCardId,
+        canRevealSelectedCard,
+        canContinueRound: canContinueRoundNow,
+        canOpenVotingModal: Boolean(gameView?.public.canOpenVotingModal),
+        canVote,
+        showFinalizeVoting,
+        canRevealThreats,
+        postGameActive: Boolean(postGame?.isActive),
+        canDecidePostGameOutcome,
+      }, {
+        hintWsOffline: gameText.t("hintWsOffline"),
+        hintRoundStartReveal: gameText.t("hintRoundStartReveal"),
+        hintOpenVoteModal: gameText.t("hintOpenVoteModal"),
+        hintVoteAlreadyDone: gameText.t("hintVoteAlreadyDone"),
+        hintFinalizeVoteHost: gameText.t("hintFinalizeVoteHost"),
+        hintFinalizeVoteWait: gameText.t("hintFinalizeVoteWait"),
+        hintPickCard: gameText.t("hintPickCard"),
+        hintRevealSelected: gameText.t("hintRevealSelected"),
+        hintContinueRound: gameText.t("hintContinueRound"),
+        hintWaitTurn: gameText.t("hintWaitTurn"),
+        hintRevealThreats: gameText.t("hintRevealThreats"),
+        hintDecideOutcome: gameText.t("hintDecideOutcome"),
+      })
+    : [];
 
   const handleSelectPlayer = (playerId: string) => {
     setSelectedPlayerId((prev) => (prev === playerId ? null : playerId));
@@ -765,9 +828,140 @@ export default function GamePage({
     const seatCount = document.querySelectorAll(".table-seat").length;
     results.push({
       id: "seat-count",
-      label: "Игроки/рассадка",
+      label: gameLocale.devCheckSeatLayout,
       status: seatCount === publicPlayers.length ? "pass" : "fail",
       detail: `${seatCount}/${publicPlayers.length}`,
+    });
+
+    const roomPlayerIds = new Set((roomState?.players ?? []).map((player) => player.playerId));
+    const publicPlayerIds = publicPlayers.map((player) => player.playerId);
+    const publicPlayerSet = new Set(publicPlayerIds);
+    results.push({
+      id: "state-player-sync",
+      label: gameLocale.devCheckStatePlayerSync,
+      status:
+        publicPlayerSet.size === publicPlayers.length &&
+        publicPlayerIds.every((id) => roomPlayerIds.has(id)) &&
+        Array.from(roomPlayerIds).every((id) => publicPlayerSet.has(id))
+          ? "pass"
+          : "fail",
+      detail: `room=${roomPlayerIds.size}, public=${publicPlayerSet.size}`,
+    });
+
+    results.push({
+      id: "public-player-id-unique",
+      label: gameLocale.devCheckPlayerIdsUnique,
+      status: publicPlayerSet.size === publicPlayers.length ? "pass" : "fail",
+      detail: `${publicPlayerSet.size}/${publicPlayers.length}`,
+    });
+
+    const handIds = (you?.hand ?? [])
+      .map((card) => String(card.instanceId ?? "").trim())
+      .filter(Boolean);
+    const handIdSet = new Set(handIds);
+    results.push({
+      id: "hand-instance-unique",
+      label: gameLocale.devCheckHandIdsUnique,
+      status: handIdSet.size === handIds.length ? "pass" : "fail",
+      detail: `${handIdSet.size}/${handIds.length}`,
+    });
+
+    results.push({
+      id: "round-progress-valid",
+      label: gameLocale.devCheckRoundProgress,
+      status:
+        roundTotalAlive >= 0 &&
+        roundRevealedCount >= 0 &&
+        roundRevealedCount <= Math.max(0, roundTotalAlive)
+          ? "pass"
+          : "fail",
+      detail: `${roundRevealedCount}/${roundTotalAlive}`,
+    });
+
+    if (world) {
+      const threatsCapOk =
+        worldThreatFinalCount >= 0 && worldThreatFinalCount <= world.threats.length;
+      const visibleThreatsOk = visibleWorldThreats.length === worldThreatFinalCount;
+      const bunkerCountRaw = world.counts?.bunker;
+      const bunkerCountOk =
+        typeof bunkerCountRaw !== "number" ||
+        (Number.isFinite(bunkerCountRaw) &&
+          Math.trunc(bunkerCountRaw) >= 0 &&
+          Math.trunc(bunkerCountRaw) <= world.bunker.length);
+      results.push({
+        id: "world-threats-window",
+        label: gameLocale.devCheckThreatWindow,
+        status: threatsCapOk && visibleThreatsOk ? "pass" : "fail",
+        detail: `visible=${visibleWorldThreats.length}, final=${worldThreatFinalCount}, total=${world.threats.length}`,
+      });
+      results.push({
+        id: "world-bunker-count",
+        label: gameLocale.devCheckBunkerCount,
+        status: bunkerCountOk ? "pass" : "fail",
+        detail:
+          typeof bunkerCountRaw === "number"
+            ? `${Math.trunc(bunkerCountRaw)}/${world.bunker.length}`
+            : gameLocale.devCheckBunkerCountNotSet(world.bunker.length),
+      });
+    } else {
+      results.push({
+        id: "world-threats-window",
+        label: gameLocale.devCheckThreatWindow,
+        status: "fail",
+        detail: gameLocale.devCheckNoWorldState,
+      });
+      results.push({
+        id: "world-bunker-count",
+        label: gameLocale.devCheckBunkerCount,
+        status: "fail",
+        detail: gameLocale.devCheckNoWorldState,
+      });
+    }
+
+    const unknownDisallowedTargets = disallowedVoteTargetIdsForYou.filter(
+      (id) => !publicPlayerSet.has(id)
+    );
+    results.push({
+      id: "vote-disallowed-known",
+      label: gameLocale.devCheckVoteDisallowedValid,
+      status: unknownDisallowedTargets.length === 0 ? "pass" : "fail",
+      detail:
+        unknownDisallowedTargets.length === 0
+          ? gameLocale.devCheckEntries(disallowedVoteTargetIdsForYou.length)
+          : gameLocale.devCheckUnknownTargets(unknownDisallowedTargets.join(", ")),
+    });
+
+    if (canVote) {
+      const allowedTargets = publicPlayers.filter(
+        (player) =>
+          player.status === "alive" &&
+          player.playerId !== you?.playerId &&
+          !disallowedVoteTargetSet.has(player.playerId)
+      );
+      results.push({
+        id: "vote-allowed-targets",
+        label: gameLocale.devCheckVoteAllowedTargets,
+        status: allowedTargets.length > 0 ? "pass" : "fail",
+        detail: gameLocale.devCheckTargets(allowedTargets.length),
+      });
+    } else {
+      results.push({
+        id: "vote-allowed-targets",
+        label: gameLocale.devCheckVoteAllowedTargets,
+        status: "pass",
+        detail: gameLocale.devCheckVoteUnavailable,
+      });
+    }
+
+    const invalidSpecialButtons = votingSpecials.filter((special) => !canUseSpecialNow(special));
+    results.push({
+      id: "special-buttons-valid",
+      label: gameLocale.devCheckSpecialButtonsValid,
+      status: invalidSpecialButtons.length === 0 ? "pass" : "fail",
+      detail:
+        invalidSpecialButtons.length === 0
+          ? gameLocale.devCheckCards(votingSpecials.length)
+          : invalidSpecialButtons.map((s) => s.instanceId).join(", "),
     });
 
     const previousSelected = selectedPlayerId;
@@ -778,9 +972,9 @@ export default function GamePage({
       const selectedName = document.querySelector(".selected-name")?.textContent ?? "";
       results.push({
         id: "select-panel",
-        label: "Выбор игрока обновляет панель",
+        label: gameLocale.devCheckSelectPanel,
         status: selectedName.includes(targetPlayer.name) ? "pass" : "fail",
-        detail: selectedName || "нет имени",
+        detail: selectedName || gameLocale.devCheckNoName,
       });
 
       const firstRevealedCard = targetPlayer.categories
@@ -791,75 +985,146 @@ export default function GamePage({
       const hasExpected = expectedUrl ? images.some((img) => img.src.includes(expectedUrl)) : images.length > 0;
       results.push({
         id: "reveal-panel",
-        label: "Панель отражает раскрытые карты",
+        label: gameLocale.devCheckRevealPanel,
         status: hasExpected ? "pass" : "fail",
-        detail: hasExpected ? "ok" : "нет раскрытых карт",
+        detail: hasExpected ? gameLocale.devCheckOk : gameLocale.devCheckNoRevealedCards,
       });
     } else {
       results.push({
         id: "select-panel",
-        label: "Выбор игрока обновляет панель",
+        label: gameLocale.devCheckSelectPanel,
         status: "fail",
-        detail: "нет игроков",
+        detail: gameLocale.devCheckNoPlayers,
       });
       results.push({
         id: "reveal-panel",
-        label: "Панель отражает раскрытые карты",
+        label: gameLocale.devCheckRevealPanel,
         status: "fail",
-        detail: "нет игроков",
+        detail: gameLocale.devCheckNoPlayers,
       });
     }
 
-    const availableChoiceSpecial =
-      (you?.specialConditions ?? []).find((special) => {
-        if (!special.implemented) return false;
-        if (!isDevScenario && special.used) return false;
-        if (special.choiceKind !== "category") return false;
-        return true;
-      }) ??
-      (you?.specialConditions ?? []).find((special) => {
-        if (!special.implemented) return false;
-        if (!isDevScenario && special.used) return false;
-        if (!special.needsChoice && special.choiceKind === "none") return false;
-        if (!isDevScenario && VOTING_ONLY_EFFECTS.has(special.effect.type) && votePhase !== "voteSpecialWindow") {
-          return false;
-        }
-        if (!isDevScenario && REVEAL_ONLY_EFFECTS.has(special.effect.type) && phase !== "reveal") {
-          return false;
-        }
-        return true;
-      });
+    const choiceCandidates = youSafe.specialConditions.filter((special) => {
+      if (!special.implemented) return false;
+      if (!isDevScenario && special.used) return false;
+      if (!canUseSpecialNow(special)) return false;
+      if (!hasTargetsForSpecial(special)) return false;
+      if (!special.needsChoice && special.choiceKind === "none") return false;
+      return true;
+    });
+
+    const specialPriority = (special: SpecialConditionInstance) => {
+      const choiceKind = special.choiceKind ?? (special.needsChoice ? "player" : "none");
+      const hasFixedCategory = Boolean(String(special.effect.params?.category ?? "").trim());
+      const isComplexPlayerChoice =
+        special.effect.type === "replaceRevealedCard" ||
+        special.effect.type === "discardRevealedAndDealHidden" ||
+        special.effect.type === "swapRevealedWithNeighbor" ||
+        special.effect.type === "stealBaggage_and_giveSpecial";
+      if (choiceKind === "category" && !hasFixedCategory) return 1;
+      if (choiceKind === "special") return 2;
+      if (choiceKind === "bunker") return 3;
+      if (choiceKind === "neighbor") return 4;
+      if (choiceKind === "player" && !isComplexPlayerChoice) return 5;
+      if (choiceKind === "player") return 6;
+      return 99;
+    };
+
+    const availableChoiceSpecial = choiceCandidates.sort(
+      (a, b) => specialPriority(a) - specialPriority(b)
+    )[0];
 
     if (availableChoiceSpecial) {
       handleApplySpecial(availableChoiceSpecial);
       await waitFrame();
       await waitFrame();
-      const opened = Boolean(specialDialogRef.current);
-      if (opened && specialDialogRef.current?.options?.length) {
-        const firstOption = specialDialogRef.current.options[0];
-        setDialogSelection(firstOption.id);
+      const activeDialog = specialDialogRef.current;
+      const opened = Boolean(activeDialog);
+      if (opened && activeDialog?.options?.length) {
+        const firstOption = activeDialog.options[0];
+        if (activeDialog.kind === "player") {
+          const payload: Record<string, unknown> = { targetPlayerId: firstOption.id };
+          if (activeDialog.cardPicker) {
+            const targetCards = getRevealedCategoryCards(
+              firstOption.id,
+              activeDialog.cardPicker.categoryKey
+            );
+            const targetCard = targetCards[0];
+            if (!targetCard) {
+              closeSpecialDialog();
+              await waitFrame();
+              await waitFrame();
+              results.push({
+                id: "special-modal",
+                label: gameLocale.devCheckApplySpecialOpensChoice,
+                status: "fail",
+                detail: gameLocale.devCheckNoTargetCardAutofill,
+              });
+              setDevChecks(results);
+              setSelectedPlayerId(previousSelected ?? null);
+              return;
+            }
+            payload.targetCardInstanceId = targetCard.instanceId;
+            if (activeDialog.cardPicker.requireSourceCard && you) {
+              const ownCards = getRevealedCategoryCards(you.playerId, activeDialog.cardPicker.categoryKey);
+              const ownCard = ownCards[0];
+              if (!ownCard) {
+                closeSpecialDialog();
+                await waitFrame();
+                await waitFrame();
+                results.push({
+                  id: "special-modal",
+                  label: gameLocale.devCheckApplySpecialOpensChoice,
+                  status: "fail",
+                  detail: gameLocale.devCheckNoSourceCardAutofill,
+                });
+                setDevChecks(results);
+                setSelectedPlayerId(previousSelected ?? null);
+                return;
+              }
+              payload.sourceCardInstanceId = ownCard.instanceId;
+            }
+          }
+          applySpecialAndLock(activeDialog.specialInstanceId, payload);
+        } else if (activeDialog.kind === "neighbor") {
+          applySpecialAndLock(activeDialog.specialInstanceId, { side: firstOption.id });
+        } else if (activeDialog.kind === "category") {
+          applySpecialAndLock(activeDialog.specialInstanceId, { category: firstOption.id });
+        } else if (activeDialog.kind === "bunker") {
+          const bunkerIndex = Number(firstOption.id);
+          if (Number.isInteger(bunkerIndex)) {
+            applySpecialAndLock(activeDialog.specialInstanceId, { bunkerIndex });
+          }
+        } else if (activeDialog.kind === "special") {
+          applySpecialAndLock(activeDialog.specialInstanceId, { specialId: firstOption.id });
+        } else if (activeDialog.kind === "baggage") {
+          const [targetPlayerId, baggageCardId] = firstOption.id.split("::");
+          if (targetPlayerId && baggageCardId) {
+            applySpecialAndLock(activeDialog.specialInstanceId, { targetPlayerId, baggageCardId });
+          }
+        }
+        closeSpecialDialog();
         await waitFrame();
-        submitSpecialDialog();
         await waitFrame();
       }
       const closed = !specialDialogRef.current;
       results.push({
         id: "special-modal",
-        label: "applySpecial открывает выбор",
+        label: gameLocale.devCheckApplySpecialOpensChoice,
         status: opened && closed ? "pass" : "fail",
         detail: opened
           ? closed
-            ? "окно открыто и применено"
-            : "окно не закрылось"
-          : "окно не открылось",
+            ? gameLocale.devCheckDialogOpenedApplied
+            : gameLocale.devCheckDialogNotClosed
+          : gameLocale.devCheckDialogNotOpened,
       });
       closeSpecialDialog();
     } else {
       results.push({
         id: "special-modal",
-        label: "applySpecial открывает выбор",
-        status: "fail",
-        detail: "нет доступной карты с выбором",
+        label: gameLocale.devCheckApplySpecialOpensChoice,
+        status: "pass",
+        detail: gameLocale.devCheckSkipNoChoiceCard,
       });
     }
 
@@ -875,10 +1140,151 @@ export default function GamePage({
     });
     results.push({
       id: "card-fit",
-      label: "Карты не обрезаются",
+      label: gameLocale.devCheckCardsNotCropped,
       status: cropViolations === 0 ? "pass" : "fail",
-      detail: cropViolations === 0 ? "ok" : `обрезано: ${cropViolations}`,
+      detail: cropViolations === 0 ? gameLocale.devCheckOk : gameLocale.devCheckCropped(cropViolations),
     });
+
+    const baseHintParams: BuildGameHintsParams = {
+      wsInteractive: true,
+      phase: "reveal",
+      votePhase: null,
+      youStatus: "alive",
+      round: 2,
+      roundRevealedCount: 0,
+      canReveal: false,
+      selectedCardId: null as string | null,
+      canRevealSelectedCard: false,
+      canContinueRound: false,
+      canOpenVotingModal: false,
+      canVote: false,
+      showFinalizeVoting: false,
+      canRevealThreats: false,
+      postGameActive: false,
+      canDecidePostGameOutcome: false,
+    };
+
+    const hintCases: Array<{
+      id: string;
+      label: string;
+      expectedHintId: string;
+      params: Partial<BuildGameHintsParams>;
+    }> = [
+      {
+        id: "hint-ws-offline",
+        label: `${gameLocale.devCheckHintPrefix}${gameLocale.hintWsOffline}`,
+        expectedHintId: "ws-offline",
+        params: { wsInteractive: false },
+      },
+      {
+        id: "hint-round-start",
+        label: `${gameLocale.devCheckHintPrefix}${gameLocale.hintRoundStartReveal}`,
+        expectedHintId: "round-start-reveal",
+        params: { phase: "reveal", round: 1, roundRevealedCount: 0, canReveal: true },
+      },
+      {
+        id: "hint-pick-card",
+        label: `${gameLocale.devCheckHintPrefix}${gameLocale.hintPickCard}`,
+        expectedHintId: "pick-card",
+        params: { phase: "reveal", round: 2, canReveal: true, selectedCardId: null },
+      },
+      {
+        id: "hint-reveal-selected",
+        label: `${gameLocale.devCheckHintPrefix}${gameLocale.hintRevealSelected}`,
+        expectedHintId: "reveal-selected",
+        params: {
+          phase: "reveal",
+          canReveal: true,
+          selectedCardId: "card-1",
+          canRevealSelectedCard: true,
+        },
+      },
+      {
+        id: "hint-continue-round",
+        label: `${gameLocale.devCheckHintPrefix}${gameLocale.hintContinueRound}`,
+        expectedHintId: "continue-round",
+        params: { phase: "reveal_discussion", canReveal: false, canContinueRound: true },
+      },
+      {
+        id: "hint-wait-turn",
+        label: `${gameLocale.devCheckHintPrefix}${gameLocale.hintWaitTurn}`,
+        expectedHintId: "wait-turn",
+        params: { phase: "reveal_discussion", canReveal: false, canContinueRound: false },
+      },
+      {
+        id: "hint-open-vote",
+        label: `${gameLocale.devCheckHintPrefix}${gameLocale.hintOpenVoteModal}`,
+        expectedHintId: "open-vote-modal",
+        params: {
+          phase: "voting",
+          votePhase: "voting",
+          canOpenVotingModal: true,
+          canVote: true,
+        },
+      },
+      {
+        id: "hint-voted",
+        label: `${gameLocale.devCheckHintPrefix}${gameLocale.hintVoteAlreadyDone}`,
+        expectedHintId: "vote-already-done",
+        params: { phase: "voting", votePhase: "voting", canVote: false },
+      },
+      {
+        id: "hint-finalize-host",
+        label: `${gameLocale.devCheckHintPrefix}${gameLocale.hintFinalizeVoteHost}`,
+        expectedHintId: "finalize-vote-host",
+        params: { phase: "voting", votePhase: "voteSpecialWindow", showFinalizeVoting: true },
+      },
+      {
+        id: "hint-finalize-wait",
+        label: `${gameLocale.devCheckHintPrefix}${gameLocale.hintFinalizeVoteWait}`,
+        expectedHintId: "finalize-vote-wait",
+        params: { phase: "voting", votePhase: "voteSpecialWindow", showFinalizeVoting: false },
+      },
+      {
+        id: "hint-reveal-threats",
+        label: `${gameLocale.devCheckHintPrefix}${gameLocale.hintRevealThreats}`,
+        expectedHintId: "reveal-threats",
+        params: { phase: "ended", canRevealThreats: true },
+      },
+      {
+        id: "hint-decide-outcome",
+        label: `${gameLocale.devCheckHintPrefix}${gameLocale.hintDecideOutcome}`,
+        expectedHintId: "decide-outcome",
+        params: { phase: "ended", postGameActive: true, canDecidePostGameOutcome: true },
+      },
+    ];
+
+    for (const testCase of hintCases) {
+      const hintsForCase = buildGameContextHints({
+        ...baseHintParams,
+        ...testCase.params,
+      }, {
+        hintWsOffline: gameText.t("hintWsOffline"),
+        hintRoundStartReveal: gameText.t("hintRoundStartReveal"),
+        hintOpenVoteModal: gameText.t("hintOpenVoteModal"),
+        hintVoteAlreadyDone: gameText.t("hintVoteAlreadyDone"),
+        hintFinalizeVoteHost: gameText.t("hintFinalizeVoteHost"),
+        hintFinalizeVoteWait: gameText.t("hintFinalizeVoteWait"),
+        hintPickCard: gameText.t("hintPickCard"),
+        hintRevealSelected: gameText.t("hintRevealSelected"),
+        hintContinueRound: gameText.t("hintContinueRound"),
+        hintWaitTurn: gameText.t("hintWaitTurn"),
+        hintRevealThreats: gameText.t("hintRevealThreats"),
+        hintDecideOutcome: gameText.t("hintDecideOutcome"),
+      });
+      const ok = hintsForCase.some((hint) => hint.id === testCase.expectedHintId);
+      results.push({
+        id: testCase.id,
+        label: testCase.label,
+        status: ok ? "pass" : "fail",
+        detail: ok
+          ? gameLocale.devCheckOk
+          : gameLocale.devCheckMissingHint(
+              testCase.expectedHintId,
+              hintsForCase.map((hint) => hint.id).join(", ") || gameLocale.devCheckEmpty
+            ),
+      });
+    }
 
     setDevChecks(results);
     setSelectedPlayerId(previousSelected ?? null);
@@ -889,153 +1295,139 @@ export default function GamePage({
     specialInstanceId: string,
     title: string,
     kind: SpecialDialogKind,
-    options: SpecialDialogOption[] = [],
+    options: Array<{ id: string; label: string }> = [],
     description?: string,
-    targetPlayerId?: string
+    cardPicker?: SpecialDialogCardPicker
   ) => {
     setDialogSelection("");
-    setDialogTargetSelection("");
-    setSpecialDialog({ kind, specialInstanceId, title, options, description, targetPlayerId });
+    setDialogTargetCardSelection("");
+    setDialogSourceCardSelection("");
+    setSpecialDialog({ kind, specialInstanceId, title, options, description, cardPicker });
   };
 
   const closeSpecialDialog = () => {
     setSpecialDialog(null);
     setDialogSelection("");
-    setDialogTargetSelection("");
+    setDialogTargetCardSelection("");
+    setDialogSourceCardSelection("");
   };
 
-  const hasRevealedCategory = (playerId: string, categoryKey: string) => {
-    const player = publicPlayers.find((entry) => entry.playerId === playerId);
-    if (!player) return false;
-    const labels = CATEGORY_KEY_TO_LABELS[categoryKey] ?? [categoryKey];
-    return labels.some((label) => {
-      const slot = player.categories.find((entry) => entry.category === label);
-      if (!slot || slot.cards.length === 0) return false;
-      return slot.status === "revealed";
-    });
+  const applySpecialAndLock = (specialInstanceId: string, payload?: Record<string, unknown>) => {
+    setSpecialActionLock(true);
+    if (specialActionLockTimerRef.current) {
+      clearTimeout(specialActionLockTimerRef.current);
+      specialActionLockTimerRef.current = null;
+    }
+    onApplySpecial(specialInstanceId, payload);
+    specialActionLockTimerRef.current = setTimeout(() => {
+      setSpecialActionLock(false);
+      specialActionLockTimerRef.current = null;
+    }, 900);
   };
 
-  type CategorySelectionCard = {
-    instanceId: string;
-    label: string;
-    revealed: boolean;
+  const selectDialogPlayer = (playerId: string) => {
+    setDialogSelection(playerId);
+    if (!specialDialog || specialDialog.kind !== "player" || !specialDialog.cardPicker) {
+      setDialogTargetCardSelection("");
+      setDialogSourceCardSelection("");
+      return;
+    }
+    const targetCards = getRevealedCategoryCards(playerId, specialDialog.cardPicker.categoryKey);
+    setDialogTargetCardSelection(targetCards[0]?.instanceId ?? "");
+    if (specialDialog.cardPicker.requireSourceCard && you) {
+      if (!dialogSourceCardSelection) {
+        const ownCards = getRevealedCategoryCards(you.playerId, specialDialog.cardPicker.categoryKey);
+        setDialogSourceCardSelection(ownCards[0]?.instanceId ?? "");
+      }
+    } else {
+      setDialogSourceCardSelection("");
+    }
   };
 
-  const getCategoryCardsForPlayer = (
+  const getRevealedCategoryCards = (
     playerId: string,
-    categoryKey: string,
-    revealedOnly = false
-  ): CategorySelectionCard[] => {
+    categoryKey: string
+  ): Array<{ instanceId: string; hint: string }> => {
     const player = publicPlayers.find((entry) => entry.playerId === playerId);
     if (!player) return [];
-    const labels = CATEGORY_KEY_TO_LABELS[categoryKey] ?? [categoryKey];
-    const normalizedLabels = new Set(labels.map((label) => normalizeCategoryToken(label)));
-    const result: CategorySelectionCard[] = [];
+    const normalizedCategoryKey = normalizeCategoryKey(categoryKey);
+    const result: Array<{ instanceId: string; hint: string }> = [];
     for (const slot of player.categories) {
-      if (!normalizedLabels.has(normalizeCategoryToken(slot.category))) continue;
-      slot.cards.forEach((card, index) => {
+      if (normalizeCategoryKey(slot.category) !== normalizedCategoryKey) continue;
+      if (slot.status !== "revealed") continue;
+      const slotLabel = getCategoryDisplayLabelFromRaw(slot.category, gameLocale);
+      for (const card of slot.cards) {
+        if (card.hidden) continue;
         const instanceId = String(card.instanceId ?? "").trim();
-        if (!instanceId) return;
-        const revealed = !card.hidden;
-        if (revealedOnly && !revealed) return;
-        if (!revealed) {
-          result.push({
-            instanceId,
-            label: `Скрытая карта #${index + 1}`,
-            revealed: false,
-          });
-          return;
-        }
-        const label = String(card.labelShort ?? "").trim();
-        result.push({
-          instanceId,
-          label: label || `Карта #${index + 1}`,
-          revealed: true,
-        });
-      });
+        if (!instanceId) continue;
+        const cardLabel = localizeOptionalCardLabel(card, cardLocale);
+        result.push({ instanceId, hint: `${slotLabel}: ${cardLabel}` });
+      }
     }
     return result;
   };
-
-  const buildTargetCardHint = (
-    playerId: string,
-    categoryKey: string
-  ): { short: string; full: string } | null => {
-    const cardNames = getCategoryCardsForPlayer(playerId, categoryKey).map((card) => card.label);
-    if (cardNames.length === 0) return null;
-    const short = cardNames.length === 1 ? cardNames[0] : `${cardNames[0]} +${cardNames.length - 1}`;
-    const full = cardNames.length === 1 ? `Карта: ${cardNames[0]}` : `Карты: ${cardNames.join(", ")}`;
-    return { short, full };
+  const hasRevealedCategory = (playerId: string, categoryKey: string) => {
+    return getRevealedCategoryCards(playerId, categoryKey).length > 0;
   };
 
-  const isSpecialUsableNow = (special: SpecialConditionInstance): boolean => {
-    if (!wsInteractive || !special.implemented || special.used) return false;
-    if (special.trigger === "onOwnerEliminated" || special.trigger === "secret_onEliminate") return false;
-    if (isDevScenario) return true;
-
-    const isVotingEffect = VOTING_ONLY_EFFECTS.has(special.effect.type);
-    if (isVotingEffect && votePhase !== "voteSpecialWindow") return false;
-    if (REVEAL_ONLY_EFFECTS.has(special.effect.type) && phase !== "reveal") return false;
-    return true;
+  const getRevealedCategoryCardHint = (playerId: string, categoryKey: string): string | null => {
+    return getRevealedCategoryCards(playerId, categoryKey)[0]?.hint ?? null;
   };
+
+  const [worldDebugInfo, setWorldDebugInfo] = useState<string>('');
+  
+  const getLocalizedWorldCardLabel = (card: { imgUrl?: string; imageId?: string; title?: string; description?: string; kind?: string }): string => {
+    const imgUrl = card.imgUrl ?? card.imageId;
+    const debugInfo: string[] = [];
+    
+    debugInfo.push(`${card.kind}:imgUrl=${imgUrl ? 'OK' : 'MISSING'}`);
+    
+    if (imgUrl) {
+      const cleaned = imgUrl.replace(/^\/assets\//, '');
+      const segments = cleaned.split('/').filter(Boolean);
+      const deck = segments.length >= 4 && segments[0] === 'decks' ? segments[3] : undefined;
+      debugInfo.push(`deck=${deck || 'NOT_FOUND'}`);
+
+      const localized = resolveLocalizedWorldCardLabel(card, cardLocale, "");
+      debugInfo.push(`loc=${localized?.substring(0, 15) || 'empty'}`);
+      
+      if (localized && localized !== imgUrl && !localized.startsWith('decks/')) {
+        if (!worldDebugInfo) setWorldDebugInfo(`✓ ${card.kind}: ${localized}`);
+        return localized;
+      }
+    }
+    
+    const fallback = card.title || card.description || '';
+    debugInfo.push(`fallback=${fallback?.substring(0, 15) || 'empty'}`);
+    if (!worldDebugInfo && (card.kind === 'bunker' || card.kind === 'threat')) {
+      setWorldDebugInfo(`✗ ${card.kind}: ${debugInfo.join(' | ')}`);
+    }
+    return fallback;
+  };
+
+  const getRevealedBunkerOptions = () =>
+    (world?.bunker ?? [])
+      .map((card, index) => ({ card, index }))
+      .filter((entry) => entry.card.isRevealed)
+      .map((entry) => ({
+        id: String(entry.index),
+        label: `${gameLocale.worldBunkerCard(entry.index + 1)}: ${getLocalizedWorldCardLabel(entry.card) || gameLocale.unnamedCard}`,
+      }));
 
   const resolveTargetScope = (special: SpecialConditionInstance): SpecialTargetScope | null => {
     if (special.targetScope) return special.targetScope;
-    const choiceKind = resolveChoiceKind(special);
-    if (choiceKind === "neighbor") return "neighbors";
-    if (choiceKind === "player") return "any_alive";
+    if (special.choiceKind === "neighbor") return "neighbors";
+    if (special.choiceKind === "player") return "any_alive";
     return null;
-  };
-
-  const resolveChoiceKind = (special: SpecialConditionInstance): string => {
-    const explicit = String(special.choiceKind ?? "").trim().toLowerCase();
-    if (
-      explicit === "player" ||
-      explicit === "neighbor" ||
-      explicit === "category" ||
-      explicit === "bunker" ||
-      explicit === "special" ||
-      explicit === "none"
-    ) {
-      return explicit;
-    }
-
-    const effectType = String(special.effect.type ?? "").trim().toLowerCase();
-    switch (effectType) {
-      case "banvoteagainst":
-      case "disablevote":
-      case "doublevotesagainst_and_disableselfvote":
-      case "replacerevealedcard":
-      case "discardrevealedanddealhidden":
-      case "stealbaggage_and_givespecial":
-        return "player";
-      case "swaprevealedwithneighbor":
-        return "neighbor";
-      case "forcerevealcategoryforall":
-        return "category";
-      case "devchoosespecial":
-        return "special";
-      case "replacebunkercard":
-      case "discardbunkercard":
-      case "stealbunkercardtoexiled":
-        return "bunker";
-      default:
-        break;
-    }
-    if (effectType.includes("bunker")) {
-      return "bunker";
-    }
-
-    return special.needsChoice ? "player" : "none";
   };
 
   const hasTargetsForSpecial = (special: SpecialConditionInstance): boolean => {
     if (!you) return false;
-    const choiceKind = resolveChoiceKind(special);
+    const choiceKind = special.choiceKind ?? (special.needsChoice ? "player" : "none");
     if (choiceKind === "bunker") {
-      if (!world) return false;
-      return isDevScenario ? world.bunker.length > 0 : world.bunker.some((card) => card.isRevealed);
+      return getRevealedBunkerOptions().length > 0;
     }
+    if (choiceKind === "special") return true;
     if (choiceKind !== "player" && choiceKind !== "neighbor") return true;
     const targetScope = resolveTargetScope(special);
     if (!targetScope) return true;
@@ -1058,23 +1450,23 @@ export default function GamePage({
       .filter((id): id is string => Boolean(id));
     const categoryKey = String(special.effect.params?.category ?? "");
     if (special.effect.type === "replaceRevealedCard" || special.effect.type === "discardRevealedAndDealHidden") {
-      if (!isDevScenario && categoryKey) {
+      if (categoryKey) {
         options = options.filter((id) => hasRevealedCategory(id, categoryKey));
       }
     }
     if (special.effect.type === "swapRevealedWithNeighbor") {
-      if (!isDevScenario && categoryKey) {
+      if (categoryKey) {
         const youHas = hasRevealedCategory(you.playerId, categoryKey);
         options = options.filter((id) => youHas && hasRevealedCategory(id, categoryKey));
       }
     }
     if (special.effect.type === "stealBaggage_and_giveSpecial") {
-      const baggageLabels = CATEGORY_KEY_TO_LABELS.baggage ?? ["Багаж"];
       options = options.filter((id) => {
-        const target = publicPlayers.find((entry) => entry.playerId === id);
-        if (!target) return false;
-        const baggageSlot = target.categories.find((entry) => baggageLabels.includes(entry.category));
-        return Boolean(baggageSlot && baggageSlot.cards.length > 0);
+        const targetPlayer = publicPlayers.find((entry) => entry.playerId === id);
+        const baggageSlot = targetPlayer?.categories.find(
+          (entry) => normalizeCategoryKey(entry.category) === "baggage"
+        );
+        return (baggageSlot?.cards.length ?? 0) > 0;
       });
     }
     return options.length > 0;
@@ -1083,7 +1475,23 @@ export default function GamePage({
   const showNoTargetNotice =
     votingSpecials.length > 0 && !votingSpecials.some((special) => hasTargetsForSpecial(special));
 
+  const canUseSpecialNow = (special: SpecialConditionInstance): boolean => {
+    if (youStatus !== "alive") return false;
+    if (!wsInteractive || !special.implemented || special.used) return false;
+    if (special.trigger === "secret_onEliminate") return false;
+    if (special.trigger === "onOwnerEliminated") return false;
+
+    const isVotingEffect = VOTING_ONLY_EFFECTS.has(special.effect.type);
+    if (phase === "voting" && yourVoteDisabledBySpecial && isVotingEffect) return false;
+    if (!isDevScenario) {
+      if (phase !== "voting" && isVotingEffect && votePhase !== "voteSpecialWindow") return false;
+      if (phase !== "voting" && REVEAL_ONLY_EFFECTS.has(special.effect.type) && phase !== "reveal") return false;
+    }
+    return true;
+  };
+
   const handleApplySpecial = (special: SpecialConditionInstance) => {
+    if (!canUseSpecialNow(special)) return;
     if (!wsInteractive) return;
     if (!gameView) return;
     const effectType = special.effect.type;
@@ -1092,15 +1500,15 @@ export default function GamePage({
     const isRevealOnly = REVEAL_ONLY_EFFECTS.has(effectType);
 
     if (!isDevScenario) {
-      if (isVotingOnly && votePhase !== "voteSpecialWindow") {
+      if (phase !== "voting" && isVotingOnly && votePhase !== "voteSpecialWindow") {
         return;
       }
-      if (isRevealOnly && phase !== "reveal") {
+      if (phase !== "voting" && isRevealOnly && phase !== "reveal") {
         return;
       }
     }
 
-    const choiceKind = resolveChoiceKind(special);
+    const choiceKind = special.choiceKind ?? (special.needsChoice ? "player" : "none");
     const targetScope = resolveTargetScope(special);
     const aliveSet = new Set(alivePlayers.map((player) => player.playerId));
     const orderRing = publicPlayers.map((player) => player.playerId);
@@ -1108,28 +1516,47 @@ export default function GamePage({
     if (choiceKind === "category") {
       const fixedCategory = String(special.effect.params?.category ?? "").trim();
       if (fixedCategory) {
-        onApplySpecial(special.instanceId, { category: fixedCategory });
+        applySpecialAndLock(special.instanceId, { category: fixedCategory });
         return;
       }
-      openSpecialDialog(special.instanceId, "Выберите категорию", "category", CATEGORY_OPTIONS, special.text);
+      openSpecialDialog(
+        special.instanceId,
+        gameText.t("specialDialogChooseCategory"),
+        "category",
+        getCategoryOptions(gameLocale),
+        special.text
+      );
+      return;
+    }
+
+    if (choiceKind === "special") {
+      const options =
+        Array.isArray(special.effect.params?.specialOptions)
+          ? special.effect.params.specialOptions
+              .map((item) => {
+                if (!item || typeof item !== "object") return null;
+                const id = String((item as { id?: unknown }).id ?? "").trim();
+                const rawTitle = String((item as { title?: unknown }).title ?? "").trim();
+                if (!id) return null;
+                return { id, label: localizeSpecialOptionLabel(scenarioId, { id, title: rawTitle, label: rawTitle }, cardLocale) || rawTitle || id };
+              })
+              .filter((item): item is { id: string; label: string } => Boolean(item))
+          : [];
+      openSpecialDialog(
+        special.instanceId,
+        gameText.t("specialDialogChooseSpecial"),
+        "special",
+        options,
+        special.text
+      );
       return;
     }
 
     if (choiceKind === "bunker") {
-      const options =
-        world?.bunker
-          .map((card, index) =>
-            (isDevScenario || card.isRevealed)
-              ? {
-                  id: String(index),
-                  label: card.title ? `Карта бункера #${index + 1}: ${card.title}` : `Карта бункера #${index + 1}`,
-                }
-              : null
-          )
-          .filter((entry): entry is { id: string; label: string } => Boolean(entry)) ?? [];
+      const options = getRevealedBunkerOptions();
       openSpecialDialog(
         special.instanceId,
-        "Выберите карту бункера",
+        gameText.t("specialDialogChooseBunkerCard"),
         "bunker",
         options,
         special.text
@@ -1137,33 +1564,14 @@ export default function GamePage({
       return;
     }
 
-    if (choiceKind === "special") {
-      const rawOptions = special.effect.params?.specialOptions;
-      const options = Array.isArray(rawOptions)
-        ? rawOptions
-            .map((entry, index) => {
-              if (!entry || typeof entry !== "object") return null;
-              const candidate = entry as { id?: unknown; title?: unknown; label?: unknown };
-              const id = String(candidate.id ?? "").trim();
-              if (!id) return null;
-              const labelRaw = String(candidate.title ?? candidate.label ?? "").trim();
-              const label = labelRaw || `Особое условие #${index + 1}`;
-              return { id, label };
-            })
-            .filter((entry): entry is { id: string; label: string } => Boolean(entry))
-        : [];
-      openSpecialDialog(special.instanceId, "Выберите особое условие", "special", options, special.text);
-      return;
-    }
-
     if (choiceKind === "player" || choiceKind === "neighbor") {
       if (!you || !targetScope) {
-        onApplySpecial(special.instanceId, {});
+        applySpecialAndLock(special.instanceId, {});
         return;
       }
 
       if (targetScope === "self") {
-        onApplySpecial(special.instanceId, { targetPlayerId: you.playerId });
+        applySpecialAndLock(special.instanceId, { targetPlayerId: you.playerId });
         return;
       }
 
@@ -1182,7 +1590,7 @@ export default function GamePage({
           const player = publicPlayers.find((entry) => entry.playerId === id);
           if (!player) return null;
           const label =
-            player.playerId === you.playerId ? `${player.name} (${ru.youBadge})` : player.name;
+            player.playerId === you.playerId ? `${player.name} (${gameText.t("youBadge")})` : player.name;
           return { id: player.playerId, label };
         })
         .filter((entry): entry is { id: string; label: string } => Boolean(entry));
@@ -1192,140 +1600,71 @@ export default function GamePage({
         options = options.map((option) => {
           const prefix =
             option.id === neighbors.leftId
-              ? "Слева: "
+              ? gameText.t("specialDialogLeftPrefix")
               : option.id === neighbors.rightId
-                ? "Справа: "
+                ? gameText.t("specialDialogRightPrefix")
                 : "";
           return { ...option, label: `${prefix}${option.label}` };
         });
       }
 
       const categoryKey = String(special.effect.params?.category ?? "");
-      if (effectType === "replaceRevealedCard" || effectType === "discardRevealedAndDealHidden") {
-        if (!isDevScenario && categoryKey) {
-          options = options.filter((option) => hasRevealedCategory(option.id, categoryKey));
+      const isCategoryCardEffect =
+        effectType === "swapRevealedWithNeighbor" ||
+        effectType === "replaceRevealedCard" ||
+        effectType === "discardRevealedAndDealHidden";
+      if (categoryKey && isCategoryCardEffect) {
+        if (effectType === "swapRevealedWithNeighbor") {
+          const ownCards = getRevealedCategoryCards(you.playerId, categoryKey);
+          options = options.filter(
+            (option) => ownCards.length > 0 && getRevealedCategoryCards(option.id, categoryKey).length > 0
+          );
+        } else {
+          options = options.filter((option) => getRevealedCategoryCards(option.id, categoryKey).length > 0);
         }
-      }
-      if (effectType === "swapRevealedWithNeighbor") {
-        if (!isDevScenario && categoryKey) {
-          const youHas = hasRevealedCategory(you.playerId, categoryKey);
-          options = options.filter((option) => youHas && hasRevealedCategory(option.id, categoryKey));
-        }
-      }
-      const requiresCategoryCardSelection =
-        Boolean(categoryKey) &&
-        (effectType === "swapRevealedWithNeighbor" ||
-          effectType === "replaceRevealedCard" ||
-          effectType === "discardRevealedAndDealHidden");
-      if (requiresCategoryCardSelection) {
-        const revealedOnly = !isDevScenario;
-        const actorCategoryCards =
-          effectType === "swapRevealedWithNeighbor"
-            ? getCategoryCardsForPlayer(you.playerId, categoryKey, revealedOnly)
-            : [];
-        const categoryCardOptions: SpecialDialogOption[] = [];
-        options.forEach((option) => {
-          const targetCards = getCategoryCardsForPlayer(option.id, categoryKey, revealedOnly);
-          targetCards.forEach((targetCard) => {
-            if (effectType === "swapRevealedWithNeighbor") {
-              actorCategoryCards.forEach((actorCard) => {
-                categoryCardOptions.push({
-                  id: `${option.id}::${targetCard.instanceId}::${actorCard.instanceId}`,
-                  label: option.label,
-                  detail: `Обмен: Вы (${actorCard.label}) ⇄ Игрок (${targetCard.label})`,
-                  payload: {
-                    targetPlayerId: option.id,
-                    targetCardId: targetCard.instanceId,
-                    actorCardId: actorCard.instanceId,
-                    targetCardLabel: targetCard.label,
-                    actorCardLabel: actorCard.label,
-                  },
-                });
-              });
-              return;
-            }
-            categoryCardOptions.push({
-              id: `${option.id}::${targetCard.instanceId}`,
-              label: option.label,
-              detail: `Карта категории: ${targetCard.label}`,
-              payload: {
-                targetPlayerId: option.id,
-                targetCardId: targetCard.instanceId,
-                targetCardLabel: targetCard.label,
-              },
-            });
-          });
-        });
         openSpecialDialog(
           special.instanceId,
-          "Выберите карту категории",
+          targetScope === "neighbors" ? gameText.t("specialDialogChooseNeighbor") : gameText.t("specialDialogChoosePlayer"),
           "player",
-          categoryCardOptions,
-          special.text
+          options,
+          special.text,
+          { categoryKey, requireSourceCard: effectType === "swapRevealedWithNeighbor" }
         );
         return;
       }
-      const canShowTargetCardHint =
-        Boolean(categoryKey) &&
-        (effectType === "swapRevealedWithNeighbor" ||
-          effectType === "replaceRevealedCard" ||
-          effectType === "discardRevealedAndDealHidden");
-      if (canShowTargetCardHint) {
-        options = options.map((option) => {
-          const hint = buildTargetCardHint(option.id, categoryKey);
-          if (!hint) return option;
-          return {
-            ...option,
-            label: `${option.label} — ${hint.short}`,
-            detail: hint.full,
-          };
-        });
-      }
+
       if (effectType === "stealBaggage_and_giveSpecial") {
-        const baggageLabels = CATEGORY_KEY_TO_LABELS.baggage ?? ["Багаж"];
-        options = options.filter((option) => {
-          const target = publicPlayers.find((entry) => entry.playerId === option.id);
-          if (!target) return false;
-          const baggageSlot = target.categories.find((entry) => baggageLabels.includes(entry.category));
-          return Boolean(baggageSlot && baggageSlot.cards.length > 0);
-        });
-        const baggageOptions: SpecialDialogOption[] = [];
-        options.forEach((option) => {
-          const target = publicPlayers.find((entry) => entry.playerId === option.id);
-          if (!target) return;
-          const baggageSlot = target.categories.find((entry) => baggageLabels.includes(entry.category));
-          if (!baggageSlot) return;
-          baggageSlot.cards.forEach((card, index) => {
-            const baggageCardId = String(card.instanceId ?? "").trim();
-            if (!baggageCardId) return;
-            const baggageLabelRaw = String(card.labelShort ?? "").trim();
-            const baggageLabel = card.hidden
-              ? `Скрытая карта #${index + 1}`
-              : baggageLabelRaw || `Карта багажа #${index + 1}`;
-            baggageOptions.push({
-              id: `${target.playerId}::${baggageCardId}`,
-              label: option.label,
-              detail: `Забрать у игрока: ${baggageLabel}`,
-              payload: {
-                targetPlayerId: target.playerId,
-                baggageCardId,
-                baggageLabel,
-              },
-            });
-          });
+        const baggageOptions = options.flatMap((option) => {
+          const targetPlayer = publicPlayers.find((entry) => entry.playerId === option.id);
+          if (!targetPlayer) return [];
+          const baggageSlot = targetPlayer.categories.find(
+            (entry) => normalizeCategoryKey(entry.category) === "baggage"
+          );
+          const baggageCards = baggageSlot?.cards ?? [];
+          return baggageCards
+            .map((card, index) => {
+              if (!card.instanceId) return null;
+              const cardLabel = card.hidden ? gameText.t("specialDialogHiddenCard", { index: index + 1 }) : card.labelShort;
+              return {
+                id: `${option.id}::${card.instanceId}`,
+                label: `${option.label} - ${cardLabel}`,
+              };
+            })
+            .filter((entry): entry is { id: string; label: string } => Boolean(entry));
         });
         openSpecialDialog(
           special.instanceId,
-          "Выберите игрока и багаж",
-          "player",
+          gameText.t("specialDialogChooseBaggage"),
+          "baggage",
           baggageOptions,
           special.text
         );
         return;
       }
+
       openSpecialDialog(
         special.instanceId,
-        targetScope === "neighbors" ? "Выберите соседа" : "Выберите игрока",
+        targetScope === "neighbors" ? gameText.t("specialDialogChooseNeighbor") : gameText.t("specialDialogChoosePlayer"),
         "player",
         options,
         special.text
@@ -1333,7 +1672,7 @@ export default function GamePage({
       return;
     }
 
-    onApplySpecial(special.instanceId, {});
+    applySpecialAndLock(special.instanceId, {});
   };
 
   const handleApplySpecialFromDossier = (special: SpecialConditionInstance) => {
@@ -1347,111 +1686,145 @@ export default function GamePage({
     if (!wsInteractive) return;
     if (!specialDialog) return;
     if (!dialogSelection) return;
-    const selectedOption = specialDialog.options.find((option) => option.id === dialogSelection);
 
     if (specialDialog.kind === "player") {
-      const special = you?.specialConditions.find((item) => item.instanceId === specialDialog.specialInstanceId);
-      const selectedPayload = selectedOption?.payload;
-      if (special?.effect.type === "stealBaggage_and_giveSpecial") {
-        const targetPlayerId = String(selectedPayload?.targetPlayerId ?? "").trim();
-        const baggageCardId = String(selectedPayload?.baggageCardId ?? "").trim();
-        if (!targetPlayerId) return;
-        if (baggageCardId) {
-          onApplySpecial(specialDialog.specialInstanceId, {
-            targetPlayerId,
-            baggageCardId,
-          });
-        } else {
-          onApplySpecial(specialDialog.specialInstanceId, { targetPlayerId });
+      const normalizedTargetPlayerId = String(dialogSelection ?? "").trim();
+      if (!normalizedTargetPlayerId) {
+        closeSpecialDialog();
+        return;
+      }
+      const payload: Record<string, unknown> = { targetPlayerId: normalizedTargetPlayerId };
+      if (specialDialog.cardPicker) {
+        const normalizedTargetCardInstanceId = String(dialogTargetCardSelection ?? "").trim();
+        if (!normalizedTargetCardInstanceId) return;
+        payload.targetCardInstanceId = normalizedTargetCardInstanceId;
+        if (specialDialog.cardPicker.requireSourceCard) {
+          const normalizedSourceCardInstanceId = String(dialogSourceCardSelection ?? "").trim();
+          if (!normalizedSourceCardInstanceId) return;
+          payload.sourceCardInstanceId = normalizedSourceCardInstanceId;
         }
       } else {
-        const nextPayload: Record<string, unknown> = {};
-        if (selectedPayload) {
-          Object.entries(selectedPayload).forEach(([key, value]) => {
-            nextPayload[key] = value;
-          });
+        const [, targetCardInstanceId, sourceCardInstanceId] = dialogSelection.split("::");
+        const normalizedTargetCardInstanceId = String(targetCardInstanceId ?? "").trim();
+        if (normalizedTargetCardInstanceId) {
+          payload.targetCardInstanceId = normalizedTargetCardInstanceId;
         }
-        if (!("targetPlayerId" in nextPayload)) {
-          nextPayload.targetPlayerId = dialogSelection;
+        const normalizedSourceCardInstanceId = String(sourceCardInstanceId ?? "").trim();
+        if (normalizedSourceCardInstanceId) {
+          payload.sourceCardInstanceId = normalizedSourceCardInstanceId;
         }
-        onApplySpecial(specialDialog.specialInstanceId, nextPayload);
       }
+      applySpecialAndLock(specialDialog.specialInstanceId, payload);
     } else if (specialDialog.kind === "neighbor") {
-      onApplySpecial(specialDialog.specialInstanceId, { side: dialogSelection });
+      applySpecialAndLock(specialDialog.specialInstanceId, { side: dialogSelection });
     } else if (specialDialog.kind === "category") {
-      onApplySpecial(specialDialog.specialInstanceId, { category: dialogSelection });
+      applySpecialAndLock(specialDialog.specialInstanceId, { category: dialogSelection });
     } else if (specialDialog.kind === "bunker") {
-      onApplySpecial(specialDialog.specialInstanceId, { bunkerIndex: Number(dialogSelection) });
+      const bunkerIndex = Number(dialogSelection);
+      if (Number.isInteger(bunkerIndex)) {
+        applySpecialAndLock(specialDialog.specialInstanceId, { bunkerIndex });
+      }
     } else if (specialDialog.kind === "special") {
-      onApplySpecial(specialDialog.specialInstanceId, { specialId: dialogSelection });
+      applySpecialAndLock(specialDialog.specialInstanceId, { specialId: dialogSelection });
     } else if (specialDialog.kind === "baggage") {
-      if (!specialDialog.targetPlayerId) return;
-      onApplySpecial(specialDialog.specialInstanceId, {
-        targetPlayerId: specialDialog.targetPlayerId,
-        baggageCardId: dialogSelection,
-      });
+      const [targetPlayerId, baggageCardId] = dialogSelection.split("::");
+      if (targetPlayerId && baggageCardId) {
+        applySpecialAndLock(specialDialog.specialInstanceId, { targetPlayerId, baggageCardId });
+      }
     }
 
     closeSpecialDialog();
   };
 
+  const isPlayerCardPickerDialog = Boolean(
+    specialDialog?.kind === "player" && specialDialog?.cardPicker
+  );
+  const dialogTargetCards =
+    specialDialog?.kind === "player" && specialDialog?.cardPicker && dialogSelection
+      ? getRevealedCategoryCards(dialogSelection, specialDialog.cardPicker.categoryKey)
+      : [];
+  const dialogSourceCards =
+    specialDialog?.kind === "player" &&
+    specialDialog?.cardPicker?.requireSourceCard &&
+    you
+      ? getRevealedCategoryCards(you.playerId, specialDialog.cardPicker.categoryKey)
+      : [];
+  const selectedTargetCardHint =
+    dialogTargetCards.find((card) => card.instanceId === dialogTargetCardSelection)?.hint ?? "";
+  const selectedSourceCardHint =
+    dialogSourceCards.find((card) => card.instanceId === dialogSourceCardSelection)?.hint ?? "";
+  const canSubmitSpecialDialog = (() => {
+    if (!specialDialog) return false;
+    if (!dialogSelection || specialDialog.options.length === 0) return false;
+    if (!isPlayerCardPickerDialog) return true;
+    if (!dialogTargetCardSelection) return false;
+    if (specialDialog.cardPicker?.requireSourceCard && !dialogSourceCardSelection) return false;
+    return true;
+  })();
   if (!roomState || !gameView) {
     return (
       <div className="game-layout">
         <section className="panel game-loading">
-          <h3>{ru.gameLoadingTitle}</h3>
-          <div className="muted">{ru.gameLoadingText}</div>
+          <h3>{gameText.t("gameLoadingTitle")}</h3>
+          <div className="muted">{gameText.t("gameLoadingText")}</div>
         </section>
       </div>
     );
   }
 
+  const youSafe = gameView.you;
+
   const DossierPanel = ({ mobile = false }: { mobile?: boolean }) => (
     <>
       <div className={`panel-header dossier-header${mobile ? " dossier-header-mobile" : ""}`}>
         <div>
-          {!mobile ? <h3>{ru.dossierTitle}</h3> : null}
-          <div className="muted">{ru.dossierSubtitle}</div>
-          {postGame?.isActive ? <div className="muted">{ru.postGameRevealHint}</div> : null}
+          {!mobile ? <h3>{gameText.t("dossierTitle")}</h3> : null}
+          <div className="muted">{gameText.t("dossierSubtitle")}</div>
+          {postGame?.isActive ? <div className="muted">{gameText.t("postGameRevealHint")}</div> : null}
         </div>
         <span className={youStatus === "alive" ? "badge revealed" : "badge eliminated"}>
-          {youStatus === "alive" ? ru.statusAlive : ru.statusEliminated}
+          {youStatus === "alive" ? gameText.t("statusAlive") : gameText.t("statusEliminated")}
         </span>
       </div>
 
       <div className="special-section compact">
-        <div className="panel-subtitle">{ru.specialTitle}</div>
+        <div className="panel-subtitle">{gameText.t("specialTitle")}</div>
         <div className="special-list">
-          {(you?.specialConditions ?? []).map((special) => {
-            const canUse = isSpecialUsableNow(special);
+          {youSafe.specialConditions.map((special) => {
+            const canUse = canUseSpecialNow(special);
 
             return (
               <div key={special.instanceId} className="special-card compact">
                 <div className="special-header">
-                  <div className="special-title">{special.title}</div>
+                  <div className="special-title">{localizeSpecial(special).title}</div>
                   <span
                     className={`special-status ${
                       special.used ? "used" : special.revealedPublic ? "revealed" : "hidden"
                     }`}
                     aria-label={
                       special.used
-                        ? ru.usedLabel(true)
+                        ? gameText.t("usedLabel", { value: gameText.t("boolean.true") })
                         : special.revealedPublic
-                          ? ru.cardRevealed
-                          : ru.cardHidden
+                          ? gameText.t("cardRevealed")
+                          : gameText.t("cardHidden")
                     }
                     title={
-                      special.used ? ru.usedLabel(true) : special.revealedPublic ? ru.cardRevealed : ru.cardHidden
+                      special.used
+                        ? gameText.t("usedLabel", { value: gameText.t("boolean.true") })
+                        : special.revealedPublic
+                          ? gameText.t("cardRevealed")
+                          : gameText.t("cardHidden")
                     }
                   />
                 </div>
-                <div className="special-description">{special.text}</div>
+                <div className="special-description">{localizeSpecial(special).text}</div>
                 <div className="special-meta">
-                  {!special.implemented ? <span>{ru.notImplemented}</span> : null}
+                  {!special.implemented ? <span>{gameText.t("notImplemented")}</span> : null}
+                  {special.used ? <span>{gameText.t("specialApplied")}</span> : null}
                 </div>
                 <div className="special-actions">
                   <button className="primary" disabled={!canUse} onClick={() => handleApplySpecial(special)}>
-                    {ru.useSpecialButton}
+                    {gameText.t("useSpecialButton")}
                   </button>
                 </div>
               </div>
@@ -1462,40 +1835,42 @@ export default function GamePage({
 
       {(() => {
         const categoriesSet = new Set(orderedDossierCategories);
-        const renderMiniCard = (category: string, fullWidth = false, featured = false) => {
-          const slot = (you?.categories ?? []).find((entry) => entry.category === category);
+        const renderMiniCard = (categoryKey: string, fullWidth = false, featured = false) => {
+          const slot = youSafe.categories.find(
+            (entry) => normalizeCategoryKey(entry.category) === categoryKey
+          );
           const cards = slot?.cards ?? [];
-          const preview = cards.length === 0 ? "—" : cards[0]?.labelShort ?? "—";
-          const expandedText = cards.length === 0 ? "—" : cards.map((card) => card.labelShort).join(" • ");
-          const expanded = expandedDossierKey === category;
-          const categoryDisabledByForced = Boolean(forcedRevealLabels && !isCategoryAllowedForReveal(category));
+          const categoryLocked = isCategoryLockedByForcedReveal(categoryKey);
+          const preview = cards.length === 0 ? "-" : localizeOptionalCardLabel(cards[0], cardLocale);
+          const expandedText =
+            cards.length === 0 ? "-" : cards.map((card) => localizeOptionalCardLabel(card, cardLocale)).join(" • ");
+          const expanded = expandedDossierKey === categoryKey;
           const firstSelectableCard =
-            cards.find((card) => isCardSelectableForReveal(card, category)) ??
-            null;
+            cards.find((card) => isCardSelectableForReveal(categoryKey, card.revealed)) ?? null;
           const selectedInCategory = cards.some((card) => card.instanceId === selectedCardId);
           const revealedInCategory = cards.some((card) => card.revealed);
           const options = cards.map((card) => {
-            const selectable = isCardSelectableForReveal(card, category);
+            const selectable = isCardSelectableForReveal(categoryKey, card.revealed);
             return {
               id: card.instanceId,
-              label: card.labelShort,
+              label: localizeOptionalCardLabel(card, cardLocale),
               selectable,
               selected: card.instanceId === selectedCardId,
             };
           });
           return (
             <DossierMiniCard
-              key={category}
-              label={category}
+              key={categoryKey}
+              label={getCategoryDisplayLabel(categoryKey, gameLocale)}
               preview={preview}
               expandedText={expandedText}
               expanded={expanded}
               selected={selectedInCategory}
-              disabled={categoryDisabledByForced}
               revealed={revealedInCategory}
               fullWidth={fullWidth}
               featured={featured}
-              expandable={category !== DOSSIER_MAIN_CATEGORY}
+              inactive={categoryLocked}
+              expandable={categoryKey !== DOSSIER_MAIN_CATEGORY_KEY}
               options={options}
               onCardClick={() => {
                 if (firstSelectableCard) {
@@ -1503,8 +1878,8 @@ export default function GamePage({
                 }
               }}
               onToggleExpand={() => {
-                if (category === DOSSIER_MAIN_CATEGORY) return;
-                setExpandedDossierKey((prev) => (prev === category ? null : category));
+                if (categoryKey === DOSSIER_MAIN_CATEGORY_KEY) return;
+                setExpandedDossierKey((prev) => (prev === categoryKey ? null : categoryKey));
               }}
               onSelectOption={(cardId) => setSelectedCardId(cardId)}
             />
@@ -1513,14 +1888,17 @@ export default function GamePage({
 
         return (
           <>
-            {categoriesSet.has(DOSSIER_MAIN_CATEGORY) ? renderMiniCard(DOSSIER_MAIN_CATEGORY, true, true) : null}
+            {categoriesSet.has(DOSSIER_MAIN_CATEGORY_KEY)
+              ? renderMiniCard(DOSSIER_MAIN_CATEGORY_KEY, true, true)
+              : null}
             <div className="dossier-mini-grid">
-              {DOSSIER_GRID_ROWS.flat()
+              {DOSSIER_GRID_ROW_KEYS.flat()
                 .filter((category) => categoriesSet.has(category))
                 .map((category) => renderMiniCard(category))}
               {orderedDossierCategories
                 .filter(
-                  (category) => category !== DOSSIER_MAIN_CATEGORY && !DOSSIER_GRID_ROWS.flat().includes(category)
+                  (category) =>
+                    category !== DOSSIER_MAIN_CATEGORY_KEY && !DOSSIER_GRID_ROW_KEYS.flat().includes(category)
                 )
                 .map((category, index, arr) =>
                   renderMiniCard(category, arr.length % 2 === 1 && index === arr.length - 1)
@@ -1534,25 +1912,25 @@ export default function GamePage({
         <div className="action-block">
           <button
             className="primary"
-            disabled={!canReveal || !selectedCardId}
+            disabled={!canReveal || !selectedCardId || !canRevealSelectedCard}
             onClick={() => selectedCardId && onRevealCard(selectedCardId)}
           >
-            {canRevealPostGame ? ru.revealPostGameAction : ru.revealAction}
+            {canRevealPostGame ? gameText.t("revealPostGameAction") : gameText.t("revealAction")}
           </button>
         </div>
       ) : null}
 
-      {showDevControls ? (
+      {isDevScenario ? (
         <div className="dev-panel">
-          <div className="panel-subtitle">Dev Test</div>
-          <div className="dev-row muted">Игроков в игре: {publicPlayers.length}</div>
+          <div className="panel-subtitle">{gameText.t("devControlsTitle")}</div>
+          <div className="dev-row muted">{gameLocale.devPlayersInGame(publicPlayers.length)}</div>
           <div className="dev-actions">
             <button className="ghost button-small" onClick={() => onDevAddPlayer()}>
-              + Добавить игрока
+              {gameText.t("devAddPlayer")}
             </button>
             <div className="dev-remove">
               <select value={devRemoveTargetId} onChange={(event) => setDevRemoveTargetId(event.target.value)}>
-                <option value="">Удалить последнего бота</option>
+                <option value="">{gameText.t("devRemoveLastBot")}</option>
                 {publicPlayers
                   .filter((player) => player.playerId !== you?.playerId)
                   .map((player) => (
@@ -1568,12 +1946,12 @@ export default function GamePage({
                   setDevRemoveTargetId("");
                 }}
               >
-                − Удалить
+                {gameText.t("devRemoveButton")}
               </button>
             </div>
           </div>
           <button className="ghost button-small" onClick={runDevChecks}>
-            Прогнать проверки
+            {gameText.t("devRunChecks")}
           </button>
           {devChecks.length > 0 ? (
             <div className="dev-checks">
@@ -1582,7 +1960,7 @@ export default function GamePage({
                   <span>{check.label}</span>
                   <span className="dev-check-status">
                     {check.status === "pass" ? "PASS" : "FAIL"}
-                    {check.detail ? ` • ${check.detail}` : ""}
+                    {check.detail ? ` /  ${check.detail}` : ""}
                   </span>
                 </div>
               ))}
@@ -1593,8 +1971,8 @@ export default function GamePage({
 
       {phase === "resolution" ? (
         <div className="resolution-box">
-          <div className="panel-subtitle">{ru.resolutionTitle}</div>
-          <div>{gameView.public.resolutionNote ?? ru.resolutionWaiting}</div>
+          <div className="panel-subtitle">{gameText.t("resolutionTitle")}</div>
+          <div>{gameView.public.resolutionNote ?? gameText.t("resolutionWaiting")}</div>
         </div>
       ) : null}
     </>
@@ -1602,18 +1980,18 @@ export default function GamePage({
 
   const MobileDossierPanel = () => {
     const categoriesSet = new Set(orderedDossierCategories);
-        const cardsByCategory = orderedDossierCategories
+    const cardsByCategory = orderedDossierCategories
       .filter((category) => categoriesSet.has(category))
       .map((category) => {
-        const slot = (you?.categories ?? []).find((entry) => entry.category === category);
+        const slot = youSafe.categories.find((entry) => normalizeCategoryKey(entry.category) === category);
         const cards = slot?.cards ?? [];
-        const selectableCards = cards.filter(
-          (card) => isCardSelectableForReveal(card, category)
-        );
+        const categoryLocked = isCategoryLockedByForcedReveal(category);
+        const selectableCards = cards.filter((card) => isCardSelectableForReveal(category, card.revealed));
         return {
           category,
           cards,
           selectableCards,
+          categoryLocked,
         };
       });
 
@@ -1621,35 +1999,36 @@ export default function GamePage({
       <div className="mobile-dossier">
         <div className="mobile-dossier-header">
           <div>
-            <div className="mobile-dossier-title">{ru.dossierTitle}</div>
-            <div className="muted">{ru.dossierSubtitle}</div>
-            {postGame?.isActive ? <div className="muted">{ru.postGameRevealHint}</div> : null}
+            <div className="mobile-dossier-title">{gameText.t("dossierTitle")}</div>
+            <div className="muted">{gameText.t("dossierSubtitle")}</div>
+            {postGame?.isActive ? <div className="muted">{gameText.t("postGameRevealHint")}</div> : null}
           </div>
           <span className={youStatus === "alive" ? "badge revealed" : "badge eliminated"}>
-            {youStatus === "alive" ? ru.statusAlive : ru.statusEliminated}
+            {youStatus === "alive" ? gameText.t("statusAlive") : gameText.t("statusEliminated")}
           </span>
         </div>
 
         <div className="mobile-dossier-section">
-          <div className="panel-subtitle">{ru.specialTitle}</div>
+          <div className="panel-subtitle">{gameText.t("specialTitle")}</div>
           <div className="special-list">
-            {(you?.specialConditions ?? []).map((special) => {
-              const canUse = isSpecialUsableNow(special);
+            {youSafe.specialConditions.map((special) => {
+              const canUse = canUseSpecialNow(special);
 
               return (
                 <div key={special.instanceId} className="special-card compact">
                   <div className="special-header">
-                    <div className="special-title">{special.title}</div>
+                    <div className="special-title">{localizeSpecial(special).title}</div>
                     <span
                       className={`special-status ${
                         special.used ? "used" : special.revealedPublic ? "revealed" : "hidden"
                       }`}
                     />
                   </div>
-                  <div className="special-description">{special.text}</div>
+                  <div className="special-description">{localizeSpecial(special).text}</div>
+                  {special.used ? <div className="special-meta"><span>{gameText.t("specialApplied")}</span></div> : null}
                   <div className="special-actions">
                     <button className="primary" disabled={!canUse} onClick={() => handleApplySpecialFromDossier(special)}>
-                      {ru.useSpecialButton}
+                      {gameText.t("useSpecialButton")}
                     </button>
                   </div>
                 </div>
@@ -1659,30 +2038,30 @@ export default function GamePage({
         </div>
 
         <div className="mobile-dossier-section">
-          <div className="panel-subtitle">{ru.dossierCardsTitle}</div>
+          <div className="panel-subtitle">{gameText.t("dossierCardsTitle")}</div>
           <div className="mobile-dossier-cards">
-            {cardsByCategory.map(({ category, cards, selectableCards }) => {
-              const label = CATEGORY_KEY_TO_RU[category] ?? category;
+            {cardsByCategory.map(({ category, cards, selectableCards, categoryLocked }) => {
+              const label = getCategoryDisplayLabel(category, gameLocale);
               const value =
-                cards.length === 0 ? "—" : cards.map((card) => card.labelShort ?? "—").join(" • ");
+                cards.length === 0 ? "-" : cards.map((card) => localizeOptionalCardLabel(card, cardLocale)).join(" • ");
               const firstSelectable = selectableCards[0];
               const selectedInCategory = cards.some((card) => card.instanceId === selectedCardId);
               const revealedInCategory = cards.some((card) => card.revealed);
-              const categoryDisabledByForced = Boolean(forcedRevealLabels && !isCategoryAllowedForReveal(category));
               const showOptions = cards.length > 1 && selectableCards.length > 0;
               return (
                 <div
                   key={category}
-                  className={`mobile-dossier-card${selectedInCategory ? " selected" : ""}${revealedInCategory ? " revealed" : ""}${categoryDisabledByForced ? " disabled" : ""}`}
+                  className={`mobile-dossier-card${selectedInCategory ? " selected" : ""}${revealedInCategory ? " revealed" : ""}${categoryLocked ? " inactive" : ""}`}
                   onClick={() => {
+                    if (categoryLocked) return;
                     if (firstSelectable) {
                       setSelectedCardId(firstSelectable.instanceId);
                     }
                   }}
                   role="button"
-                  tabIndex={0}
+                  tabIndex={categoryLocked ? -1 : 0}
                   onKeyDown={(event) => {
-                    if (categoryDisabledByForced) return;
+                    if (categoryLocked) return;
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
                       if (firstSelectable) {
@@ -1696,7 +2075,7 @@ export default function GamePage({
                   {showOptions ? (
                     <div className="mobile-dossier-options">
                       {cards.map((card) => {
-                        const selectable = isCardSelectableForReveal(card, category);
+                        const selectable = isCardSelectableForReveal(category, card.revealed);
                         return (
                           <button
                             key={card.instanceId}
@@ -1712,7 +2091,7 @@ export default function GamePage({
                               }
                             }}
                           >
-                            {card.labelShort ?? "—"}
+                            {localizeOptionalCardLabel(card, cardLocale)}
                           </button>
                         );
                       })}
@@ -1723,6 +2102,7 @@ export default function GamePage({
             })}
           </div>
         </div>
+
       </div>
     );
   };
@@ -1731,44 +2111,44 @@ export default function GamePage({
     <div className="game-layout">
       <section className="panel game-status-bar">
         <div className="status-left">
-          <div className="status-title">{ru.gameStatusTitle}</div>
-          <div className="status-meta">
+          <div className="status-title">{gameText.t("gameStatusTitle")}</div>
+          <div className="status-compact-primary">
             <span>
-              {ru.phaseLabel}: {phaseLabel}
+              {gameText.t("phaseLabel")}: {phaseLabel}
             </span>
-            <span>
-              {ru.roundLabel}: {gameView.round}
-            </span>
-            <span>{ru.roundProgressLabel(gameView.round, roundRevealedCount, roundTotalAlive)}</span>
+            <span>{gameLocale.roundProgressLabel(gameView.round, roundRevealedCount, roundTotalAlive)}</span>
           </div>
-          {currentTurnName ? <div className="status-turn">{ru.turnLabel(currentTurnName)}</div> : null}
-          {votesTotalThisRound > 0 ? (
-            <div className="status-turn">
-              {phase === "voting" && voteIndex > 0
-                ? ru.roundVoteIndexLabel(voteIndex, votesTotalThisRound)
-                : ru.roundVotesLabel(votesTotalThisRound)}
+          {currentTurnName || votesTotalThisRound > 0 ? (
+            <div className="status-compact-secondary">
+              {currentTurnName ? <span>{gameLocale.turnLabel(currentTurnName)}</span> : null}
+              {votesTotalThisRound > 0 ? (
+                <span>
+                  {phase === "voting" && voteIndex > 0
+                    ? gameLocale.roundVoteIndexLabel(voteIndex, votesTotalThisRound)
+                    : gameLocale.roundVotesLabel(votesTotalThisRound)}
+                </span>
+              ) : null}
             </div>
           ) : null}
           {gameView.public.roundRules?.forcedRevealCategory ? (
             <div className="rule-pill">
-              {ru.mandatoryCategory(gameView.public.roundRules.forcedRevealCategory)}
+              {gameLocale.mandatoryCategory(gameView.public.roundRules.forcedRevealCategory)}
             </div>
           ) : null}
           {gameView.public.roundRules?.noTalkUntilVoting ? (
-            <div className="rule-pill">{ru.ruleNoTalk}</div>
+            <div className="rule-pill">{gameLocale.ruleNoTalk}</div>
           ) : null}
-          <div className="status-log">{statusMessage}</div>
-          {!wsInteractive ? <div className="muted wsDisabledHint">{ru.wsActionDisabledHint}</div> : null}
+          {!wsInteractive ? <div className="muted wsDisabledHint">{gameLocale.wsActionDisabledHint}</div> : null}
           {activeTimer && timerRemainingSec !== null ? (
-            <div className="status-timer">{ru.timerLabel(activeTimer.kind, timerRemainingSec)}</div>
+            <div className="status-timer">{gameLocale.timerLabel(activeTimer.kind, timerRemainingSec)}</div>
           ) : null}
           {votePhase ? (
             <div className="status-voting">
               <div className="status-voting-line">
-                <span>{ru.votingTitle}:</span>
-                <span className="muted">{ru.votePhaseLabel(votePhase)}</span>
+                <span>{gameText.t("votingTitle")}:</span>
+                <span className="muted">{gameLocale.votePhaseLabel(votePhase)}</span>
                 {votingProgress ? (
-                  <span className="muted">{ru.votingProgressText(votingProgress.voted, votingProgress.total)}</span>
+                  <span className="muted">{gameLocale.votingProgressText(votingProgress.voted, votingProgress.total)}</span>
                 ) : null}
               </div>
             </div>
@@ -1790,42 +2170,53 @@ export default function GamePage({
               {mobileWorldBanner.cta}
             </button>
             <button className="ghost button-small" onClick={() => setMobileWorldBanner(null)}>
-              ✕
+              ×
             </button>
           </div>
         </div>
       ) : null}
 
-      {!isMobile ? (
-        <section className="panel dossier">
-          <DossierPanel />
-        </section>
-      ) : null}
+      <div className="game-main">
+        {!isMobile ? (
+          <section className={`panel dossier${isDevScenario ? " dossier--dev-scroll" : ""}`}>
+            <DossierPanel />
+          </section>
+        ) : null}
 
-      <section className="panel board">
+        <section className="panel board">
           <div className="board-layout">
             <div className="table-panel">
-              <div className="panel-header">
-                <div>
-                  <h3>{ru.boardTitle}</h3>
-                  <div className="muted">{ru.boardSubtitle}</div>
+              <div className="panel-header table-panel-header">
+                <div className="table-panel-header-main">
+                  <h3>{gameText.t("boardTitle")}</h3>
+                  <div className="muted">{gameText.t("boardSubtitle")}</div>
                 </div>
+                {contextHints.length > 0 ? (
+                  <section className="game-context-hints game-context-hints--inline" aria-live="polite">
+                    {contextHints.slice(0, 1).map((hint) => (
+                      <div key={hint.id} className={`context-hint context-hint--inline context-hint--${hint.level}`}>
+                        <span className="context-hint-dot" aria-hidden="true" />
+                        <span>{hint.text}</span>
+                      </div>
+                    ))}
+                  </section>
+                ) : null}
               </div>
               {!isMobile && phase === "reveal_discussion" ? (
                 <div className="board-controls">
                   <button
                     className="primary button-small"
-                    disabled={!wsInteractive || !gameView.public.canContinue}
+                    disabled={!canContinueRoundNow}
                     onClick={onContinueRound}
                   >
-                    {ru.continueRoundButton}
+                    {gameText.t("continueRoundButton")}
                   </button>
                   <span className="muted">
                     {roomState?.settings.continuePermission === "host_only"
-                      ? ru.continueHintHost
+                      ? gameText.t("continueHintHost")
                       : roomState?.settings.continuePermission === "revealer_only"
-                        ? ru.continueHintRevealer
-                        : ru.continueHintAnyone}
+                        ? gameText.t("continueHintRevealer")
+                        : gameText.t("continueHintAnyone")}
                   </span>
                 </div>
               ) : null}
@@ -1838,15 +2229,15 @@ export default function GamePage({
                         className="mobile-world-card"
                         onClick={() => setMobileDeckModal("bunker")}
                       >
-                        <div className="mobile-world-label">Бункер</div>
+                        <div className="mobile-world-label">{gameText.t("worldKindBunker")}</div>
                         <div className="mobile-world-media">
                           <CardTile
                             src={
                               mobileBunkerPreview?.isRevealed
-                                ? getWorldImage(mobileBunkerPreview.imageId) ?? getCardBackUrl("Бункер")
-                                : getCardBackUrl("Бункер")
+                                ? getWorldImage(mobileBunkerPreview.imageId)
+                                : getCardBackUrl("bunker", cardLocale)
                             }
-                            fallback="Бункер"
+                            fallback={gameText.t("worldKindBunker")}
                           />
                         </div>
                       </button>
@@ -1855,11 +2246,11 @@ export default function GamePage({
                         className="mobile-world-card"
                         onClick={() => setMobileDeckModal("disaster")}
                       >
-                        <div className="mobile-world-label">Катастрофа</div>
+                        <div className="mobile-world-label">{gameText.t("worldKindDisaster")}</div>
                         <div className="mobile-world-media">
                           <CardTile
                             src={getWorldImage(world.disaster.imageId)}
-                            fallback="Катастрофа"
+                            fallback={gameText.t("worldKindDisaster")}
                           />
                         </div>
                       </button>
@@ -1868,15 +2259,15 @@ export default function GamePage({
                         className="mobile-world-card"
                         onClick={() => setMobileDeckModal("threat")}
                       >
-                        <div className="mobile-world-label">Угроза</div>
+                        <div className="mobile-world-label">{gameText.t("worldKindThreat")}</div>
                         <div className="mobile-world-media">
                           <CardTile
                             src={
                               mobileThreatPreview?.isRevealed
-                                ? getWorldImage(mobileThreatPreview.imageId) ?? getCardBackUrl("Угроза")
-                                : getCardBackUrl("Угроза")
+                                ? getWorldImage(mobileThreatPreview.imageId)
+                                : getCardBackUrl("threat", cardLocale)
                             }
-                            fallback="Угроза"
+                            fallback={gameText.t("worldKindThreat")}
                           />
                         </div>
                       </button>
@@ -1887,7 +2278,10 @@ export default function GamePage({
                       {publicPlayers.map((player, index) => {
                         const isYou = player.playerId === you?.playerId;
                         const isSelected = player.playerId === selectedPlayerId;
-                        const label = isYou ? `${player.name} (${ru.youBadge})` : player.name || `Игрок ${index + 1}`;
+                        const rawName = (player.name ?? "").trim() || gameText.t("playerFallback", { index: index + 1 });
+                        const shortName = formatPlayerNameShort(rawName, 12);
+                        const label = isYou ? `${shortName} (${gameText.t("youBadge")})` : shortName;
+                        const fullLabel = isYou ? `${rawName} (${gameText.t("youBadge")})` : rawName;
                         const classes = [
                           "mobile-player-chip",
                           isSelected ? "selected" : "",
@@ -1904,6 +2298,7 @@ export default function GamePage({
                             className={classes}
                             onClick={() => handleSelectPlayer(player.playerId)}
                             role="listitem"
+                            title={fullLabel}
                           >
                             {label}
                           </button>
@@ -1932,7 +2327,7 @@ export default function GamePage({
                     disabled={!wsInteractive || !gameView.public.canOpenVotingModal}
                     onClick={() => setVoteModalOpen(true)}
                   >
-                    {ru.openVoting}
+                    {gameText.t("openVoting")}
                   </button>
                 </div>
               ) : null}
@@ -1940,8 +2335,8 @@ export default function GamePage({
                   <div className="vote-special-inline">
                     <div className="vote-special-alert">
                       <div className="vote-special-alert-text">
-                        <span className="vote-special-alert-icon">⚑</span>
-                        {ru.votingSpecialAlert}
+                        {showHints ? <span className="vote-special-alert-icon" aria-hidden="true">!</span> : null}
+                        {showHints ? gameText.t("votingSpecialAlert") : gameText.t("voteSpecialFallbackAlert")}
                       </div>
                       <div className="vote-special-alert-actions">
                         {showFinalizeVoting ? (
@@ -1950,7 +2345,7 @@ export default function GamePage({
                             disabled={!wsInteractive}
                             onClick={onFinalizeVoting}
                           >
-                            {ru.finalizeVoting}
+                            {gameText.t("finalizeVoting")}
                           </button>
                         ) : null}
                       </div>
@@ -1959,24 +2354,24 @@ export default function GamePage({
                       <div className="vote-special-panel">
                         <div className="special-list">
                           {showNoTargetNotice && !isMobile ? (
-                            <div className="muted">{ru.noTargetCandidates}</div>
+                            <div className="muted">{gameText.t("noTargetCandidates")}</div>
                           ) : null}
                           {votingSpecials.map((special) => (
                             <div key={special.instanceId} className="special-card">
                               <div className="special-header">
-                                <div className="special-title">{special.title}</div>
+                                <div className="special-title">{localizeSpecial(special).title}</div>
                                 <span className={`badge ${special.revealedPublic ? "revealed" : "hidden"}`}>
-                                  {special.revealedPublic ? ru.cardRevealed : ru.cardHidden}
+                                  {special.revealedPublic ? gameText.t("cardRevealed") : gameText.t("cardHidden")}
                                 </span>
                               </div>
-                              <div className="special-text">{special.text}</div>
+                              <div className="special-text">{localizeSpecial(special).text}</div>
                               <div className="special-actions">
                                 <button
                                   className="primary"
-                                  disabled={!wsInteractive || (!isDevScenario && votePhase !== "voteSpecialWindow")}
+                                  disabled={!wsInteractive || !canUseSpecialNow(special)}
                                   onClick={() => handleApplySpecial(special)}
                                 >
-                                  {ru.useSpecialButton}
+                                  {gameText.t("useSpecialButton")}
                                 </button>
                               </div>
                             </div>
@@ -1989,7 +2384,7 @@ export default function GamePage({
             </div>
             <div className="selected-panel">
               <div className="selected-header">
-                <div className="panel-subtitle">{ru.selectedPlayerTitle}</div>
+                <div className="panel-subtitle">{gameText.t("selectedPlayerTitle")}</div>
                 {selectedBoardPlayer ? <div className="selected-name">{selectedBoardLabel}</div> : null}
               </div>
               {selectedBoardPlayer ? (
@@ -1998,79 +2393,117 @@ export default function GamePage({
                   style={{ "--rows": selectedCategoryRows } as CSSProperties}
                 >
                   {PUBLIC_CATEGORY_ORDER.map((category) => {
-                    const slot = selectedBoardPlayer.categories.find((entry) => entry.category === category);
-                    const card = pickPreferredPublicCategoryCard(slot);
-                    const isRevealed = Boolean(slot && slot.status === "revealed" && slot.cards.length > 0 && !card?.hidden);
-                    const faceUrl = isRevealed ? getCardFaceUrl(card?.imgUrl) : undefined;
-                    const requestedBackCategory = card?.backCategory?.trim() || "";
-                    const backCategory =
-                      requestedBackCategory && getCardBackUrl(requestedBackCategory)
-                        ? requestedBackCategory
-                        : category;
-                    const backUrl = getCardBackUrl(backCategory);
-                    if (isRevealed && !faceUrl) {
+                      if (selectedBoardIsYou) {
+                        if (category === "special") {
+                          const special = you?.specialConditions?.[0];
+                          const specialRevealed = showOwnSelectedFacesImmediately || Boolean(special?.revealedPublic);
+                          const faceUrl = specialRevealed && special?.imgUrl ? getCardFaceUrl(special.imgUrl) : undefined;
+                          const backUrl = getCardBackUrl("special", cardLocale);
+                          return (
+                            <CardTile
+                              key={category}
+                              src={faceUrl ?? backUrl}
+                              fallback={getCategoryDisplayLabel(category, gameLocale)}
+                              overlayLabel={
+                                specialRevealed
+                                  ? localizeOptionalCardLabel(
+                                      {
+                                        id: special?.id,
+                                        deck: "special",
+                                        labelShort: special?.title,
+                                        imgUrl: special?.imgUrl,
+                                      },
+                                      cardLocale,
+                                      getCategoryDisplayLabel(category, gameLocale)
+                                    )
+                                  : undefined
+                              }
+                            />
+                          );
+                        }
+
+                        const slot = you?.categories.find((entry) => normalizeCategoryKey(entry.category) === category);
+                        const card = slot?.cards?.[0];
+                        const handCard = card ? handByInstanceId.get(card.instanceId) : undefined;
+                        const isRevealed = showOwnSelectedFacesImmediately || Boolean(card?.revealed || handCard?.revealed);
+                        const faceUrl = isRevealed ? getCardFaceUrl(handCard?.imgUrl ?? card?.imgUrl) : undefined;
+                        const backUrl = getCardBackUrl(category, cardLocale);
+
+                        return (
+                          <CardTile
+                            key={category}
+                            src={faceUrl ?? backUrl}
+                            fallback={getCategoryDisplayLabel(category, gameLocale)}
+                          />
+                        );
+                      }
+
+                      const slot = selectedBoardPlayer.categories.find((entry) => normalizeCategoryKey(entry.category) === category);
+                      const isRevealed = Boolean(slot && slot.status === "revealed" && slot.cards.length > 0);
+                      const card = slot?.cards[0];
+                      const faceUrl = isRevealed ? getCardFaceUrl(card?.imgUrl) : undefined;
+                      const backUrl = getCardBackUrl(card?.backCategory ?? category, cardLocale);
+
+                      if (isRevealed && !faceUrl) {
+                        return (
+                          <CardTile
+                            key={category}
+                            src={backUrl}
+                            fallback={getCategoryDisplayLabel(category, gameLocale)}
+                          />
+                        );
+                      }
+
                       return (
                         <CardTile
                           key={category}
-                          src={backUrl}
-                          fallback={category}
-                          captionLabel={card?.labelShort ?? category}
+                          src={isRevealed ? faceUrl : backUrl}
+                          fallback={getCategoryDisplayLabel(category, gameLocale)}
                         />
                       );
-                    }
-                    return (
-                      <CardTile
-                        key={category}
-                        src={isRevealed ? faceUrl : backUrl}
-                        fallback={category}
-                      />
-                    );
-                  })}
-                </div>
+                    })}                </div>
               ) : (
-                <div className="selected-empty muted">{ru.selectedPlayerHint}</div>
+                <div className="selected-empty muted">{gameText.t("selectedPlayerHint")}</div>
               )}
             </div>
           </div>
-      </section>
+        </section>
+      </div>
 
       {isMobile ? (
-        <div className={`mobile-action-bar${isMobileNarrow && canDecidePostGameOutcome ? " mobile-action-bar--final" : ""}`}>
+        <div
+          ref={mobileActionBarRef}
+          className={`mobile-action-bar${isMobileNarrow && canDecidePostGameOutcome ? " mobile-action-bar--final" : ""}`}
+        >
           <button className="ghost mobile-action-dossier" onClick={() => setDossierOpen(true)}>
-            {ru.dossierTitle}
+            {gameLocale.dossierTitle}
           </button>
-          {showDevControls ? (
-            <div className="mobile-dev-row">
-              <button className="ghost" onClick={() => onDevAddPlayer()}>
-                + Игрок
+          {isDevScenario ? (
+            <div className="mobile-dev-quick-actions">
+              <button className="ghost button-small" onClick={() => onDevAddPlayer()}>
+                {gameText.t("devAddPlayer")}
               </button>
-              <button
-                className="ghost"
-                onClick={() => {
-                  onDevRemovePlayer(devRemoveTargetId || undefined);
-                  setDevRemoveTargetId("");
-                }}
-              >
-                Выгнать
+              <button className="ghost button-small" onClick={() => onDevRemovePlayer(undefined)}>
+                {gameText.t("devRemoveButton")}
               </button>
             </div>
           ) : null}
           {phase === "reveal_discussion" ? (
             <button
-              className="primary mobile-action-wide"
-              disabled={!wsInteractive || !gameView.public.canContinue}
+              className="primary"
+              disabled={!canContinueRoundNow}
               onClick={onContinueRound}
             >
-              {ru.continueRoundButton}
+              {gameText.t("continueRoundButton")}
             </button>
           ) : null}
           {votePhase === "voting" ? (
             <button
-              className="ghost mobile-action-wide"
+              className="ghost"
               disabled={!wsInteractive || !gameView.public.canOpenVotingModal}
               onClick={() => setVoteModalOpen(true)}
             >
-              {ru.openVoting}
+              {gameText.t("openVoting")}
             </button>
           ) : null}
           {isMobileNarrow && canDecidePostGameOutcome ? (
@@ -2079,13 +2512,13 @@ export default function GamePage({
                 className="primary success"
                 onClick={() => onSetBunkerOutcome("survived")}
               >
-                {ru.bunkerOutcomeSurvived}
+                {gameText.t("bunkerOutcomeSurvived")}
               </button>
               <button
                 className="primary danger"
                 onClick={() => onSetBunkerOutcome("failed")}
               >
-                {ru.bunkerOutcomeFailed}
+                {gameText.t("bunkerOutcomeFailed")}
               </button>
             </div>
           ) : null}
@@ -2111,8 +2544,9 @@ export default function GamePage({
                   setDossierOpen(false);
                   onClearMobileDossierError?.();
                 }}
+                aria-label={gameText.t("closeButton")}
               >
-                ✕
+                <span aria-hidden="true">×</span>
               </button>
             </div>
             <div className="mobile-dossier-body">
@@ -2122,15 +2556,15 @@ export default function GamePage({
                 </div>
               ) : null}
               <MobileDossierPanel />
-              <div className="mobile-dossier-footer">
-                <button
-                  className="primary"
-                  disabled={!canReveal || !selectedCardId}
-                  onClick={() => selectedCardId && onRevealCard(selectedCardId)}
-                >
-                  {canRevealPostGame ? ru.revealPostGameAction : ru.revealAction}
-                </button>
-              </div>
+            </div>
+            <div className="mobile-dossier-footer">
+              <button
+                className="primary"
+                disabled={!canReveal || !selectedCardId || !canRevealSelectedCard}
+                onClick={() => selectedCardId && onRevealCard(selectedCardId)}
+              >
+                {canRevealPostGame ? gameText.t("revealPostGameAction") : gameText.t("revealAction")}
+              </button>
             </div>
           </div>
         </div>
@@ -2140,10 +2574,10 @@ export default function GamePage({
         open={isMobile && mobileDeckModal !== null && !!world}
         title={
           mobileDeckModal === "bunker"
-            ? "Бункер"
+            ? gameText.t("worldKindBunker")
             : mobileDeckModal === "threat"
-              ? "Угроза"
-              : "Катастрофа"
+              ? gameText.t("worldKindThreat")
+              : gameText.t("worldKindDisaster")
         }
         onClose={() => setMobileDeckModal(null)}
         dismissible={true}
@@ -2154,14 +2588,14 @@ export default function GamePage({
             {mobileDeckModal === "bunker" ? (
               <div className="mobile-deck-grid">
                 {world.bunker.map((card, index) => {
-                  const label = `Бункер #${index + 1}`;
+                  const label = getLocalizedWorldCardLabel(card) || gameLocale.worldBunkerCard(index + 1);
                   const revealed = card.isRevealed;
-                  const faceUrl = revealed ? getWorldImage(card.imageId) : undefined;
-                  const backUrl = getCardBackUrl("Бункер");
+                  const faceUrl = revealed ? getWorldImage(card.imgUrl ?? card.imageId) : undefined;
+                  const backUrl = getCardBackUrl("bunker", cardLocale);
                   return (
                     <div key={card.id} className="mobile-deck-card">
                       <CardTile src={revealed ? faceUrl : backUrl} fallback={label} />
-                      <div className="mobile-deck-title">{revealed ? card.title : label}</div>
+                      <div className="mobile-deck-title">{label}</div>
                     </div>
                   );
                 })}
@@ -2176,13 +2610,13 @@ export default function GamePage({
                       className="primary world-outcome-button success"
                       onClick={() => onSetBunkerOutcome("survived")}
                     >
-                      {ru.bunkerOutcomeSurvived}
+                      {gameText.t("bunkerOutcomeSurvived")}
                     </button>
                     <button
                       className="primary world-outcome-button danger"
                       onClick={() => onSetBunkerOutcome("failed")}
                     >
-                      {ru.bunkerOutcomeFailed}
+                      {gameText.t("bunkerOutcomeFailed")}
                     </button>
                   </div>
                 ) : null}
@@ -2191,10 +2625,10 @@ export default function GamePage({
                   className="mobile-deck-card mobile-deck-card--single"
                 >
                   <CardTile
-                    src={getWorldImage(world.disaster.imageId)}
-                    fallback="Катастрофа"
+                    src={getWorldImage(world.disaster.imgUrl ?? world.disaster.imageId)}
+                    fallback={gameText.t("worldKindDisaster")}
                   />
-                  <div className="mobile-deck-title">{world.disaster.title}</div>
+                  <div className="mobile-deck-title">{getLocalizedWorldCardLabel(world.disaster) || gameLocale.worldKindDisaster}</div>
                 </button>
               </div>
             ) : null}
@@ -2202,10 +2636,10 @@ export default function GamePage({
             {mobileDeckModal === "threat" ? (
               <div className="mobile-deck-grid">
                 {visibleWorldThreats.map((card, index) => {
-                  const label = `Угроза #${index + 1}`;
+                  const label = getLocalizedWorldCardLabel(card) || gameLocale.worldThreatCard(index + 1);
                   const revealed = card.isRevealed;
-                  const faceUrl = revealed ? getWorldImage(card.imageId) : undefined;
-                  const backUrl = getCardBackUrl("Угроза");
+                  const faceUrl = revealed ? getWorldImage(card.imgUrl ?? card.imageId) : undefined;
+                  const backUrl = getCardBackUrl("threat", cardLocale);
                   const canReveal = canRevealThreats && !revealed;
                   return (
                     <button
@@ -2219,9 +2653,9 @@ export default function GamePage({
                       }}
                     >
                       <CardTile src={revealed ? faceUrl : backUrl} fallback={label} />
-                      <div className="mobile-deck-title">{revealed ? card.title : label}</div>
-                      {canReveal ? (
-                        <div className="mobile-deck-hint">Нажмите, чтобы раскрыть</div>
+                      <div className="mobile-deck-title">{label}</div>
+                      {canReveal && showHints ? (
+                        <div className="mobile-deck-hint">{gameText.t("worldHintTapToReveal")}</div>
                       ) : null}
                     </button>
                   );
@@ -2230,29 +2664,30 @@ export default function GamePage({
             ) : null}
           </div>
         ) : (
-          <div className="muted">Условия мира не загружены.</div>
+          <div className="muted">{gameText.t("worldNotLoaded")}</div>
         )}
         <div className="mobile-deck-footer">
           <button className="ghost" onClick={() => setMobileDeckModal(null)}>
-            {ru.closeButton}
+            {gameText.t("closeButton")}
           </button>
         </div>
       </Modal>
 
       <Modal
         open={voteModalOpen}
-        title={ru.votingModalTitle}
+        title={gameText.t("votingModalTitle")}
         onClose={() => setVoteModalOpen(false)}
         dismissible={true}
+        className="vote-modal"
       >
         {votePhase === "voting" ? (
           <div className="vote-modal-layout">
             <div className="vote-modal-section">
               <div className="muted">{yourVoteLabel}</div>
-              {yourVoteWeight > 1 ? <div className="muted">{ru.votingWeightNotice(yourVoteWeight)}</div> : null}
+              {yourVoteWeight > 1 ? <div className="muted">{gameLocale.votingWeightHint(yourVoteWeight)}</div> : null}
               <select value={voteTargetId ?? ""} onChange={(event) => setVoteTargetId(event.target.value)}>
                 <option value="" disabled>
-                  {ru.selectPlayerPlaceholder}
+                  {gameText.t("selectPlayerPlaceholder")}
                 </option>
                 {alivePlayers
                   .filter((player) => player.playerId !== you?.playerId)
@@ -2263,44 +2698,40 @@ export default function GamePage({
                       disabled={disallowedVoteTargetSet.has(player.playerId)}
                     >
                       {player.name}
+                      {disallowedVoteTargetSet.has(player.playerId) ? ` (${gameText.t("voteTargetBlockedPlanBSuffix")})` : ""}
                     </option>
                   ))}
               </select>
               <button
                 className="primary"
                 disabled={!canVote || !voteTargetId || selectedVoteTargetDisallowed}
-                onClick={() => {
-                  if (!voteTargetId || disallowedVoteTargetSet.has(voteTargetId)) return;
-                  onVote(voteTargetId);
-                }}
+                onClick={() => voteTargetId && onVote(voteTargetId)}
               >
-                {ru.voteButton}
+                {gameText.t("voteButton")}
               </button>
-              {!canVote ? <div className="muted">{ru.alreadyVoted}</div> : null}
-              {selectedVoteTargetDisallowed ? (
-                <div className="muted">{ru.revoteBlockedSelected}</div>
-              ) : null}
-              {disallowedVoteTargetNames.length > 0 ? (
-                <div className="muted">{ru.revoteBlockedTargets(disallowedVoteTargetNames.join(", "))}</div>
+              {!canVote ? <div className="muted">{gameText.t("alreadyVoted")}</div> : null}
+              {canVote && selectedVoteTargetDisallowed ? (
+                <div className="muted">{gameText.t("voteTargetBlockedPlanB")}</div>
               ) : null}
             </div>
             <div className="vote-modal-right">
-              <div className="panel-subtitle">{ru.voteCandidateTitle}</div>
+              <div className="panel-subtitle">{gameText.t("voteCandidateTitle")}</div>
               {!voteTargetId ? (
-                <div className="muted">{ru.voteCandidateHint}</div>
+                <div className="muted">{gameText.t("voteCandidateHint")}</div>
               ) : (
                 <div className="vote-candidate-grid">
                   {categoryOrder.map((category) => {
-                    const slot = selectedVotePlayer?.categories.find((entry) => entry.category === category);
+                    const slot = selectedVotePlayer?.categories.find((entry) => normalizeCategoryKey(entry.category) === category);
                     const labels =
                       slot && slot.status === "revealed" && slot.cards.length > 0
-                        ? slot.cards.map((card) => card.labelShort ?? "—").join(", ")
-                        : ru.slotHidden;
+                        ? slot.cards.map((card) => localizeOptionalCardLabel(card, cardLocale)).join(", ")
+                        : gameLocale.slotHidden;
+                    const categoryLabel = getCategoryDisplayLabel(normalizeCategoryKey(category), gameLocale);
 
                     return (
                       <div key={category} className="vote-candidate-card">
                         <span className="vote-candidate-text">
-                          {category}: {labels}
+                          {categoryLabel}: {labels}
                         </span>
                       </div>
                     );
@@ -2313,20 +2744,25 @@ export default function GamePage({
 
         {votePhase === "voteResolve" ? (
           <div className="vote-modal-section">
-            <div className="panel-subtitle">{ru.votingResolveTitle}</div>
-            <div>{gameView.public.resolutionNote ?? ru.votingResolveEmpty}</div>
+            <div className="panel-subtitle">{gameText.t("votingResolveTitle")}</div>
+            <div>{gameView.public.resolutionNote ?? gameText.t("votingResolveEmpty")}</div>
             <div className="vote-summary-list">
               {votesPublic.map((vote) => (
                 <div key={vote.voterId} className="vote-summary-row">
                   <span>{vote.voterName}</span>
                   <span>
-                    {vote.status === "voted" && vote.targetName
-                      ? vote.targetId && vote.targetId === vote.voterId
-                        ? ru.voteAgainstSelf(vote.targetName)
-                        : ru.voteAgainst(vote.targetName)
-                      : vote.status === "invalid"
-                        ? ru.voteInvalid(vote.reason ?? ru.voteNotVoted)
-                        : ru.voteNotVoted}
+                    {(() => {
+                      const reasonText = voteReasonText(vote.reasonCode, vote.reason);
+                      if (vote.status === "voted" && vote.targetName) {
+                        return reasonText
+                          ? `${gameLocale.voteAgainst(vote.targetName)} (${reasonText})${(vote.weight ?? 1) > 1 ? ` x${vote.weight}` : ""}`
+                          : `${gameLocale.voteAgainst(vote.targetName)}${(vote.weight ?? 1) > 1 ? ` x${vote.weight}` : ""}`;
+                      }
+                      if (vote.status === "invalid") {
+                        return gameLocale.voteInvalid(reasonText || gameLocale.voteNotVoted);
+                      }
+                      return gameLocale.voteNotVoted;
+                    })()}
                   </span>
                 </div>
               ))}
@@ -2337,7 +2773,7 @@ export default function GamePage({
 
       <Modal
         open={!isMobile && worldModalOpen && !!world}
-        title="Карты мира"
+        title={gameText.t("worldModalTitle")}
         onClose={() => setWorldModalOpen(false)}
         dismissible={true}
         className="world-modal"
@@ -2355,10 +2791,10 @@ export default function GamePage({
               >
                 {world.bunker.map((card, index) => {
                   const isSoloLast = world.bunker.length % 2 === 1 && index === world.bunker.length - 1;
-                  const label = `Бункер #${index + 1}`;
+                  const label = getLocalizedWorldCardLabel(card) || gameLocale.worldBunkerCard(index + 1);
                   const revealed = card.isRevealed;
-                  const faceUrl = revealed ? getWorldImage(card.imageId) : undefined;
-                  const backUrl = getCardBackUrl("Бункер");
+                  const faceUrl = revealed ? getWorldImage(card.imgUrl ?? card.imageId) : undefined;
+                  const backUrl = getCardBackUrl("bunker", cardLocale);
                   return (
                     <div
                       key={card.id}
@@ -2370,8 +2806,8 @@ export default function GamePage({
                       onClick={() => {
                         if (!revealed) return;
                         openWorldDetail({
-                          kind: "Бункер",
-                          title: card.title || label,
+                          kind: gameText.t("worldKindBunker"),
+                          title: label,
                           description: card.description,
                           imageUrl: faceUrl,
                           label,
@@ -2382,8 +2818,8 @@ export default function GamePage({
                         if (event.key === "Enter" || event.key === " ") {
                           event.preventDefault();
                           openWorldDetail({
-                            kind: "Бункер",
-                            title: card.title || label,
+                            kind: gameText.t("worldKindBunker"),
+                            title: label,
                             description: card.description,
                             imageUrl: faceUrl,
                             label,
@@ -2391,7 +2827,7 @@ export default function GamePage({
                         }
                       }}
                     >
-                      <div className="world-slot-header">Бункер</div>
+                      <div className="world-slot-header">{gameText.t("worldKindBunker")}</div>
                       <div className="world-slot-media">
                         <CardTile
                           src={revealed ? faceUrl : backUrl}
@@ -2399,7 +2835,7 @@ export default function GamePage({
                         />
                       </div>
                       <div className="world-slot-footer">
-                        <div className="world-slot-title">{revealed ? card.title : label}</div>
+                        <div className="world-slot-title">{label}</div>
                       </div>
                     </div>
                   );
@@ -2413,13 +2849,13 @@ export default function GamePage({
                       className="primary world-outcome-button success"
                       onClick={() => onSetBunkerOutcome("survived")}
                     >
-                      {ru.bunkerOutcomeSurvived}
+                      {gameText.t("bunkerOutcomeSurvived")}
                     </button>
                     <button
                       className="primary world-outcome-button danger"
                       onClick={() => onSetBunkerOutcome("failed")}
                     >
-                      {ru.bunkerOutcomeFailed}
+                      {gameText.t("bunkerOutcomeFailed")}
                     </button>
                   </div>
                 ) : null}
@@ -2430,11 +2866,11 @@ export default function GamePage({
                   className="world-center-media"
                   onClick={() =>
                     openWorldDetail({
-                      kind: "Катастрофа",
-                      title: world.disaster.title,
+                      kind: gameText.t("worldKindDisaster"),
+                      title: getLocalizedWorldCardLabel(world.disaster) || gameLocale.worldKindDisaster,
                       description: world.disaster.description,
                       imageUrl: getWorldImage(world.disaster.imageId),
-                      label: "Катастрофа",
+                      label: getLocalizedWorldCardLabel(world.disaster) || gameLocale.worldKindDisaster,
                     })
                   }
                   role="button"
@@ -2442,7 +2878,7 @@ export default function GamePage({
                 >
                   <CardTile
                     src={getWorldImage(world.disaster.imageId)}
-                    fallback="Катастрофа"
+                    fallback={gameText.t("worldKindDisaster")}
                   />
                 </div>
               </div>
@@ -2458,10 +2894,10 @@ export default function GamePage({
                 {visibleWorldThreats.map((card, index) => {
                   const isSoloLast =
                     visibleWorldThreats.length % 2 === 1 && index === visibleWorldThreats.length - 1;
-                  const label = `Угроза #${index + 1}`;
+                  const label = getLocalizedWorldCardLabel(card) || gameLocale.worldThreatCard(index + 1);
                   const revealed = card.isRevealed;
-                  const faceUrl = revealed ? getWorldImage(card.imageId) : undefined;
-                  const backUrl = getCardBackUrl("Угроза");
+                  const faceUrl = revealed ? getWorldImage(card.imgUrl ?? card.imageId) : undefined;
+                  const backUrl = getCardBackUrl("threat", cardLocale);
                   const canReveal = canRevealThreats && !revealed;
                   return (
                     <div
@@ -2476,8 +2912,8 @@ export default function GamePage({
                         }
                         if (revealed) {
                           openWorldDetail({
-                            kind: "Угроза",
-                            title: card.title || label,
+                            kind: gameText.t("worldKindThreat"),
+                            title: label,
                             description: card.description,
                             imageUrl: faceUrl,
                             label,
@@ -2494,8 +2930,8 @@ export default function GamePage({
                           }
                           if (revealed) {
                             openWorldDetail({
-                              kind: "Угроза",
-                              title: card.title || label,
+                              kind: gameText.t("worldKindThreat"),
+                              title: label,
                               description: card.description,
                               imageUrl: faceUrl,
                               label,
@@ -2506,7 +2942,7 @@ export default function GamePage({
                       role={canReveal || revealed ? "button" : undefined}
                       tabIndex={canReveal || revealed ? 0 : -1}
                     >
-                      <div className="world-slot-header">Угроза</div>
+                      <div className="world-slot-header">{gameText.t("worldKindThreat")}</div>
                       <div className="world-slot-media">
                         <CardTile
                           src={revealed ? faceUrl : backUrl}
@@ -2514,10 +2950,10 @@ export default function GamePage({
                         />
                       </div>
                       <div className="world-slot-footer">
-                        <div className="world-slot-title">{revealed ? card.title : label}</div>
+                        <div className="world-slot-title">{label}</div>
                       </div>
-                      {canReveal ? (
-                        <div className="world-slot-hint">Нажмите, чтобы раскрыть</div>
+                      {canReveal && showHints ? (
+                        <div className="world-slot-hint">{gameText.t("worldHintTapToReveal")}</div>
                       ) : null}
                     </div>
                   );
@@ -2537,7 +2973,7 @@ export default function GamePage({
                       <button
                         className="icon-button"
                         onClick={() => setWorldDetail(null)}
-                        aria-label="Закрыть"
+                        aria-label={gameText.t("closeButton")}
                       >
                         ×
                       </button>
@@ -2564,12 +3000,12 @@ export default function GamePage({
             </div>
           </div>
                 ) : (
-          <div className="muted">Условия мира не загружены.</div>
+          <div className="muted">{gameText.t("worldNotLoaded")}</div>
         )}
         {isMobile ? (
           <div className="world-modal-footer">
             <button className="ghost" onClick={() => setWorldModalOpen(false)}>
-              {ru.closeButton}
+              {gameText.t("closeButton")}
             </button>
           </div>
         ) : null}
@@ -2579,111 +3015,234 @@ export default function GamePage({
         <div className="postgame-overlay" role="dialog" aria-modal="true">
           <div className="postgame-card">
             <div className="postgame-title">
-              {postGame.outcome === "survived" ? ru.postGameSuccessTitle : ru.postGameFailedTitle}
+              {postGame.outcome === "survived" ? gameText.t("postGameSuccessTitle") : gameText.t("postGameFailedTitle")}
             </div>
             <div className="postgame-text">
-              {postGame.outcome === "survived" ? ru.postGameSuccessText : ru.postGameFailedText}
+              {postGame.outcome === "survived" ? gameText.t("postGameSuccessText") : gameText.t("postGameFailedText")}
             </div>
             <button className="primary postgame-exit" onClick={onExitGame}>
-              {ru.exitButton}
+              {gameText.t("exitButton")}
             </button>
           </div>
         </div>
       ) : null}
 
-      <Modal
-        open={Boolean(specialDialog)}
-        title={specialDialog?.title}
-        onClose={closeSpecialDialog}
-        dismissible={true}
-        className={useStructuredPlayerDialog ? "special-choice-modal" : undefined}
-      >
-        {specialDialog?.description ? (
-          <div className="muted special-choice-description">{specialDialog.description}</div>
-        ) : null}
-        {specialDialog && specialDialog.kind !== "none" ? (
-          <>
-            {specialDialog.options.length === 0 ? (
-              <div className="muted">{ru.noTargetCandidates}</div>
-            ) : null}
-            {useStructuredPlayerDialog ? (
-              <>
-                <div className="special-choice-field">
-                  <label htmlFor="special-target-select">{ru.playersTitle}</label>
+      {!isMobileNarrow ? (
+        <Modal
+          open={Boolean(specialDialog)}
+          title={specialDialog?.title}
+          onClose={closeSpecialDialog}
+          dismissible={true}
+        >
+          {specialDialog?.description ? <div className="muted">{specialDialog.description}</div> : null}
+          {specialDialog && specialDialog.kind !== "none" ? (
+            <>
+              {specialDialog.options.length === 0 ? (
+                <div className="muted">{gameText.t("noTargetCandidates")}</div>
+              ) : (
+                <>
+                  {isPlayerCardPickerDialog && specialDialog?.cardPicker?.requireSourceCard ? (
+                    <>
+                      <div className="muted">{gameText.t("specialDialogStepOwnCard")}</div>
+                      <select
+                        value={dialogSourceCardSelection}
+                        onChange={(event) => setDialogSourceCardSelection(event.target.value)}
+                        disabled={dialogSourceCards.length === 0}
+                      >
+                        <option value="" disabled>
+                          {gameText.t("specialDialogPlaceholderOwnCard")}
+                        </option>
+                        {dialogSourceCards.map((card) => (
+                          <option key={card.instanceId} value={card.instanceId}>
+                            {card.hint}
+                          </option>
+                        ))}
+                      </select>
+                    </>
+                  ) : null}
+
+                  {isPlayerCardPickerDialog && specialDialog?.cardPicker?.requireSourceCard ? (
+                    <div className="muted">{gameText.t("specialDialogStepPlayer")}</div>
+                  ) : null}
                   <select
-                    id="special-target-select"
-                    value={dialogTargetSelection}
-                    onChange={(event) => setDialogTargetSelection(event.target.value)}
-                    disabled={structuredPlayerGroups.length === 0}
-                  >
-                    <option value="" disabled>{ru.modalSelect}</option>
-                    {structuredPlayerGroups.map((group) => (
-                      <option key={group.id} value={group.id}>
-                        {group.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="special-choice-field">
-                  <label htmlFor="special-option-select">Вариант</label>
-                  <select
-                    id="special-option-select"
                     value={dialogSelection}
-                    onChange={(event) => setDialogSelection(event.target.value)}
-                    disabled={structuredOptionChoices.length === 0}
+                    onChange={(event) => selectDialogPlayer(event.target.value)}
+                    disabled={specialDialog.options.length === 0}
                   >
                     <option value="" disabled>
-                      {ru.modalSelect}
+                      {isPlayerCardPickerDialog && specialDialog?.cardPicker?.requireSourceCard
+                        ? gameText.t("specialDialogPlaceholderPlayer")
+                        : gameText.t("modalSelect")}
                     </option>
-                    {structuredOptionChoices.map((option) => (
+                    {specialDialog.options.map((option) => (
                       <option key={option.id} value={option.id}>
-                        {getStructuredOptionLabel(option)}
+                        {option.label}
                       </option>
                     ))}
                   </select>
-                </div>
-              </>
-            ) : (
-              <select
-                value={dialogSelection}
-                onChange={(event) => setDialogSelection(event.target.value)}
-                disabled={specialDialog.options.length === 0}
-              >
-                <option value="" disabled>
-                  {ru.modalSelect}
-                </option>
-                {specialDialog.options.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            )}
-            {dialogSelection ? (
-              (() => {
-                const selected =
-                  structuredOptionChoices.find((option) => option.id === dialogSelection) ??
-                  specialDialog.options.find((option) => option.id === dialogSelection);
-                if (!selected?.detail) return null;
-                return <div className="muted special-choice-description">{selected.detail}</div>;
-              })()
-            ) : null}
-          </>
-        ) : null}
-        <div className="modal-actions">
-          <button className="ghost" onClick={closeSpecialDialog}>
-            {ru.modalCancel}
-          </button>
-          <button
-            className="primary"
-            disabled={!dialogSelection || (specialDialog?.options.length ?? 0) === 0}
-            onClick={submitSpecialDialog}
-          >
-            {ru.modalApply}
-          </button>
-        </div>
-      </Modal>
 
+                  {isPlayerCardPickerDialog && dialogSelection ? (
+                    <>
+                      {specialDialog?.cardPicker?.requireSourceCard ? (
+                        <div className="muted">{gameText.t("specialDialogStepTargetCard")}</div>
+                      ) : (
+                        <div className="muted">{gameText.t("specialDialogLabelTargetCard")}</div>
+                      )}
+                      <select
+                        value={dialogTargetCardSelection}
+                        onChange={(event) => setDialogTargetCardSelection(event.target.value)}
+                        disabled={dialogTargetCards.length === 0}
+                      >
+                        <option value="" disabled>
+                          {gameText.t("specialDialogPlaceholderTargetCard")}
+                        </option>
+                        {dialogTargetCards.map((card) => (
+                          <option key={card.instanceId} value={card.instanceId}>
+                            {card.hint}
+                          </option>
+                        ))}
+                      </select>
+                      {selectedTargetCardHint ? (
+                        <div className="muted">
+                          {specialDialog?.cardPicker?.requireSourceCard && selectedSourceCardHint
+                            ? gameLocale.specialDialogSummaryWithSource(
+                                selectedSourceCardHint,
+                                selectedTargetCardHint
+                              )
+                            : gameLocale.specialDialogSummaryTargetOnly(selectedTargetCardHint)}
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
+                </>
+              )}
+            </>
+          ) : null}
+          <div className="modal-actions">
+            <button className="ghost" onClick={closeSpecialDialog}>
+              {gameText.t("modalCancel")}
+            </button>
+            <button
+              className="primary"
+              disabled={!canSubmitSpecialDialog}
+              onClick={submitSpecialDialog}
+            >
+              {gameText.t("modalApply")}
+            </button>
+          </div>
+        </Modal>
+      ) : null}
+
+      {isMobileNarrow && specialDialog ? (
+        <div className="mobile-special-backdrop" onClick={closeSpecialDialog}>
+          <div
+            className="mobile-special-panel"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mobile-special-header">
+              <div className="mobile-special-title">{specialDialog.title}</div>
+              <button className="icon-button" onClick={closeSpecialDialog} aria-label={gameText.t("closeButton")}>
+                ×
+              </button>
+            </div>
+            {specialDialog.description ? (
+              <div className="muted mobile-special-description">{specialDialog.description}</div>
+            ) : null}
+            <div className="mobile-special-body">
+              {specialDialog.options.length === 0 ? (
+                <div className="muted">{gameText.t("noTargetCandidates")}</div>
+              ) : (
+                <>
+                  {isPlayerCardPickerDialog && specialDialog?.cardPicker?.requireSourceCard ? (
+                    <>
+                      <div className="muted">{gameText.t("specialDialogStepOwnCard")}</div>
+                      <select
+                        value={dialogSourceCardSelection}
+                        onChange={(event) => setDialogSourceCardSelection(event.target.value)}
+                        disabled={dialogSourceCards.length === 0}
+                      >
+                        <option value="" disabled>
+                          {gameText.t("specialDialogPlaceholderOwnCard")}
+                        </option>
+                        {dialogSourceCards.map((card) => (
+                          <option key={card.instanceId} value={card.instanceId}>
+                            {card.hint}
+                          </option>
+                        ))}
+                      </select>
+                    </>
+                  ) : null}
+
+                  {isPlayerCardPickerDialog && specialDialog?.cardPicker?.requireSourceCard ? (
+                    <div className="muted">{gameText.t("specialDialogStepPlayer")}</div>
+                  ) : null}
+                  <div className="mobile-special-options">
+                    {specialDialog.options.map((option) => (
+                      <button
+                        key={option.id}
+                        type="button"
+                        className={`mobile-special-option${dialogSelection === option.id ? " selected" : ""}`}
+                        onClick={() => selectDialogPlayer(option.id)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {isPlayerCardPickerDialog && dialogSelection ? (
+                    <>
+                      {specialDialog?.cardPicker?.requireSourceCard ? (
+                        <div className="muted">{gameText.t("specialDialogStepTargetCard")}</div>
+                      ) : (
+                        <div className="muted">{gameText.t("specialDialogLabelTargetCard")}</div>
+                      )}
+                      <select
+                        value={dialogTargetCardSelection}
+                        onChange={(event) => setDialogTargetCardSelection(event.target.value)}
+                        disabled={dialogTargetCards.length === 0}
+                      >
+                        <option value="" disabled>
+                          {gameText.t("specialDialogPlaceholderTargetCard")}
+                        </option>
+                        {dialogTargetCards.map((card) => (
+                          <option key={card.instanceId} value={card.instanceId}>
+                            {card.hint}
+                          </option>
+                        ))}
+                      </select>
+                      {selectedTargetCardHint ? (
+                        <div className="muted">
+                          {specialDialog?.cardPicker?.requireSourceCard && selectedSourceCardHint
+                            ? gameLocale.specialDialogSummaryWithSource(
+                                selectedSourceCardHint,
+                                selectedTargetCardHint
+                              )
+                            : gameLocale.specialDialogSummaryTargetOnly(selectedTargetCardHint)}
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
+                </>
+              )}
+            </div>
+            <div className="mobile-special-footer">
+              <button className="ghost" onClick={closeSpecialDialog}>
+                {gameText.t("modalCancel")}
+              </button>
+              <button
+                className="primary"
+                disabled={!canSubmitSpecialDialog}
+                onClick={submitSpecialDialog}
+              >
+                {gameText.t("modalApply")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
+
+
+

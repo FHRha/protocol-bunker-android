@@ -1,6 +1,15 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { AssetCatalog, ScenarioContext } from "@bunker/shared";
-import { scenario as classicScenario, classicSpecialContractForTests } from "../src/classic";
+import { scenario as classicScenario } from "../src/classic";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const specialDefinitionsPath = path.resolve(here, "../classic/SPECIAL_CONDITIONS.json");
+const specialDefinitions = JSON.parse(fs.readFileSync(specialDefinitionsPath, "utf8")) as Array<{
+  effect?: { type?: string; params?: { category?: string } };
+}>;
 
 const makeRng = (seed = 1) => {
   let state = seed >>> 0;
@@ -44,7 +53,6 @@ const makeContext = (players: Array<{ playerId: string; name: string }>): Scenar
       enablePostVoteDiscussionTimer: false,
       postVoteDiscussionSeconds: 30,
       automationMode: "semi",
-      enablePresenterMode: false,
       continuePermission: "host_only",
       revealTimeoutAction: "random_card",
       revealsBeforeVoting: 2,
@@ -100,15 +108,15 @@ describe("classic specials category card selection", () => {
       ])
     );
 
-    const p1Fact1 = revealCategoryCard(session, "p1", "Факт №1");
+    const p1Fact1 = revealCategoryCard(session, "p1", "facts1");
     continueRoundAsHost(session);
-    const p2Fact1 = revealCategoryCard(session, "p2", "Факт №1");
+    const p2Fact1 = revealCategoryCard(session, "p2", "facts1");
 
     const p1Fact1Before = getCardAssetIdByInstance(session, "p1", p1Fact1);
     const p2Fact1Before = getCardAssetIdByInstance(session, "p2", p2Fact1);
 
-    const special = classicSpecialContractForTests.find(
-      (entry) => entry.effectType === "swapRevealedWithNeighbor" && entry.category === "facts"
+    const special = specialDefinitions.find(
+      (entry) => entry.effect?.type === "swapRevealedWithNeighbor" && entry.effect?.params?.category === "facts"
     );
     expect(special).toBeTruthy();
 
@@ -119,8 +127,8 @@ describe("classic specials category card selection", () => {
         specialId: special?.id,
         payload: {
           targetPlayerId: "p2",
-          actorCardId: p1Fact1,
-          targetCardId: p2Fact1,
+          sourceCardInstanceId: p1Fact1,
+          targetCardInstanceId: p2Fact1,
         },
       },
     });
@@ -142,17 +150,17 @@ describe("classic specials category card selection", () => {
       ])
     );
 
-    const p1Fact1 = revealCategoryCard(session, "p1", "Факт №1");
+    const p1Fact1 = revealCategoryCard(session, "p1", "facts1");
     continueRoundAsHost(session);
-    revealCategoryCard(session, "p2", "Факт №1");
+    revealCategoryCard(session, "p2", "facts1");
 
     const p2View = session.getGameView("p2");
     const p2Fact2 =
-      p2View.you.categories.find((entry) => entry.category === "Факт №2")?.cards?.[0]?.instanceId ?? "";
+      p2View.you.categories.find((entry) => entry.category === "facts2")?.cards?.[0]?.instanceId ?? "";
     expect(p2Fact2).not.toBe("");
 
-    const special = classicSpecialContractForTests.find(
-      (entry) => entry.effectType === "swapRevealedWithNeighbor" && entry.category === "facts"
+    const special = specialDefinitions.find(
+      (entry) => entry.effect?.type === "swapRevealedWithNeighbor" && entry.effect?.params?.category === "facts"
     );
     expect(special).toBeTruthy();
 
@@ -163,8 +171,8 @@ describe("classic specials category card selection", () => {
         specialId: special?.id,
         payload: {
           targetPlayerId: "p2",
-          actorCardId: p1Fact1,
-          targetCardId: p2Fact2,
+          sourceCardInstanceId: p1Fact1,
+          targetCardInstanceId: p2Fact2,
         },
       },
     });
