@@ -43,11 +43,6 @@ val workspaceRoot = rootProject.projectDir.resolve("..")
 val bundledBinaryRoot = project.layout.projectDirectory.dir("src/main/assets/server-binaries")
 val runtimeAssetsCommonDir = layout.buildDirectory.dir("generated/runtime-assets/common")
 val runtimeAssetsLegacyDir = layout.buildDirectory.dir("generated/runtime-assets/server-runtime")
-val runtimeAssetsArm64Dir = layout.buildDirectory.dir("generated/runtime-assets/arm64")
-val runtimeAssetsArmv7Dir = layout.buildDirectory.dir("generated/runtime-assets/armv7")
-val runtimeAssetsX86Dir = layout.buildDirectory.dir("generated/runtime-assets/x86")
-val runtimeAssetsX8664Dir = layout.buildDirectory.dir("generated/runtime-assets/x8664")
-val runtimeAssetsUniversalDir = layout.buildDirectory.dir("generated/runtime-assets/universal")
 val nativeExecArm64Dir = layout.buildDirectory.dir("generated/native-exec-libs/arm64")
 val nativeExecArmv7Dir = layout.buildDirectory.dir("generated/native-exec-libs/armv7")
 val nativeExecX86Dir = layout.buildDirectory.dir("generated/native-exec-libs/x86")
@@ -76,27 +71,6 @@ val syncRuntimeAssetsCommon by tasks.registering(Sync::class) {
     into(runtimeAssetsCommonDir)
 }
 
-fun registerBinarySyncTask(
-    taskName: String,
-    outputDir: org.gradle.api.provider.Provider<org.gradle.api.file.Directory>,
-    abiDirs: List<String>
-) = tasks.register<Sync>(taskName) {
-    doFirst {
-        abiDirs.forEach { abi ->
-            check(bundledBinaryRoot.file("$abi/server-go").asFile.exists()) {
-                "Missing server binary for ABI $abi: ${bundledBinaryRoot.file("$abi/server-go").asFile.absolutePath}"
-            }
-        }
-    }
-    if (bundledBinaryRoot.file("README.md").asFile.exists()) {
-        from(bundledBinaryRoot.file("README.md")) { into("server-binaries") }
-    }
-    abiDirs.forEach { abi ->
-        from(bundledBinaryRoot.dir(abi)) { into("server-binaries/$abi") }
-    }
-    into(outputDir)
-}
-
 fun registerNativeExecSyncTask(
     taskName: String,
     outputDir: org.gradle.api.provider.Provider<org.gradle.api.file.Directory>,
@@ -118,31 +92,6 @@ fun registerNativeExecSyncTask(
     into(outputDir)
 }
 
-val syncRuntimeAssetsArm64 by registerBinarySyncTask(
-    taskName = "syncRuntimeAssetsArm64",
-    outputDir = runtimeAssetsArm64Dir,
-    abiDirs = listOf("arm64-v8a")
-)
-val syncRuntimeAssetsArmv7 by registerBinarySyncTask(
-    taskName = "syncRuntimeAssetsArmv7",
-    outputDir = runtimeAssetsArmv7Dir,
-    abiDirs = listOf("armeabi-v7a")
-)
-val syncRuntimeAssetsX86 by registerBinarySyncTask(
-    taskName = "syncRuntimeAssetsX86",
-    outputDir = runtimeAssetsX86Dir,
-    abiDirs = listOf("x86")
-)
-val syncRuntimeAssetsX8664 by registerBinarySyncTask(
-    taskName = "syncRuntimeAssetsX8664",
-    outputDir = runtimeAssetsX8664Dir,
-    abiDirs = listOf("x86_64")
-)
-val syncRuntimeAssetsUniversal by registerBinarySyncTask(
-    taskName = "syncRuntimeAssetsUniversal",
-    outputDir = runtimeAssetsUniversalDir,
-    abiDirs = supportedAbis
-)
 val syncNativeExecArm64 by registerNativeExecSyncTask(
     taskName = "syncNativeExecArm64",
     outputDir = nativeExecArm64Dir,
@@ -202,11 +151,6 @@ android {
         create("x8664") { dimension = "abi" }
         create("universal") { dimension = "abi" }
     }
-    sourceSets.getByName("arm64").assets.srcDir(runtimeAssetsArm64Dir)
-    sourceSets.getByName("armv7").assets.srcDir(runtimeAssetsArmv7Dir)
-    sourceSets.getByName("x86").assets.srcDir(runtimeAssetsX86Dir)
-    sourceSets.getByName("x8664").assets.srcDir(runtimeAssetsX8664Dir)
-    sourceSets.getByName("universal").assets.srcDir(runtimeAssetsUniversalDir)
     sourceSets.getByName("arm64").jniLibs.srcDir(nativeExecArm64Dir)
     sourceSets.getByName("armv7").jniLibs.srcDir(nativeExecArmv7Dir)
     sourceSets.getByName("x86").jniLibs.srcDir(nativeExecX86Dir)
@@ -263,14 +207,12 @@ android {
 
 fun wireVariantPreBuild(
     flavorName: String,
-    runtimeTask: Sync,
     nativeTask: Sync
 ) {
     listOf("Debug", "Release").forEach { buildType ->
         val taskName = "pre${flavorName}${buildType}Build"
         tasks.matching { it.name == taskName }.configureEach {
             dependsOn(syncRuntimeAssetsCommon)
-            dependsOn(runtimeTask)
             dependsOn(nativeTask)
         }
     }
@@ -280,11 +222,11 @@ tasks.named("preBuild").configure {
     dependsOn(syncRuntimeAssetsCommon)
 }
 
-wireVariantPreBuild("Arm64", syncRuntimeAssetsArm64, syncNativeExecArm64)
-wireVariantPreBuild("Armv7", syncRuntimeAssetsArmv7, syncNativeExecArmv7)
-wireVariantPreBuild("X86", syncRuntimeAssetsX86, syncNativeExecX86)
-wireVariantPreBuild("X8664", syncRuntimeAssetsX8664, syncNativeExecX8664)
-wireVariantPreBuild("Universal", syncRuntimeAssetsUniversal, syncNativeExecUniversal)
+wireVariantPreBuild("Arm64", syncNativeExecArm64)
+wireVariantPreBuild("Armv7", syncNativeExecArmv7)
+wireVariantPreBuild("X86", syncNativeExecX86)
+wireVariantPreBuild("X8664", syncNativeExecX8664)
+wireVariantPreBuild("Universal", syncNativeExecUniversal)
 
 if (!hasReleaseSigning) {
     logger.warn(

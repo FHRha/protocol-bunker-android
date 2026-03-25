@@ -17,15 +17,21 @@ internal object ServerBinaryInstaller {
 
     suspend fun ensureInstalled(context: Context, logger: (String) -> Unit): Boolean =
         withContext(Dispatchers.IO) {
+            if (hasNativeBundledBinary(context)) {
+                val runtimeReady = installRuntimeIfNeeded(context, logger)
+                if (!runtimeReady) return@withContext false
+                return@withContext true
+            }
+
             val supportedAbis = Build.SUPPORTED_ABIS?.toList().orEmpty()
             if (supportedAbis.isEmpty()) {
-                logger("ABI не определён: список SUPPORTED_ABIS пуст")
+                logger("ABI РЅРµ РѕРїСЂРµРґРµР»С‘РЅ: СЃРїРёСЃРѕРє SUPPORTED_ABIS РїСѓСЃС‚")
                 return@withContext false
             }
 
             val selectedAbi = supportedAbis.firstOrNull { hasBundledBinary(context, it) }
             if (selectedAbi == null) {
-                logger("Не найден встроенный Go-бинарь под ABI: ${supportedAbis.joinToString()}")
+                logger("РќРµ РЅР°Р№РґРµРЅ РІСЃС‚СЂРѕРµРЅРЅС‹Р№ Go-Р±РёРЅР°СЂСЊ РїРѕРґ ABI: ${supportedAbis.joinToString()}")
                 return@withContext false
             }
 
@@ -68,12 +74,12 @@ internal object ServerBinaryInstaller {
         if (target.exists()) {
             target.delete()
         }
-        check(temp.renameTo(target)) { "Не удалось установить бинарь в ${target.absolutePath}" }
+        check(temp.renameTo(target)) { "РќРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ Р±РёРЅР°СЂСЊ РІ ${target.absolutePath}" }
         target.setExecutable(true, false)
 
         meta.parentFile?.mkdirs()
         meta.writeText(expectedMeta)
-        logger("Go-бинарь установлен для ABI: $abi")
+        logger("Go-Р±РёРЅР°СЂСЊ СѓСЃС‚Р°РЅРѕРІР»РµРЅ РґР»СЏ ABI: $abi")
         return true
     }
 
@@ -82,7 +88,7 @@ internal object ServerBinaryInstaller {
         val hasClientInApk = hasAssetFile(context, "$RUNTIME_ASSET_ROOT/client/dist/index.html")
         val hasSpecialsInApk = hasAssetFile(context, "$RUNTIME_ASSET_ROOT/scenarios/classic/SPECIAL_CONDITIONS.json")
         if (!hasDecksInApk || !hasClientInApk || !hasSpecialsInApk) {
-            logger("В APK не найдены игровые ресурсы (decks/client-dist/scenarios)")
+            logger("Р’ APK РЅРµ РЅР°Р№РґРµРЅС‹ РёРіСЂРѕРІС‹Рµ СЂРµСЃСѓСЂСЃС‹ (decks/client-dist/scenarios)")
             return false
         }
 
@@ -109,13 +115,13 @@ internal object ServerBinaryInstaller {
         val installedClient = File(runtimeRoot, "client/dist/index.html")
         val installedSpecials = File(runtimeRoot, "scenarios/classic/SPECIAL_CONDITIONS.json")
         if (!installedDecks.isDirectory || !installedClient.isFile || !installedSpecials.isFile) {
-            logger("Не удалось установить игровые ресурсы в ${runtimeRoot.absolutePath}")
+            logger("РќРµ СѓРґР°Р»РѕСЃСЊ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ РёРіСЂРѕРІС‹Рµ СЂРµСЃСѓСЂСЃС‹ РІ ${runtimeRoot.absolutePath}")
             return false
         }
 
         runtimeMeta.parentFile?.mkdirs()
         runtimeMeta.writeText(installStamp)
-        logger("Игровые ресурсы установлены: ${runtimeRoot.absolutePath}")
+        logger("РРіСЂРѕРІС‹Рµ СЂРµСЃСѓСЂСЃС‹ СѓСЃС‚Р°РЅРѕРІР»РµРЅС‹: ${runtimeRoot.absolutePath}")
         return true
     }
 
@@ -140,6 +146,11 @@ internal object ServerBinaryInstaller {
     private fun hasBundledBinary(context: Context, abi: String): Boolean {
         val files = runCatching { context.assets.list("$BIN_ASSET_ROOT/$abi") }.getOrNull() ?: return false
         return files.contains("server-go")
+    }
+
+    private fun hasNativeBundledBinary(context: Context): Boolean {
+        val nativeDir = context.applicationInfo.nativeLibraryDir ?: return false
+        return File(nativeDir, "libserver_go.so").isFile
     }
 
     private fun hasAssetDir(context: Context, path: String): Boolean {
