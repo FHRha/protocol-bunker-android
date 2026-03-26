@@ -1,4 +1,4 @@
-﻿# Protocol: Bunker Host (Android)
+# Protocol: Bunker Host (Android)
 
 Android-приложение, которое запускает локальную комнату для игры **«Протокол: Бункер»** прямо на телефоне.
 
