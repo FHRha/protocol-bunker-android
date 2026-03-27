@@ -479,7 +479,7 @@ export default function GamePage({
     ? Math.max(0, Math.ceil((activeTimer.endsAt - now) / 1000))
     : null;
 
-  const getWorldImage = (imageId?: string) => (imageId ? getCardFaceUrl(imageId) : undefined);
+  const getWorldImage = (imageId?: string) => (imageId ? getCardFaceUrl(imageId, cardLocale) : undefined);
   const finalThreatReveal = roomState?.settings.finalThreatReveal ?? "host";
   const canRevealThreats =
     wsInteractive &&
@@ -981,7 +981,7 @@ export default function GamePage({
       const firstRevealedCard = targetPlayer.categories
         .flatMap((slot) => slot.cards)
         .find((card) => Boolean(card.imgUrl));
-      const expectedUrl = getCardFaceUrl(firstRevealedCard?.imgUrl);
+      const expectedUrl = getCardFaceUrl(firstRevealedCard?.imgUrl, cardLocale);
       const images = Array.from(document.querySelectorAll<HTMLImageElement>(".selected-grid .card-tile img"));
       const hasExpected = expectedUrl ? images.some((img) => img.src.includes(expectedUrl)) : images.length > 0;
       results.push({
@@ -2398,7 +2398,7 @@ export default function GamePage({
                         if (category === "special") {
                           const special = you?.specialConditions?.[0];
                           const specialRevealed = showOwnSelectedFacesImmediately || Boolean(special?.revealedPublic);
-                          const faceUrl = specialRevealed && special?.imgUrl ? getCardFaceUrl(special.imgUrl) : undefined;
+                          const faceUrl = specialRevealed && special?.imgUrl ? getCardFaceUrl(special.imgUrl, cardLocale) : undefined;
                           const backUrl = getCardBackUrl("special", cardLocale);
                           return (
                             <CardTile
@@ -2427,7 +2427,7 @@ export default function GamePage({
                         const card = slot?.cards?.[0];
                         const handCard = card ? handByInstanceId.get(card.instanceId) : undefined;
                         const isRevealed = showOwnSelectedFacesImmediately || Boolean(card?.revealed || handCard?.revealed);
-                        const faceUrl = isRevealed ? getCardFaceUrl(handCard?.imgUrl ?? card?.imgUrl) : undefined;
+                        const faceUrl = isRevealed ? getCardFaceUrl(handCard?.imgUrl ?? card?.imgUrl, cardLocale) : undefined;
                         const backUrl = getCardBackUrl(category, cardLocale);
 
                         return (
@@ -2442,7 +2442,7 @@ export default function GamePage({
                       const slot = selectedBoardPlayer.categories.find((entry) => normalizeCategoryKey(entry.category) === category);
                       const isRevealed = Boolean(slot && slot.status === "revealed" && slot.cards.length > 0);
                       const card = slot?.cards[0];
-                      const faceUrl = isRevealed ? getCardFaceUrl(card?.imgUrl) : undefined;
+                      const faceUrl = isRevealed ? getCardFaceUrl(card?.imgUrl, cardLocale) : undefined;
                       const backUrl = getCardBackUrl(card?.backCategory ?? category, cardLocale);
 
                       if (isRevealed && !faceUrl) {

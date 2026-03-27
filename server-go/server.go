@@ -160,6 +160,21 @@ func newServer(cfg config) (*server, error) {
 	if len(assets.Decks) == 0 {
 		return nil, fmt.Errorf("assets catalog is empty in %s", cfg.AssetsRoot)
 	}
+	assetsByLocale := map[string]assetCatalog{}
+	for _, locale := range []string{"ru", "en"} {
+		localizedAssets, loadErr := loadAssetCatalogForLocale(cfg.AssetsRoot, locale)
+		if loadErr != nil {
+			log.Printf("[assets] locale=%s catalog unavailable: %v", locale, loadErr)
+			continue
+		}
+		if len(localizedAssets.Decks) == 0 {
+			continue
+		}
+		assetsByLocale[locale] = localizedAssets
+	}
+	if _, ok := assetsByLocale["ru"]; !ok {
+		assetsByLocale["ru"] = assets
+	}
 	if _, err := os.Stat(filepath.Join(cfg.ClientDistRoot, "index.html")); err != nil {
 		return nil, fmt.Errorf("client dist index not found at %s: %w", cfg.ClientDistRoot, err)
 	}
@@ -179,6 +194,7 @@ func newServer(cfg config) (*server, error) {
 		rooms:              map[string]*room{},
 		connToID:           map[*websocket.Conn]connInfo{},
 		assets:             assets,
+		assetsByLocale:     assetsByLocale,
 		specialDefinitions: specialDefinitions,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
@@ -198,12 +214,12 @@ func roomGameIsEnded(game roomGame) bool {
 	}
 }
 
-func (s *server) disasterDeckCardsLocked() []assetCard {
-	_, disasterDeck, _ := resolveWorldDeckNames(s.assets.Decks)
+func disasterDeckCardsFromCatalog(catalog assetCatalog) []assetCard {
+	_, disasterDeck, _ := resolveWorldDeckNames(catalog.Decks)
 	if disasterDeck == "" {
 		return nil
 	}
-	raw := s.assets.Decks[disasterDeck]
+	raw := catalog.Decks[disasterDeck]
 	if len(raw) == 0 {
 		return nil
 	}
@@ -215,7 +231,19 @@ func (s *server) disasterDeckCardsLocked() []assetCard {
 	return cards
 }
 
-func (s *server) isValidDisasterIDLocked(disasterID string) bool {
+func (s *server) assetCatalogForLocaleLocked(locale string) assetCatalog {
+	normalized := normalizeCardLocale(locale)
+	if localized, ok := s.assetsByLocale[normalized]; ok && len(localized.Decks) > 0 {
+		return localized
+	}
+	return s.assets
+}
+
+func (s *server) disasterDeckCardsLocked(locale string) []assetCard {
+	return disasterDeckCardsFromCatalog(s.assetCatalogForLocaleLocked(locale))
+}
+
+func (s *server) isValidDisasterIDLocked(disasterID, locale string) bool {
 	target := strings.TrimSpace(disasterID)
 	if target == "" {
 		return false
@@ -223,7 +251,7 @@ func (s *server) isValidDisasterIDLocked(disasterID string) bool {
 	if target == randomDisasterID {
 		return true
 	}
-	for _, card := range s.disasterDeckCardsLocked() {
+	for _, card := range s.disasterDeckCardsLocked(locale) {
 		if card.ID == target {
 			return true
 		}
@@ -231,8 +259,8 @@ func (s *server) isValidDisasterIDLocked(disasterID string) bool {
 	return false
 }
 
-func (s *server) buildDisasterOptionsLocked() []worldCardView {
-	cards := s.disasterDeckCardsLocked()
+func (s *server) buildDisasterOptionsLocked(locale string) []worldCardView {
+	cards := s.disasterDeckCardsLocked(locale)
 	if len(cards) == 0 {
 		return nil
 	}
@@ -249,7 +277,7 @@ func (s *server) buildDisasterOptionsLocked() []worldCardView {
 	return options
 }
 
-func (s *server) selectedDisasterCardByIDLocked(disasterID string) (assetCard, bool) {
+func (s *server) selectedDisasterCardByIDLocked(disasterID, locale string) (assetCard, bool) {
 	target := strings.TrimSpace(disasterID)
 	if target == "" {
 		return assetCard{}, false
@@ -257,7 +285,7 @@ func (s *server) selectedDisasterCardByIDLocked(disasterID string) (assetCard, b
 	if target == randomDisasterID {
 		return assetCard{}, false
 	}
-	for _, card := range s.disasterDeckCardsLocked() {
+	for _, card := range s.disasterDeckCardsLocked(locale) {
 		if card.ID == target {
 			return card, true
 		}
@@ -265,8 +293,8 @@ func (s *server) selectedDisasterCardByIDLocked(disasterID string) (assetCard, b
 	return assetCard{}, false
 }
 
-func (s *server) defaultDisasterIDLocked() string {
-	cards := s.disasterDeckCardsLocked()
+func (s *server) defaultDisasterIDLocked(locale string) string {
+	cards := s.disasterDeckCardsLocked(locale)
 	if len(cards) == 0 {
 		return "disaster_fallback"
 	}
@@ -491,7 +519,7 @@ func (s *server) normalizeSettingsLocked(settings gameSettings) gameSettings {
 	if selected == "" {
 		selected = randomDisasterID
 	}
-	if !s.isValidDisasterIDLocked(selected) {
+	if !s.isValidDisasterIDLocked(selected, settings.CardLocale) {
 		selected = randomDisasterID
 	}
 	settings.ForcedDisasterID = selected
@@ -925,8 +953,9 @@ func (s *server) handleStartGameLocked(conn *websocket.Conn) {
 		return
 	}
 	selectedDisasterID := strings.TrimSpace(room.Settings.ForcedDisasterID)
+	gameAssets := s.assetCatalogForLocaleLocked(room.Settings.CardLocale)
 	if room.Scenario.ID == scenarioClassic {
-		availableDisasters := s.disasterDeckCardsLocked()
+		availableDisasters := disasterDeckCardsFromCatalog(gameAssets)
 		if len(availableDisasters) == 0 {
 			log.Printf("[startGame] room=%s no disaster deck detected, using random fallback", room.Code)
 			selectedDisasterID = randomDisasterID
@@ -934,7 +963,7 @@ func (s *server) handleStartGameLocked(conn *websocket.Conn) {
 			if selectedDisasterID == "" {
 				selectedDisasterID = randomDisasterID
 			}
-			if !s.isValidDisasterIDLocked(selectedDisasterID) {
+			if !s.isValidDisasterIDLocked(selectedDisasterID, room.Settings.CardLocale) {
 				log.Printf("[startGame] reject room=%s reason=invalid_disaster selected=%q", room.Code, selectedDisasterID)
 				s.sendErrorDetailedLocked(conn, "Selected disaster is invalid.", "errorDisasterInvalid", nil)
 				return
@@ -959,7 +988,7 @@ func (s *server) handleStartGameLocked(conn *websocket.Conn) {
 			room.Settings,
 			room.Ruleset,
 			players,
-			s.assets,
+			gameAssets,
 			s.specialDefinitions,
 			time.Now().UnixNano(),
 		)
@@ -971,12 +1000,12 @@ func (s *server) handleStartGameLocked(conn *websocket.Conn) {
 			room.Settings,
 			room.Ruleset,
 			players,
-			s.assets,
+			gameAssets,
 			s.specialDefinitions,
 			time.Now().UnixNano(),
 		)
 	}
-	if selectedCard, ok := s.selectedDisasterCardByIDLocked(selectedDisasterID); ok {
+	if selectedCard, ok := s.selectedDisasterCardByIDLocked(selectedDisasterID, room.Settings.CardLocale); ok {
 		forceDisasterOnGame(room.Game, selectedCard)
 	}
 	room.Phase = phaseGame
@@ -1040,7 +1069,7 @@ func (s *server) handleUpdateSettingsLocked(conn *websocket.Conn, payload map[st
 	if selectedDisasterID == "" {
 		selectedDisasterID = randomDisasterID
 	}
-	if !s.isValidDisasterIDLocked(selectedDisasterID) {
+	if !s.isValidDisasterIDLocked(selectedDisasterID, next.CardLocale) {
 		s.sendErrorDetailedLocked(conn, "Selected disaster is invalid.", "errorDisasterInvalid", nil)
 		return
 	}
@@ -1069,6 +1098,7 @@ func (s *server) handleUpdateLocaleLocked(conn *websocket.Conn, payload map[stri
 	}
 
 	room.Settings.CardLocale = nextLocale
+	room.Settings = s.normalizeSettingsLocked(room.Settings)
 	s.broadcastRoomStateLocked(room)
 	if room.Phase == phaseGame && room.Game != nil {
 		s.broadcastGameViewsLocked(room)
@@ -1852,7 +1882,7 @@ func (s *server) buildRoomStateLocked(room *room) roomState {
 		Phase:               room.Phase,
 		ScenarioMeta:        room.Scenario,
 		Settings:            room.Settings,
-		DisasterOptions:     s.buildDisasterOptionsLocked(),
+		DisasterOptions:     s.buildDisasterOptionsLocked(room.Settings.CardLocale),
 		Ruleset:             room.Ruleset,
 		RulesOverriddenHost: room.RulesOverridden,
 		RulesPresetCount:    room.RulesPresetCount,

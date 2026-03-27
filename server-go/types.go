@@ -404,6 +404,7 @@ type server struct {
 	rooms              map[string]*room
 	connToID           map[*websocket.Conn]connInfo
 	assets             assetCatalog
+	assetsByLocale     map[string]assetCatalog
 	specialDefinitions []specialDefinition
 	upgrader           websocket.Upgrader
 }

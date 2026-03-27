@@ -33,13 +33,19 @@ describe("cards localization helpers", () => {
     ).toBe("Textbook");
   });
 
-  it("builds card back urls with locale fallback to ru assets", () => {
-    expect(getCardBackUrl("bunker", "en")).toContain("/assets/decks/1x/ru/Back/back.rubashka-bunker.png");
+  it("builds card back urls using requested locale assets", () => {
+    expect(getCardBackUrl("bunker", "en")).toContain("/assets/decks/1x/en/Back/back.rubashka-bunker.png");
     expect(getCardBackUrl("facts2", "ru")).toContain("/assets/decks/1x/ru/Back/back.rubashka-fakty.png");
   });
 
   it("normalizes card face urls to requested locale path", () => {
     expect(getCardFaceUrl("decks/1x/ru/Bunker/bunker.grechka.png", "en")).toContain(
+      "/assets/decks/1x/en/Bunker/bunker.grechka.png"
+    );
+    expect(getCardFaceUrl("decks/1x/ru/Bunker/bunker.grechka.png", "de")).toContain(
+      "/assets/decks/1x/de/Bunker/bunker.grechka.png"
+    );
+    expect(getCardFaceUrl("decks/1x/ru/Bunker/bunker.grechka.png")).toContain(
       "/assets/decks/1x/ru/Bunker/bunker.grechka.png"
     );
     expect(resolveAssetIdFromImageUrl("/assets/decks/1x/ru/Bunker/bunker.grechka.png")).toBe(

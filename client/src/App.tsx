@@ -233,6 +233,10 @@ export default function App() {
       statusOffline: getString("statusOffline"),
       statusReconnectHint: getString("statusReconnectHint"),
       statusOfflineHint: getString("statusOfflineHint"),
+      errorScreenExitToMenu: getString("errorScreenExitToMenu"),
+      routeIssueTitle: getString("routeIssueTitle"),
+      routeIssueRoomMessage: getString("routeIssueRoomMessage"),
+      routeIssueNotFoundMessage: getString("routeIssueNotFoundMessage"),
       devSkipRoundButton: getString("devSkipRoundButton"),
       errorReconnectNetwork: getString("errorReconnectNetwork"),
       errorReconnectFailed: getString("errorReconnectFailed"),
@@ -1457,12 +1461,38 @@ export default function App() {
   const roomCodeLabel = roomState
     ? appLocale.roomPill(roomCodeHidden ? appLocale.hiddenValue : roomState.roomCode)
     : "";
+  const roomCodeFromUrl = new URLSearchParams(location.search).get("room")?.trim().toUpperCase() ?? "";
+  const storedPlayerName =
+    typeof window !== "undefined" ? (localStorage.getItem("bunker.playerName") ?? "").trim() : "";
+  const isExactLobbyRoute = location.pathname === "/lobby";
+  const isExactGameRoute = location.pathname === "/game";
+  const hasReconnectContext =
+    Boolean(roomState) ||
+    Boolean(playerId) ||
+    Boolean(intentRef.current) ||
+    (Boolean(roomCodeFromUrl) && Boolean(storedPlayerName));
   const showErrorScreen = Boolean(fatalErrorMessage && (isLobbyRoute || isGameRoute));
+  const showRoomRouteIssue =
+    (isExactLobbyRoute || isExactGameRoute) && !showErrorScreen && !hasReconnectContext;
   const exitToMenu = () => {
     clearAppErrors();
     hardResetSession();
     navigate("/");
   };
+  const renderRouteIssueScreen = (message: string) => (
+    <section className="panel game-loading forbiddenStatePanel">
+      <div className="forbiddenStateCard" role="alert">
+        <div className="forbiddenStateEyebrow">{appNs.t("appTitle")}</div>
+        <h3 className="forbiddenStateTitle">{appLocale.routeIssueTitle}</h3>
+        <p className="forbiddenStateMessage">{message}</p>
+        <div className="forbiddenStateActions">
+          <button type="button" className="forbiddenStateButton" onClick={exitToMenu}>
+            {appLocale.errorScreenExitToMenu}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
 
   return (
     <ErrorBoundary onReset={() => hardResetSession({ clearLastRoom: true })}>
@@ -1866,46 +1896,55 @@ export default function App() {
             <Route
               path="/lobby"
               element={
-                <LobbyPage
-                  roomState={roomState}
-                  playerId={playerId}
-                  isControl={Boolean(isControl)}
-                  showHints={showHints}
-                  wsInteractive={wsInteractive}
-                  onStart={handleStart}
-                  onUpdateSettings={handleUpdateSettings}
-                  onUpdateRules={handleUpdateRules}
-                  onKickPlayer={handleKickFromLobby}
-                  onTransferHost={handleRequestHostTransfer}
-                />
+                showRoomRouteIssue ? (
+                  renderRouteIssueScreen(appLocale.routeIssueRoomMessage)
+                ) : (
+                  <LobbyPage
+                    roomState={roomState}
+                    playerId={playerId}
+                    isControl={Boolean(isControl)}
+                    showHints={showHints}
+                    wsInteractive={wsInteractive}
+                    onStart={handleStart}
+                    onUpdateSettings={handleUpdateSettings}
+                    onUpdateRules={handleUpdateRules}
+                    onKickPlayer={handleKickFromLobby}
+                    onTransferHost={handleRequestHostTransfer}
+                  />
+                )
               }
             />
             <Route
               path="/game"
               element={
-                <GamePage
-                  roomState={roomState}
-                  gameView={gameView}
-                    isControl={Boolean(isControl)}
-                    showHints={showHints}
-                    wsInteractive={wsInteractive}
-                    eventLog={eventLog}
-                  onRevealCard={handleRevealCard}
-                  onVote={handleVote}
-                  onApplySpecial={handleApplySpecial}
-                  onFinalizeVoting={handleFinalizeVoting}
-                  onContinueRound={handleContinueRound}
-                  onRevealWorldThreat={handleRevealWorldThreat}
-                  onSetBunkerOutcome={handleSetBunkerOutcome}
-                  onDevAddPlayer={handleDevAddPlayer}
-                  onDevRemovePlayer={handleDevRemovePlayer}
-                  onExitGame={handleExitGame}
-                  mobileDossierError={mobileDossierError}
-                  onMarkDossierSpecialAction={markDossierSpecialAction}
-                  onClearMobileDossierError={clearMobileDossierError}
-                />
+                showRoomRouteIssue ? (
+                  renderRouteIssueScreen(appLocale.routeIssueRoomMessage)
+                ) : (
+                  <GamePage
+                    roomState={roomState}
+                    gameView={gameView}
+                      isControl={Boolean(isControl)}
+                      showHints={showHints}
+                      wsInteractive={wsInteractive}
+                      eventLog={eventLog}
+                    onRevealCard={handleRevealCard}
+                    onVote={handleVote}
+                    onApplySpecial={handleApplySpecial}
+                    onFinalizeVoting={handleFinalizeVoting}
+                    onContinueRound={handleContinueRound}
+                    onRevealWorldThreat={handleRevealWorldThreat}
+                    onSetBunkerOutcome={handleSetBunkerOutcome}
+                    onDevAddPlayer={handleDevAddPlayer}
+                    onDevRemovePlayer={handleDevRemovePlayer}
+                    onExitGame={handleExitGame}
+                    mobileDossierError={mobileDossierError}
+                    onMarkDossierSpecialAction={markDossierSpecialAction}
+                    onClearMobileDossierError={clearMobileDossierError}
+                  />
+                )
               }
             />
+            <Route path="*" element={renderRouteIssueScreen(appLocale.routeIssueNotFoundMessage)} />
           </Routes>
         </AnimatedRouteContainer>
       </main>

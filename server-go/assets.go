@@ -18,6 +18,10 @@ var cardFileExts = map[string]struct{}{
 }
 
 func loadAssetCatalog(assetsRoot string) (assetCatalog, error) {
+	return loadAssetCatalogForLocale(assetsRoot, "")
+}
+
+func loadAssetCatalogForLocale(assetsRoot, preferredLocale string) (assetCatalog, error) {
 	decksRoot := filepath.Join(assetsRoot, "decks")
 	info, err := os.Stat(decksRoot)
 	if err != nil {
@@ -28,7 +32,7 @@ func loadAssetCatalog(assetsRoot string) (assetCatalog, error) {
 	}
 
 	catalog := assetCatalog{Decks: map[string][]assetCard{}}
-	deckDirs, err := resolveDeckDirectories(decksRoot)
+	deckDirs, err := resolveDeckDirectories(decksRoot, preferredLocale)
 	if err != nil {
 		return assetCatalog{}, err
 	}
@@ -75,22 +79,46 @@ type assetDeckDir struct {
 	relativeRoot string
 }
 
-func resolveDeckDirectories(decksRoot string) ([]assetDeckDir, error) {
+func resolveDeckDirectories(decksRoot, preferredLocale string) ([]assetDeckDir, error) {
 	layout1xRoot := filepath.Join(decksRoot, "1x")
 	if info, err := os.Stat(layout1xRoot); err == nil && info.IsDir() {
-		return resolveNestedDeckDirectories(decksRoot, layout1xRoot)
+		return resolveNestedDeckDirectories(decksRoot, layout1xRoot, preferredLocale)
 	}
 	return resolveFlatDeckDirectories(decksRoot)
 }
 
-func resolveNestedDeckDirectories(decksRoot, layoutRoot string) ([]assetDeckDir, error) {
+func localePreferenceOrder(preferredLocale string) []string {
+	order := make([]string, 0, 3)
+	appendUnique := func(value string) {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized == "" {
+			return
+		}
+		for _, existing := range order {
+			if existing == normalized {
+				return
+			}
+		}
+		order = append(order, normalized)
+	}
+
+	appendUnique(preferredLocale)
+	appendUnique("ru")
+	appendUnique("en")
+	return order
+}
+
+func resolveNestedDeckDirectories(decksRoot, layoutRoot, preferredLocale string) ([]assetDeckDir, error) {
 	localeEntries, err := os.ReadDir(layoutRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed reading nested decks layout: %w", err)
 	}
+	sort.Slice(localeEntries, func(i, j int) bool {
+		return strings.ToLower(localeEntries[i].Name()) < strings.ToLower(localeEntries[j].Name())
+	})
 
 	localeName := ""
-	for _, preferred := range []string{"ru", "en"} {
+	for _, preferred := range localePreferenceOrder(preferredLocale) {
 		for _, entry := range localeEntries {
 			if entry.IsDir() && strings.EqualFold(entry.Name(), preferred) {
 				localeName = entry.Name()

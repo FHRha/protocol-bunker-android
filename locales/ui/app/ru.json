@@ -1,5 +1,9 @@
 {
   "appTitle": "Протокол: Бункер",
   "appSubtitle": "",
-  "notificationTitle": "Уведомление"
+  "notificationTitle": "Уведомление",
+  "errorScreenExitToMenu": "Выйти в меню",
+  "routeIssueTitle": "Не удалось открыть страницу",
+  "routeIssueRoomMessage": "Для входа по ссылке в лобби укажите имя игрока на главной странице, затем попробуйте снова.",
+  "routeIssueNotFoundMessage": "Такой страницы нет. Вернитесь в меню и откройте корректную ссылку."
 }

@@ -11,18 +11,17 @@ const imageCache = new Set<string>();
 const CARD_ASSET_VARIANT = "1x";
 const CARD_BACK_DECK_DIR = "Back";
 
-type CardLocale = "ru" | "en";
+type CardLocale = string;
+type DictionaryLocale = "ru" | "en";
 type CardLocaleDictionary = {
   decks?: Record<string, string>;
   cards?: Record<string, string>;
 };
 
-const CARD_LOCALE_DICTIONARIES: Record<CardLocale, CardLocaleDictionary> = {
+const CARD_LOCALE_DICTIONARIES: Record<DictionaryLocale, CardLocaleDictionary> = {
   ru: ruCardsLocale as CardLocaleDictionary,
   en: enCardsLocale as CardLocaleDictionary,
 };
-
-const CARD_ASSET_LOCALES: ReadonlySet<CardLocale> = new Set<CardLocale>(["ru"]);
 
 
 
@@ -33,7 +32,7 @@ type SpecialConditionLocaleEntry = {
 };
 type SpecialConditionLocaleDictionary = Record<string, SpecialConditionLocaleEntry>;
 
-const SPECIAL_CONDITION_DICTIONARIES: Record<ScenarioId, Record<CardLocale, SpecialConditionLocaleDictionary>> = {
+const SPECIAL_CONDITION_DICTIONARIES: Record<ScenarioId, Record<DictionaryLocale, SpecialConditionLocaleDictionary>> = {
   classic: {
     ru: classicRuSpecialLocale as SpecialConditionLocaleDictionary,
     en: classicEnSpecialLocale as SpecialConditionLocaleDictionary,
@@ -117,7 +116,7 @@ const getSpecialConditionEntry = (
   source: { imgUrl?: string; id?: string; labelShort?: string; title?: string }
 ): SpecialConditionLocaleEntry | undefined => {
   const normalizedScenario = normalizeScenarioId(scenarioId);
-  const locale = normalizeCardLocale(requestedLocale);
+  const locale = normalizeDictionaryLocale(requestedLocale);
   const dictionary = SPECIAL_CONDITION_DICTIONARIES[normalizedScenario][locale];
   const fallbackDictionary = SPECIAL_CONDITION_DICTIONARIES[normalizedScenario].ru;
 
@@ -157,11 +156,13 @@ const DECK_FOLDER_ALIASES: Record<string, string> = {
   Threat: "threat",
 };
 
-const normalizeCardLocale = (value?: string): CardLocale => (value === "en" ? "en" : "ru");
+const normalizeDictionaryLocale = (value?: string): DictionaryLocale => (value === "en" ? "en" : "ru");
 
-const resolveAssetLocale = (requestedLocale?: string): CardLocale => {
-  const normalized = normalizeCardLocale(requestedLocale);
-  return CARD_ASSET_LOCALES.has(normalized) ? normalized : "ru";
+const resolveAssetLocale = (requestedLocale?: string): string => {
+  const normalized = String(requestedLocale ?? "").trim().toLowerCase();
+  if (!normalized) return "ru";
+  const safe = normalized.replace(/[^a-z0-9_-]+/g, "");
+  return safe || "ru";
 };
 
 const stripQueryAndHash = (value: string): string => value.replace(/[?#].*$/, "");
@@ -191,6 +192,9 @@ const withLocalizedAssetPath = (relativeAssetPath: string, requestedLocale?: str
   const cleaned = sanitizeAssetPath(relativeAssetPath) ?? relativeAssetPath;
   const segments = cleaned.split("/").filter(Boolean);
   if (segments.length >= 4 && segments[0] === "decks" && (segments[1] === "1x" || segments[1] === "2x")) {
+    if (typeof requestedLocale !== "string" || !requestedLocale.trim()) {
+      return cleaned;
+    }
     const localizedSegments = [...segments];
     localizedSegments[2] = resolveAssetLocale(requestedLocale);
     return localizedSegments.join("/");
@@ -235,7 +239,7 @@ const normalizeDeckId = (value?: string): string | undefined => {
 };
 
 const getCardDictionary = (requestedLocale?: string): CardLocaleDictionary => {
-  const locale = normalizeCardLocale(requestedLocale);
+  const locale = normalizeDictionaryLocale(requestedLocale);
   return CARD_LOCALE_DICTIONARIES[locale];
 };
 
@@ -268,7 +272,7 @@ export const getCardBackUrl = (category: string, cardLocale: CardLocale = "ru"):
 };
 
 export const localizeCardLabel = (card: CardLabelSource, requestedLocale?: CardLocale): string => {
-  const locale = normalizeCardLocale(requestedLocale);
+  const locale = normalizeDictionaryLocale(requestedLocale);
   const localeDictionary = getCardDictionary(locale);
   const fallbackDictionary = getCardDictionary("ru");
 
