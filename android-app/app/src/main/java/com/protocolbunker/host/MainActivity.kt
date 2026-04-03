@@ -206,7 +206,7 @@ class MainActivity : AppCompatActivity() {
 
         if (!state.running) {
             val port = prefs.port().takeIf { it in 1..65535 } ?: AppPreferences.DEFAULT_PORT
-            val lanPreview = "http://${NetworkUtils.findLanIpv4() ?: "127.0.0.1"}:$port"
+            val lanPreview = "http://${NetworkUtils.findLanIpv4(this) ?: "127.0.0.1"}:$port"
             lanUrlText.text = lanPreview
         }
     }
@@ -219,7 +219,7 @@ class MainActivity : AppCompatActivity() {
         val state = ServerRuntime.state.value
         if (state.running) return state.lanUrl
         val port = prefs.port().takeIf { it in 1..65535 } ?: AppPreferences.DEFAULT_PORT
-        return "http://${NetworkUtils.findLanIpv4() ?: "127.0.0.1"}:$port"
+        return "http://${NetworkUtils.findLanIpv4(this) ?: "127.0.0.1"}:$port"
     }
 
     private fun showContextMenu(anchor: View) {

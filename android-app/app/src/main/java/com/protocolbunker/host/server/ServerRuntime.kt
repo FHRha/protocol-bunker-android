@@ -36,8 +36,10 @@ object ServerRuntime {
 
     private var activeBackend: ServerBackend? = null
     private var startInProgress: Boolean = false
+    private var appContext: Context? = null
 
     fun start(context: Context, port: Int, devMode: Boolean) {
+        appContext = context.applicationContext
         scope.launch {
             mutex.withLock {
                 if (_state.value.running || startInProgress) {
@@ -198,7 +200,7 @@ object ServerRuntime {
     }
 
     private fun buildLanUrl(port: Int): String {
-        val ip = NetworkUtils.findLanIpv4() ?: "127.0.0.1"
+        val ip = NetworkUtils.findLanIpv4(appContext) ?: "127.0.0.1"
         return "http://$ip:$port"
     }
 
