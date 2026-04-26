@@ -1,4 +1,5 @@
 export * from "./targeting.js";
+export * from "./targetingLocale.js";
 export * from "./contracts/primitives.js";
 export * from "./contracts/state.js";
 export * from "./contracts/scenario.js";

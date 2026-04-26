@@ -247,7 +247,19 @@ const resolveChoiceKind = (definition: SpecialConditionDefinition): SpecialChoic
 const resolveTargetScope = (definition: SpecialConditionDefinition): SpecialTargetScope | null => {
   const choiceKind = resolveChoiceKindFromTargeting(definition);
   if (choiceKind === "category" || choiceKind === "special" || choiceKind === "bunker") return null;
-  return computeTargetScope(definition.uiTargeting, definition.text);
+  switch (definition.effect.type) {
+    case "banVoteAgainst":
+    case "disableVote":
+    case "doubleVotesAgainst_and_disableSelfVote":
+    case "replaceRevealedCard":
+    case "discardRevealedAndDealHidden":
+    case "stealBaggage_and_giveSpecial":
+      return "any_alive";
+    case "swapRevealedWithNeighbor":
+      return "neighbors";
+    default:
+      return computeTargetScope(definition.uiTargeting, definition.text);
+  }
 };
 
 const allowsSelfTarget = (definition: SpecialConditionDefinition): boolean => {

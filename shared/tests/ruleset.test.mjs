@@ -22,5 +22,5 @@ test("getRulesetForPlayerCount clamps and returns cloned preset data", () => {
 test("formatLabelShort normalizes file-like labels", () => {
   assert.equal(formatLabelShort("bunker.grechka.png"), "Bunker.grechka");
   assert.equal(formatLabelShort("  VERY_LONG_LABEL  "), "Very Long Label");
-  assert.equal(formatLabelShort(""), "(без названия)");
+  assert.equal(formatLabelShort(""), "(untitled)");
 });
