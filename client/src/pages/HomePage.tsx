@@ -16,7 +16,6 @@ interface HomePageProps {
   onCreate: (name: string, scenarioId: string) => void;
   onJoin: (name: string, roomCode: string) => void;
   devBadgeActive?: boolean;
-  pending?: boolean;
 }
 
 const SCENARIO_DESCRIPTIONS = {
@@ -32,20 +31,28 @@ const SCENARIO_DESCRIPTIONS = {
 
 const SCENARIO_NAMES = {
   ru: {
-    classic: classicScenarioRu["meta.name"] ?? "classic",
-    dev_test: devTestScenarioRu["meta.name"] ?? "dev_test",
+    classic: classicScenarioRu["meta.name"] ?? "Классический бункер",
+    dev_test: devTestScenarioRu["meta.name"] ?? "Dev test scenario",
   },
   en: {
-    classic: classicScenarioEn["meta.name"] ?? "classic",
-    dev_test: devTestScenarioEn["meta.name"] ?? "dev_test",
+    classic: classicScenarioEn["meta.name"] ?? "Classic Bunker",
+    dev_test: devTestScenarioEn["meta.name"] ?? "Dev Test Scenario",
   },
 } as const;
 
-function getScenarioName(locale: "ru" | "en", scenarioId: string, fallback?: string): string {
+function getScenarioName(
+  locale: "ru" | "en",
+  scenarioId: string,
+  fallback?: string,
+): string {
   return SCENARIO_NAMES[locale][scenarioId as "classic" | "dev_test"] ?? fallback ?? scenarioId;
 }
 
-function getScenarioDescription(locale: "ru" | "en", scenarioId: string, fallback?: string): string {
+function getScenarioDescription(
+  locale: "ru" | "en",
+  scenarioId: string,
+  fallback?: string,
+): string {
   return SCENARIO_DESCRIPTIONS[locale][scenarioId as "classic" | "dev_test"] ?? fallback ?? "";
 }
 
@@ -55,7 +62,6 @@ export default function HomePage({
   onCreate,
   onJoin,
   devBadgeActive,
-  pending = false,
 }: HomePageProps) {
   const [name, setName] = useState(() => localStorage.getItem("bunker.playerName") ?? "");
   const [roomCode, setRoomCode] = useState("");
@@ -67,12 +73,7 @@ export default function HomePage({
   });
 
   useEffect(() => {
-    if (scenarios.length === 0) {
-      if (scenarioId) setScenarioId("");
-      return;
-    }
-    const stillAvailable = scenarios.some((scenario) => scenario.id === scenarioId);
-    if (!stillAvailable) {
+    if (!scenarioId && scenarios.length > 0) {
       setScenarioId(scenarios[0].id);
     }
   }, [scenarioId, scenarios]);
@@ -128,16 +129,12 @@ export default function HomePage({
                     />
                     <span>
                       <strong>{getScenarioName(homeText.locale, scenario.id, scenario.name)}</strong>
-                      <span className="muted">
-                        {(() => {
-                          const description = getScenarioDescription(
-                            homeText.locale,
-                            scenario.id,
-                            scenario.description
-                          );
-                          return description ? ` ${description}` : "";
-                        })()}
-                      </span>
+					  <span className="muted">
+						{(() => {
+						  const description = getScenarioDescription(homeText.locale, scenario.id, scenario.description);
+						  return description ? ` ${description}` : "";
+						})()}
+					  </span>
                     </span>
                   </label>
                 ))}
@@ -145,7 +142,7 @@ export default function HomePage({
             )}
             <button
               className="primary"
-              disabled={!hasName || !scenarioId || pending}
+              disabled={!hasName || !scenarioId}
               onClick={() => onCreate(name.trim(), scenarioId)}
             >
               {homeText.t("createButton")}
@@ -164,12 +161,14 @@ export default function HomePage({
             />
             <button
               className="primary"
-              disabled={!hasName || normalizedRoomCode.length === 0 || pending}
+              disabled={!hasName || normalizedRoomCode.length === 0}
               onClick={() => onJoin(name.trim(), normalizedRoomCode)}
             >
               {homeText.t("joinButton")}
             </button>
-            <div className="muted">{showDevBadge ? homeText.t("devHint") : homeText.t("prodHint")}</div>
+            <div className="muted">
+              {showDevBadge ? homeText.t("devHint") : homeText.t("prodHint")}
+            </div>
           </div>
         </section>
       </div>

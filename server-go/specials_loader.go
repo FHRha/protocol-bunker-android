@@ -53,6 +53,12 @@ func loadSpecialConditionLocaleData(scenarioID string) map[string]map[string]spe
 				if _, exists := dict[key]; !exists {
 					dict[key] = value
 				}
+				normalizedKey := normalizeSpecialConditionLocaleKey(key)
+				if normalizedKey != "" {
+					if _, exists := dict[normalizedKey]; !exists {
+						dict[normalizedKey] = value
+					}
+				}
 			}
 			break
 		}

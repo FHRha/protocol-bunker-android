@@ -317,6 +317,7 @@ func (g *gameSession) currentThreatModifier() threatModifierView {
 	baseCount := g.World.Counts.Threats
 	delta := 0
 	reasons := make([]string, 0, 2)
+	reasonCardIDs := make([]string, 0, 2)
 
 	for _, card := range g.World.Bunker {
 		if !card.IsRevealed {
@@ -329,6 +330,7 @@ func (g *gameSession) currentThreatModifier() threatModifierView {
 		delta += modifier
 		reasonTitle := sanitizeHumanText(card.Title, "Карта бункера")
 		reasons = append(reasons, reasonTitle)
+		reasonCardIDs = append(reasonCardIDs, strings.TrimSpace(card.ID))
 	}
 
 	finalCount := baseCount + delta
@@ -339,10 +341,11 @@ func (g *gameSession) currentThreatModifier() threatModifierView {
 		finalCount = len(g.World.Threats)
 	}
 	return threatModifierView{
-		Delta:      delta,
-		Reasons:    reasons,
-		BaseCount:  baseCount,
-		FinalCount: finalCount,
+		Delta:         delta,
+		Reasons:       reasons,
+		ReasonCardIDs: reasonCardIDs,
+		BaseCount:     baseCount,
+		FinalCount:    finalCount,
 	}
 }
 

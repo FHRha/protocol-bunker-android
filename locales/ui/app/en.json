@@ -1,9 +1,5 @@
 {
   "appTitle": "Protocol: Bunker",
   "appSubtitle": "App Subtitle",
-  "notificationTitle": "Notification",
-  "errorScreenExitToMenu": "Exit to menu",
-  "routeIssueTitle": "Unable to open this page",
-  "routeIssueRoomMessage": "To join a lobby from a link, set your player name on the home screen first, then try again.",
-  "routeIssueNotFoundMessage": "This page does not exist. Return to the menu and open a valid link."
+  "notificationTitle": "Notification"
 }

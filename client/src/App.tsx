@@ -4,161 +4,76 @@ import type {
   GameEvent,
   GameSettings,
   GameView,
-  ManualRulesConfig,
   RoomState,
   ScenarioMeta,
 } from "@bunker/shared";
 import { BunkerClient, type ConnectionStatus } from "./wsClient";
 import { API_BASE, DEV_TAB_IDENTITY, IDENTITY_MODE, WS_URL } from "./config";
-import { initTabIdentity, tokenKey } from "./storage";
+import { clearPlayerToken, initTabIdentity, writePlayerToken } from "./storage";
 import {
   getCurrentLocale,
-  setCurrentLocale,
   type LocaleCode,
   useUiLocaleNamespace,
 } from "./localization";
-import { resolveScenarioText } from "./localization/scenarioText";
-import Modal from "./components/Modal";
+import { getOrCreateSessionId } from "./session/storage";
+import type { RulesUpdatePayload, SessionIntent } from "./session/types";
+import { createSessionActions } from "./session/actions";
+import {
+  beginCreateSession,
+  beginJoinSession,
+  buildStoredReconnectIntent,
+  sendHelloWithIntent as sendSessionHelloWithIntent,
+  sendResume as sendSessionResume,
+} from "./session/connectionFlow";
+import { getRoomRouteTarget, hasRouteReconnectContext } from "./session/routing";
+import { handleConnectionStatus, handleServerMessage } from "./session/wsMessageHandlers";
 import EyeIcon from "./components/EyeIcon";
 import AnimatedRouteContainer from "./components/AnimatedRouteContainer";
 import ErrorBoundary from "./components/ErrorBoundary";
 import ErrorScreen from "./components/ErrorScreen";
+import RouteIssuePanel from "./components/RouteIssuePanel";
 import HomePage from "./pages/HomePage";
 import LobbyPage from "./pages/LobbyPage";
 import GamePage from "./pages/GamePage";
 import { useUiLocaleNamespacesActivation } from "./localization/useUiLocaleNamespacesActivation";
-
-const THEME_STORAGE_KEY = "bunker.theme";
-const SHOW_ROOM_CODE_KEY = "bunker.showRoomCode";
-const TOAST_POSITION_KEY = "bunker.toastPosition";
-const UI_SCALE_KEY = "bunker.uiScale";
-const REDUCE_MOTION_KEY = "bunker.reduceMotion";
-const CONFIRM_DANGEROUS_KEY = "bunker.confirmDangerousActions";
-const CONFIRM_EXIT_KEY = "bunker.confirmExitGame";
-const COMPACT_MODE_KEY = "bunker.compactMode";
-const AUTO_COPY_ROOM_CODE_KEY = "bunker.autoCopyRoomCode";
-const SHOW_HINTS_KEY = "bunker.showHints";
-const TOAST_DURATION_KEY = "bunker.toastDurationMs";
+import { useAppUiSideEffects } from "./hooks/useAppUiSideEffects";
+import { useViewportFlags } from "./hooks/useViewportFlags";
+import { usePopoverDismissal } from "./hooks/usePopoverDismissal";
+import {
+  AppModalLayer,
+} from "./app/AppModalLayer";
+import { AppSettingsPopover } from "./app/AppSettingsPopover";
+import { AppThemePopover } from "./app/AppThemePopover";
+import {
+  buildConnectionDisplay,
+  buildRoleLabel,
+  buildRoomCodeDisplay,
+  buildToastViews,
+  getDevKickCandidates,
+  getTransferHostCandidates,
+  type UiToast,
+} from "./app/derivedUi";
+import {
+  getInitialAutoCopyRoomCode,
+  getInitialCompactMode,
+  getInitialConfirmDangerousActions,
+  getInitialConfirmExitGame,
+  getInitialReduceMotion,
+  getInitialShowHints,
+  getInitialShowRoomCode,
+  getInitialStreamerMode,
+  getInitialTheme,
+  getInitialToastDuration,
+  getInitialToastPosition,
+  getInitialUiScale,
+  type ThemeMode,
+  type ToastDuration,
+  type ToastPosition,
+  type UiScale,
+  UI_STORAGE_KEYS,
+} from "./app/uiPreferences";
 const MAX_EVENTS = 20;
 const SNAPSHOT_TIMEOUT_MS = 8000;
-const SESSION_ID_KEY = "bunker.sessionId";
-
-type ThemeMode =
-  | "dark-mint"
-  | "light-paper"
-  | "cyber-amber"
-  | "steel-blue"
-  | "crimson-night";
-type ToastPosition = "top-right" | "top-left" | "bottom-right" | "bottom-left";
-type UiScale = "90" | "100" | "110";
-type ToastDuration = "3000" | "4000" | "6000";
-type UiToast = { id: string; message: string; variant: "danger" | "success" | "info" };
-type RulesUpdatePayload = {
-  mode: "auto" | "manual";
-  presetPlayerCount?: number;
-  manualConfig?: ManualRulesConfig;
-};
-
-type SessionIntent =
-  | { mode: "create"; name: string; scenarioId: string; locale: LocaleCode; tabId?: string }
-  | { mode: "join"; name: string; roomCode: string; playerToken?: string; tabId?: string }
-  | { mode: "reconnect"; name: string; roomCode: string; playerToken?: string; tabId?: string };
-
-
-function getInitialTheme(): ThemeMode {
-  if (typeof window === "undefined") return "dark-mint";
-  const stored = localStorage.getItem(THEME_STORAGE_KEY);
-  if (
-    stored === "dark-mint" ||
-    stored === "light-paper" ||
-    stored === "cyber-amber" ||
-    stored === "steel-blue" ||
-    stored === "crimson-night"
-  ) {
-    return stored;
-  }
-  if (stored === "dark") return "dark-mint";
-  if (stored === "light") return "light-paper";
-  return "dark-mint";
-}
-
-
-function getInitialShowRoomCode(): boolean {
-  if (typeof window === "undefined") return false;
-  const stored = localStorage.getItem(SHOW_ROOM_CODE_KEY);
-  if (stored === "1") return true;
-  if (stored === "0") return false;
-  return false;
-}
-
-function getInitialToastPosition(): ToastPosition {
-  if (typeof window === "undefined") return "top-right";
-  const stored = localStorage.getItem(TOAST_POSITION_KEY);
-  if (
-    stored === "top-right" ||
-    stored === "top-left" ||
-    stored === "bottom-right" ||
-    stored === "bottom-left"
-  ) {
-    return stored;
-  }
-  return "top-right";
-}
-
-function getInitialUiScale(): UiScale {
-  if (typeof window === "undefined") return "100";
-  const stored = localStorage.getItem(UI_SCALE_KEY);
-  if (stored === "90" || stored === "100" || stored === "110") {
-    return stored;
-  }
-  return "100";
-}
-
-function getInitialReduceMotion(): boolean {
-  if (typeof window === "undefined") return false;
-  return localStorage.getItem(REDUCE_MOTION_KEY) === "1";
-}
-
-function getInitialConfirmDangerousActions(): boolean {
-  if (typeof window === "undefined") return true;
-  const stored = localStorage.getItem(CONFIRM_DANGEROUS_KEY);
-  if (stored === "0") return false;
-  return true;
-}
-
-function getInitialConfirmExitGame(): boolean {
-  if (typeof window === "undefined") return true;
-  const stored = localStorage.getItem(CONFIRM_EXIT_KEY);
-  if (stored === "0") return false;
-  return true;
-}
-
-function getInitialToastDuration(): ToastDuration {
-  if (typeof window === "undefined") return "4000";
-  const stored = localStorage.getItem(TOAST_DURATION_KEY);
-  if (stored === "3000" || stored === "4000" || stored === "6000") return stored;
-  return "4000";
-}
-
-function getInitialCompactMode(): boolean {
-  if (typeof window === "undefined") return true;
-  const stored = localStorage.getItem(COMPACT_MODE_KEY);
-  if (stored === "0") return false;
-  if (stored === "1") return true;
-  return true;
-}
-
-function getInitialAutoCopyRoomCode(): boolean {
-  if (typeof window === "undefined") return false;
-  return localStorage.getItem(AUTO_COPY_ROOM_CODE_KEY) === "1";
-}
-
-function getInitialShowHints(): boolean {
-  if (typeof window === "undefined") return true;
-  const stored = localStorage.getItem(SHOW_HINTS_KEY);
-  if (stored === "0") return false;
-  return true;
-}
 
 function fallbackCopy(value: string): boolean {
   if (typeof document === "undefined") return false;
@@ -185,26 +100,12 @@ function isSuspiciousLabel(value: string): boolean {
   const normalized = value.trim();
   if (!normalized) return true;
   if (/[\u0000-\u001f\u007f]/.test(normalized)) return true;
-  if (normalized.includes("\ufffd")) return true;
-  if (/(?:\u00d0|\u00d1|\u00c3|\u00c2){2,}/.test(normalized)) return true;
-  const mojibakeChunks = normalized.match(/[\u0420\u0421][\u0400-\u04ff]/g);
+  const mojibakeChunks = normalized.match(/[Р РЎ][\u0400-\u04ff]/g);
   return Boolean(mojibakeChunks && mojibakeChunks.length >= 2);
 }
 
 function safeLabel(value: string, fallback: string): string {
   return isSuspiciousLabel(value) ? fallback : value;
-}
-
-function getOrCreateSessionId(useSessionStorage: boolean): string {
-  const storage = useSessionStorage ? window.sessionStorage : window.localStorage;
-  const existing = storage.getItem(SESSION_ID_KEY);
-  if (existing) return existing;
-  const generated =
-    typeof window.crypto?.randomUUID === "function"
-      ? window.crypto.randomUUID()
-      : `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  storage.setItem(SESSION_ID_KEY, generated);
-  return generated;
 }
 
 export default function App() {
@@ -255,6 +156,7 @@ export default function App() {
       exitButton: getString("exitButton"),
       settingsTitle: getString("settingsTitle"),
       settingsGameSectionTitle: getString("settingsGameSectionTitle"),
+      streamerModeLabel: getString("streamerModeLabel"),
       settingsShowRoomCodeInLobby: getString("settingsShowRoomCodeInLobby"),
       settingsToastPosition: getString("settingsToastPosition"),
       toastPosTopRight: getString("toastPosTopRight"),
@@ -320,6 +222,7 @@ export default function App() {
   const [scenarios, setScenarios] = useState<ScenarioMeta[]>([]);
   const [scenariosLoading, setScenariosLoading] = useState(true);
   const [theme, setTheme] = useState<ThemeMode>(() => getInitialTheme());
+  const [streamerMode, setStreamerMode] = useState<boolean>(() => getInitialStreamerMode());
   const [showRoomCode, setShowRoomCode] = useState<boolean>(() => getInitialShowRoomCode());
   const [toastPosition, setToastPosition] = useState<ToastPosition>(() => getInitialToastPosition());
   const [uiScale, setUiScale] = useState<UiScale>(() => getInitialUiScale());
@@ -352,12 +255,7 @@ export default function App() {
   const [transferHostTargetId, setTransferHostTargetId] = useState("");
   const [transferHostAgree, setTransferHostAgree] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [isMobile, setIsMobile] = useState(
-    typeof window !== "undefined" ? window.matchMedia("(max-width: 1250px)").matches : false
-  );
-  const [isMobileNarrow, setIsMobileNarrow] = useState(
-    typeof window !== "undefined" ? window.matchMedia("(max-width: 600px)").matches : false
-  );
+  const { isMobile, isMobileNarrow } = useViewportFlags();
   const [mobileDossierError, setMobileDossierError] = useState<string | null>(null);
   const THEME_OPTIONS: Array<{ id: ThemeMode; label: string }> = useMemo(
     () => [
@@ -376,6 +274,8 @@ export default function App() {
   const awaitingGameViewRef = useRef(false);
   const roomStateRef = useRef<RoomState | null>(null);
   const gameViewRef = useRef<GameView | null>(null);
+  const roomStateRevisionRef = useRef(0);
+  const gameViewRevisionRef = useRef(0);
   const sessionIdRef = useRef<string | null>(null);
   const lastHelloAtRef = useRef<number | null>(null);
   const reconnectPendingRef = useRef(false);
@@ -386,7 +286,10 @@ export default function App() {
   const dangerConfirmResolveRef = useRef<((value: boolean) => void) | null>(null);
   const isHost = roomState?.hostId === playerId;
   const isControl = roomState?.controlId === playerId;
-  const showDevSkipRound = Boolean(roomState?.isDev && roomState.scenarioMeta.id === "classic" && isControl);
+  const presenterControlActive = false;
+  const showDevSkipRound = Boolean(
+    roomState?.isDev && roomState.scenarioMeta.id === "classic" && isControl && !presenterControlActive
+  );
   const showDevKick = showDevSkipRound;
   const isLobbyRoute = location.pathname.startsWith("/lobby");
   const isGameRoute = location.pathname.startsWith("/game");
@@ -396,32 +299,50 @@ export default function App() {
   const showDevIdentityBadge = roomState ? Boolean(roomState.isDev) : DEV_TAB_IDENTITY;
   const wsInteractive = connectionStatus === "connected";
   const toastDurationMs = Number(toastDuration);
-  const roleLabel = isControl ? appLocale.roleControl : isHost ? appLocale.roleHost : appLocale.rolePlayer;
-  const statusLabel =
-    connectionStatus === "connected"
-      ? appLocale.statusOnline
-      : connectionStatus === "reconnecting"
-        ? appLocale.statusReconnecting
-        : appLocale.statusOffline;
-  const statusClass =
-    connectionStatus === "connected"
-      ? "online"
-      : connectionStatus === "reconnecting"
-        ? "reconnecting"
-        : "offline";
-  const statusHint =
-    connectionStatus === "reconnecting"
-      ? appLocale.statusReconnectHint
-      : connectionStatus === "disconnected"
-        ? appLocale.statusOfflineHint
-        : null;
-  const devKickCandidates =
-    gameView?.public.players.filter(
-      (player) => player.status === "alive" && player.playerId !== playerId
-    ) ?? [];
-  const transferHostCandidates =
-    roomState?.players.filter((player) => player.playerId !== roomState.hostId) ?? [];
+  const roleLabel = buildRoleLabel({
+    isControl: Boolean(isControl),
+    isHost: Boolean(isHost),
+    roleControl: appLocale.roleControl,
+    roleHost: appLocale.roleHost,
+    rolePlayer: appLocale.rolePlayer,
+  });
+  const connectionDisplay = buildConnectionDisplay(connectionStatus, {
+    statusOnline: appLocale.statusOnline,
+    statusReconnecting: appLocale.statusReconnecting,
+    statusOffline: appLocale.statusOffline,
+    statusReconnectHint: appLocale.statusReconnectHint,
+    statusOfflineHint: appLocale.statusOfflineHint,
+  });
+  const devKickCandidates = getDevKickCandidates(gameView, playerId);
+  const transferHostCandidates = getTransferHostCandidates(roomState);
   const devSkipRoundButtonLabel = safeLabel(appLocale.devSkipRoundButton, "DEV");
+
+  useAppUiSideEffects({
+    keys: UI_STORAGE_KEYS,
+    appTitle: appNs.t("appTitle"),
+    theme,
+    streamerMode,
+    showRoomCode,
+    setShowRoomCode,
+    toastPosition,
+    uiScale,
+    reduceMotion,
+    confirmDangerousActions,
+    confirmExitGame,
+    toastDuration,
+    compactMode,
+    autoCopyRoomCode,
+    showHints,
+    locale,
+  });
+
+  usePopoverDismissal({
+    routeKey: `${location.pathname}\n${location.search}`,
+    settingsMenuRef,
+    themeMenuRef,
+    setSettingsMenuOpen,
+    setThemeMenuOpen,
+  });
 
   const clearSnapshotTimer = () => {
     if (snapshotTimerRef.current) {
@@ -453,7 +374,7 @@ export default function App() {
     if (options?.clearLastRoom) {
       const lastRoom = localStorage.getItem("bunker.lastRoomCode");
       if (lastRoom) {
-        localStorage.removeItem(tokenKey(lastRoom));
+        clearPlayerToken(lastRoom);
       }
       localStorage.removeItem("bunker.lastRoomCode");
     }
@@ -485,81 +406,35 @@ export default function App() {
       "Game not found",
     ]);
 
-  const buildHelloPayload = (intent: SessionIntent) => {
-    const effectiveSessionId = sessionIdRef.current ?? sessionId ?? undefined;
-    if (intent.mode === "create") {
-	  return {
-		name: intent.name,
-		create: true,
-		scenarioId: intent.scenarioId,
-		locale: intent.locale,
-		tabId: intent.tabId,
-		sessionId: effectiveSessionId,
-	  };
-	}
-    return {
-      name: intent.name,
-      roomCode: intent.roomCode,
-      playerToken: intent.playerToken,
-      tabId: intent.tabId,
-      sessionId: effectiveSessionId,
-      locale,
-    };
-  };
-
   const sendHelloWithIntent = async (intent: SessionIntent) => {
-    ensureSessionId();
-    const payload = buildHelloPayload(intent);
-    startSnapshotWait(true);
-    lastHelloAtRef.current = Date.now();
-    if (IDENTITY_MODE !== "prod") {
-      console.log("[dev] hello sent", intent);
-    }
-    await client.connect();
-    client.send({ type: "hello", payload });
-  };
-
-  const getResumePayload = () => {
-    const roomCode =
-      roomStateRef.current?.roomCode ??
-      new URLSearchParams(location.search).get("room") ??
-      localStorage.getItem("bunker.lastRoomCode") ??
-      "";
-    const sessionIdValue = sessionIdRef.current ?? sessionId ?? "";
-    if (!roomCode || !sessionIdValue) return null;
-    return { roomCode: roomCode.toUpperCase(), sessionId: sessionIdValue };
+    await sendSessionHelloWithIntent(intent, {
+      client,
+      locale,
+      sessionId,
+      sessionIdRef,
+      ensureSessionId,
+      startSnapshotWait,
+      lastHelloAtRef,
+    });
   };
 
   const sendResume = async () => {
-    ensureSessionId();
-    const payload = getResumePayload();
-    if (!payload) return;
-    const expectGameView =
-      roomStateRef.current?.phase === "game" || location.pathname.startsWith("/game");
-    startSnapshotWait(expectGameView);
-    lastHelloAtRef.current = Date.now();
-    if (IDENTITY_MODE !== "prod") {
-      console.log("[dev] resume sent", payload.roomCode);
-    }
-    await client.connect(true);
-    client.send({ type: "resume", payload });
+    await sendSessionResume({
+      client,
+      locale,
+      tabId,
+      sessionId,
+      sessionIdRef,
+      roomStateRef,
+      locationPathname: location.pathname,
+      locationSearch: location.search,
+      ensureSessionId,
+      startSnapshotWait,
+      lastHelloAtRef,
+    });
   };
 
 
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem(THEME_STORAGE_KEY, theme);
-  }, [theme]);
-
-  useEffect(() => {
-  document.title = appNs.t("appTitle");
-  }, [appNs, locale]);
-
-  useEffect(() => {
-    setCurrentLocale(locale);
-    document.documentElement.lang = locale;
-  }, [locale]);
 
   useEffect(() => {
     if (connectionStatus !== "connected") return;
@@ -569,49 +444,6 @@ export default function App() {
       // ignore transient reconnect race
     }
   }, [client, connectionStatus, locale]);
-
-
-  useEffect(() => {
-    localStorage.setItem(SHOW_ROOM_CODE_KEY, showRoomCode ? "1" : "0");
-  }, [showRoomCode]);
-
-  useEffect(() => {
-    localStorage.setItem(TOAST_POSITION_KEY, toastPosition);
-  }, [toastPosition]);
-
-  useEffect(() => {
-    localStorage.setItem(UI_SCALE_KEY, uiScale);
-    document.documentElement.dataset.uiScale = uiScale;
-  }, [uiScale]);
-
-  useEffect(() => {
-    localStorage.setItem(REDUCE_MOTION_KEY, reduceMotion ? "1" : "0");
-    document.documentElement.dataset.motion = reduceMotion ? "off" : "on";
-  }, [reduceMotion]);
-
-  useEffect(() => {
-    localStorage.setItem(CONFIRM_DANGEROUS_KEY, confirmDangerousActions ? "1" : "0");
-  }, [confirmDangerousActions]);
-
-  useEffect(() => {
-    localStorage.setItem(CONFIRM_EXIT_KEY, confirmExitGame ? "1" : "0");
-  }, [confirmExitGame]);
-
-  useEffect(() => {
-    localStorage.setItem(TOAST_DURATION_KEY, toastDuration);
-  }, [toastDuration]);
-
-  useEffect(() => {
-    localStorage.setItem(COMPACT_MODE_KEY, compactMode ? "1" : "0");
-  }, [compactMode]);
-
-  useEffect(() => {
-    localStorage.setItem(AUTO_COPY_ROOM_CODE_KEY, autoCopyRoomCode ? "1" : "0");
-  }, [autoCopyRoomCode]);
-
-  useEffect(() => {
-    localStorage.setItem(SHOW_HINTS_KEY, showHints ? "1" : "0");
-  }, [showHints]);
 
   useEffect(
     () => () => {
@@ -677,78 +509,6 @@ export default function App() {
   }, [autoCopyRoomCode, isControl, isLobbyRoute, roomState?.roomCode]);
 
   useEffect(() => {
-    setSettingsMenuOpen(false);
-    setThemeMenuOpen(false);
-  }, [location.pathname, location.search]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (settingsMenuRef.current && !settingsMenuRef.current.contains(target)) {
-        setSettingsMenuOpen(false);
-      }
-      if (themeMenuRef.current && !themeMenuRef.current.contains(target)) {
-        setThemeMenuOpen(false);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSettingsMenuOpen(false);
-        setThemeMenuOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", onPointerDown);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("mousedown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const query = window.matchMedia("(max-width: 1250px)");
-    const update = (match: MediaQueryList | MediaQueryListEvent) => {
-      setIsMobile("matches" in match ? match.matches : query.matches);
-    };
-    update(query);
-    if (query.addEventListener) {
-      query.addEventListener("change", update);
-      return () => query.removeEventListener("change", update);
-    }
-    query.addListener(update);
-    return () => query.removeListener(update);
-  }, []);
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const query = window.matchMedia("(max-width: 600px)");
-    const update = (match: MediaQueryList | MediaQueryListEvent) => {
-      setIsMobileNarrow("matches" in match ? match.matches : query.matches);
-    };
-    update(query);
-    if (query.addEventListener) {
-      query.addEventListener("change", update);
-      return () => query.removeEventListener("change", update);
-    }
-    query.addListener(update);
-    return () => query.removeListener(update);
-  }, []);
-
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const html = document.documentElement;
-    const body = document.body;
-    if (isMobile) {
-      html.classList.add("viewport-compact");
-      body.classList.add("viewport-compact");
-    } else {
-      html.classList.remove("viewport-compact");
-      body.classList.remove("viewport-compact");
-    }
-  }, [isMobile]);
-
-  useEffect(() => {
     roomStateRef.current = roomState;
   }, [roomState]);
 
@@ -783,8 +543,7 @@ export default function App() {
     const view = gameViewRef.current;
     if (!view) return false;
     const match = event.message.match(
-      /(?:Player|\u0418\u0433\u0440\u043e\u043a)\s+(.+?)\s+(?:disconnected|missing|left|\u0432\u044b\u0448\u0435\u043b|\u043e\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u0435\u0442|\u043f\u043e\u043a\u0438\u043d\u0443\u043b)/i
-
+      /(?:Игрок|Player)\s+(.+?)\s+(?:вышел|отсутствует|покинул|disconnected|missing|left)/i
     );
     if (!match) return false;
     const name = match[1].trim();
@@ -806,7 +565,7 @@ export default function App() {
       event.kind === "playerLeftBunker";
     if (!isPlayerStatusEvent && typeof window !== "undefined" && "Notification" in window) {
       if (Notification.permission === "granted") {
-        new Notification(formatGameEventMessage(event));
+        new Notification(event.message);
       }
     }
   };
@@ -835,26 +594,31 @@ export default function App() {
     setUiToasts((prev) => prev.filter((toast) => toast.id !== id));
   };
 
-  const formatGameEventMessage = (event: GameEvent): string => {
-    const messageKey = String(event.messageKey ?? "").trim();
-    if (!messageKey) return event.message;
-    const scenarioId = roomStateRef.current?.scenarioMeta.id;
-    return resolveScenarioText(getCurrentLocale(), scenarioId, messageKey, event.messageVars, event.message);
-  };
-
   const ensureWsInteractive = () => {
     if (wsInteractive) return true;
     pushUiToast(appLocale.wsActionRetryHint, "info");
     return false;
   };
 
+  const sessionActions = createSessionActions({
+    client,
+    clearAppErrors,
+    ensureWsInteractive,
+  });
+
   const applyRoomStatePatch = (patch: Partial<RoomState>) => {
+    const patchRevision = patch.revision;
+    if (typeof patchRevision === "number" && patchRevision <= roomStateRevisionRef.current) {
+      return;
+    }
     setRoomState((prev) => {
       if (!prev) {
         void sendResume();
         return prev;
       }
-      return { ...prev, ...patch };
+      const next = { ...prev, ...patch };
+      roomStateRevisionRef.current = next.revision ?? patchRevision ?? roomStateRevisionRef.current;
+      return next;
     });
     awaitingRoomStateRef.current = false;
     if (!awaitingGameViewRef.current) {
@@ -863,12 +627,18 @@ export default function App() {
   };
 
   const applyGameViewPatch = (patch: Partial<GameView>) => {
+    const patchRevision = patch.revision;
+    if (typeof patchRevision === "number" && patchRevision <= gameViewRevisionRef.current) {
+      return;
+    }
     setGameView((prev) => {
       if (!prev) {
         void sendResume();
         return prev;
       }
-      return { ...prev, ...patch };
+      const next = { ...prev, ...patch };
+      gameViewRevisionRef.current = next.revision ?? patchRevision ?? gameViewRevisionRef.current;
+      return next;
     });
     awaitingGameViewRef.current = false;
     if (!awaitingRoomStateRef.current) {
@@ -878,154 +648,49 @@ export default function App() {
 
   useEffect(() => {
     const unsubscribeMessage = client.onMessage((message) => {
-      switch (message.type) {
-        case "helloAck":
-          setPlayerId(message.payload.playerId);
-          setPlayerToken(message.payload.playerToken);
-          if (IDENTITY_MODE !== "prod") {
-            console.log("[dev] helloAck", { playerId: message.payload.playerId });
-          }
-          if (DEV_TAB_IDENTITY) {
-            console.log("[dev] tabId/playerId", { tabId, playerId: message.payload.playerId });
-          }
-          return;
-        case "roomState":
-          setRoomState(message.payload);
-          clearAppErrors();
-          if (IDENTITY_MODE !== "prod") {
-            console.log("[dev] roomState", message.payload.roomCode, message.payload.phase);
-          }
-          awaitingRoomStateRef.current = false;
-          if (message.payload.phase === "lobby") {
-            setGameView(null);
-            clearSnapshotTimer();
-          } else if (gameViewRef.current) {
-            clearSnapshotTimer();
-          }
-          return;
-        case "gameView":
-          setGameView(message.payload);
-          clearAppErrors();
-          setMobileDossierError(null);
-          dossierActionRef.current = false;
-          if (IDENTITY_MODE !== "prod") {
-            console.log("[dev] gameView", message.payload.phase, message.payload.round);
-            if (message.payload.postGame?.outcome) {
-              console.log("[dev] postGame outcome", message.payload.postGame.outcome);
-            }
-          }
-          awaitingGameViewRef.current = false;
-          if (roomStateRef.current?.phase === "game") {
-            clearSnapshotTimer();
-          }
-          return;
-        case "statePatch": {
-          if (message.payload.roomState) {
-            applyRoomStatePatch(message.payload.roomState);
-          }
-          if (message.payload.gameView) {
-            applyGameViewPatch(message.payload.gameView);
-          }
-          return;
-        }
-        case "gameEvent":
-          pushEvent(message.payload);
-          return;
-        case "hostChanged": {
-          const newHostId = message.payload.newHostId;
-          setRoomState((prev) => (prev ? { ...prev, hostId: newHostId } : prev));
-          if (newHostId === playerId) {
-            clearAppErrors();
-            pushUiToast(appLocale.hostChangedYou, "success");
-            return;
-          }
-          const candidate =
-            roomStateRef.current?.players.find((player) => player.playerId === newHostId) ??
-            gameViewRef.current?.public.players.find((player) => player.playerId === newHostId);
-          pushUiToast(appLocale.hostChangedOther(candidate?.name ?? appLocale.genericPlayer), "info");
-          return;
-        }
-        case "error": {
-          const rawMessage = String(message.payload.message ?? "");
-          const errorKey = typeof message.payload.errorKey === "string" ? message.payload.errorKey : "";
-          const localizedByKey = errorKey ? appLocale[errorKey as keyof typeof appLocale] : undefined;
-          const msg = typeof localizedByKey === "string" && localizedByKey.trim() ? localizedByKey : rawMessage;
-          const code = message.payload.code;
-          const maxPlayers = message.payload.maxPlayers;
-          const isPermissionError =
-            code === "PERMISSION_DENIED" ||
-            messageIncludesAny(msg, [
-              "action is available only for control role",
-              "insufficient permissions for player action",
-              "only control can",
-              "only host can",
-            ]);
-          if (isMobileNarrow && dossierActionRef.current) {
-            setMobileDossierError(msg);
-            dossierActionRef.current = false;
-            return;
-          }
-          if (isPermissionError && connectionStatus === "connected") {
-            clearAppErrors();
-            pushUiToast(msg, "danger");
-            return;
-          }
-          if (
-            code === "ROOM_FULL" ||
-            messageIncludesAny(msg, [appLocale.roomFullUnknown, "room is full"])
-          ) {
-            const roomFullMessage =
-              typeof maxPlayers === "number" && Number.isFinite(maxPlayers)
-                ? appLocale.roomFull(maxPlayers)
-                : appLocale.roomFullUnknown;
-            pushUiToast(roomFullMessage, "danger");
-            hardResetSession({ clearLastRoom: true });
-            navigate("/");
-            return;
-          }
-          setErrorMessage(msg);
-          if (code === "RECONNECT_FORBIDDEN") {
-            hardResetSession({ clearLastRoom: true, preserveError: true });
-            navigate("/");
-            return;
-          }
-          if (code === "LEFT_BUNKER" || messageIncludesAny(msg, ["left bunker"])) {
-            hardResetSession({ clearLastRoom: true, preserveError: true });
-            navigate("/");
-            return;
-          }
-          if (isReconnectError(msg, code)) {
-            setFatalErrorMessage(msg);
-            // Keep token/session for quick retry; clear only on explicit "left bunker" timeout.
-            hardResetSession({ preserveError: true });
-            navigate("/");
-          }
-          return;
-        }
-        default:
-          return;
-      }
+      handleServerMessage(message, {
+        appLocale,
+        connectionStatus,
+        isMobileNarrow,
+        playerId,
+        tabId,
+        awaitingRoomStateRef,
+        awaitingGameViewRef,
+        dossierActionRef,
+        gameViewRef,
+        roomStateRef,
+        gameViewRevisionRef,
+        roomStateRevisionRef,
+        setPlayerId,
+        setPlayerToken,
+        setRoomState,
+        setGameView,
+        setMobileDossierError,
+        setErrorMessage,
+        setFatalErrorMessage,
+        clearAppErrors,
+        clearSnapshotTimer,
+        applyRoomStatePatch,
+        applyGameViewPatch,
+        pushEvent,
+        pushUiToast,
+        messageIncludesAny,
+        isReconnectError,
+        hardResetSession,
+        navigateHome: () => navigate("/"),
+      });
     });
 
     const unsubscribeStatus = client.onStatus((status, error) => {
-      if (IDENTITY_MODE !== "prod") {
-        console.log("[dev] ws status", status, error ?? "");
-      }
-      setConnectionStatus(status);
-      setLastWsError(error ?? null);
-      if (status === "reconnecting") {
-        if (roomStateRef.current || intentRef.current) {
-          reconnectPendingRef.current = true;
-        }
-      }
-      if (status === "connected" && reconnectPendingRef.current) {
-        reconnectPendingRef.current = false;
-        if (roomStateRef.current) {
-          void sendResume();
-        } else if (intentRef.current) {
-          void sendHelloWithIntent(intentRef.current);
-        }
-      }
+      handleConnectionStatus(status, error, {
+        intentRef,
+        reconnectPendingRef,
+        roomStateRef,
+        setConnectionStatus,
+        setLastWsError,
+        sendHelloWithIntent,
+        sendResume,
+      });
     });
 
     return () => {
@@ -1035,19 +700,15 @@ export default function App() {
   }, [client, isMobileNarrow]);
 
   useEffect(() => {
-    const roomCode = roomState?.roomCode;
-    const phase = roomState?.phase;
-    if (!roomCode || !phase) return;
-
-    const targetPath = phase === "lobby" ? "/lobby" : "/game";
-    const targetSearch = `?room=${encodeURIComponent(roomCode)}`;
+    const target = getRoomRouteTarget(roomState);
+    if (!target) return;
     const currentSearch = location.search || "";
 
-    if (location.pathname === targetPath && currentSearch === targetSearch) {
+    if (location.pathname === target.pathname && currentSearch === target.search) {
       return;
     }
 
-    navigate(`${targetPath}${targetSearch}`, { replace: true });
+    navigate(`${target.pathname}${target.search}`, { replace: true });
   }, [
     location.pathname,
     location.search,
@@ -1060,33 +721,18 @@ export default function App() {
     if (!roomState) return;
     localStorage.setItem("bunker.lastRoomCode", roomState.roomCode);
     if (!playerToken || DEV_TAB_IDENTITY) return;
-    localStorage.setItem(tokenKey(roomState.roomCode), playerToken);
+    writePlayerToken(roomState.roomCode, playerToken);
   }, [roomState, playerToken]);
 
   useEffect(() => {
-    if (roomState || playerId) return;
-    const roomFromUrl = new URLSearchParams(location.search).get("room");
-    const hasRoomInUrl = Boolean(roomFromUrl);
-    const shouldAttempt =
-      hasRoomInUrl || location.pathname.startsWith("/game") || location.pathname.startsWith("/lobby");
-    if (!shouldAttempt) return;
-
-    const roomCode = (roomFromUrl ?? localStorage.getItem("bunker.lastRoomCode") ?? "")
-      .trim()
-      .toUpperCase();
-    const name = localStorage.getItem("bunker.playerName") ?? "";
-    if (!roomCode || !name) return;
-
-    const token = IDENTITY_MODE === "prod" ? localStorage.getItem(tokenKey(roomCode)) ?? undefined : undefined;
-    const effectiveTabId = IDENTITY_MODE === "dev_tab" ? tabId : undefined;
-    if (IDENTITY_MODE === "dev_tab" && !effectiveTabId) return;
-    const intent: SessionIntent = {
-      mode: "reconnect",
-      name,
-      roomCode,
-      playerToken: token,
-      tabId: effectiveTabId,
-    };
+    const intent = buildStoredReconnectIntent({
+      locationPathname: location.pathname,
+      locationSearch: location.search,
+      playerId,
+      roomState,
+      tabId,
+    });
+    if (!intent) return;
     intentRef.current = intent;
     void sendHelloWithIntent(intent).catch(() => {
       setFatalErrorMessage(appLocale.errorReconnectNetwork);
@@ -1131,68 +777,33 @@ export default function App() {
   }, []);
 
   const handleCreate = async (name: string, scenarioId: string) => {
-    clearAppErrors();
-    localStorage.setItem("bunker.playerName", name);
-    let effectiveTabId = tabId;
-    if (DEV_TAB_IDENTITY && !effectiveTabId) {
-      effectiveTabId = await initTabIdentity();
-      if (effectiveTabId) {
-        setTabId(effectiveTabId);
-      }
-    }
-    if (DEV_TAB_IDENTITY && !effectiveTabId) {
-      setFatalErrorMessage(appLocale.errorReconnectNetwork);
-      return;
-    }
-    const intent: SessionIntent = {
-	  mode: "create",
-	  name,
-	  scenarioId,
-	  locale,
-	  tabId: DEV_TAB_IDENTITY ? effectiveTabId : undefined,
-	};
-    intentRef.current = intent;
-    try {
-      await sendHelloWithIntent(intent);
-    } catch {
-      setFatalErrorMessage(appLocale.errorReconnectNetwork);
-    }
+    await beginCreateSession(name, scenarioId, {
+      locale,
+      tabId,
+      setTabId,
+      setFatalErrorMessage,
+      errorReconnectNetwork: appLocale.errorReconnectNetwork,
+      clearAppErrors,
+      sendHello: sendHelloWithIntent,
+      intentRef,
+    });
   };
 
   const handleJoin = async (name: string, roomCode: string) => {
-    clearAppErrors();
-    localStorage.setItem("bunker.playerName", name);
-    let effectiveTabId = tabId;
-    if (DEV_TAB_IDENTITY && !effectiveTabId) {
-      effectiveTabId = await initTabIdentity();
-      if (effectiveTabId) {
-        setTabId(effectiveTabId);
-      }
-    }
-    const token = DEV_TAB_IDENTITY ? undefined : localStorage.getItem(tokenKey(roomCode)) ?? undefined;
-    if (DEV_TAB_IDENTITY && !effectiveTabId) {
-      setFatalErrorMessage(appLocale.errorReconnectNetwork);
-      return;
-    }
-    const intent: SessionIntent = {
-      mode: "join",
-      name,
-      roomCode,
-      playerToken: token,
-      tabId: DEV_TAB_IDENTITY ? effectiveTabId : undefined,
-    };
-    intentRef.current = intent;
-    try {
-      await sendHelloWithIntent(intent);
-    } catch {
-      setFatalErrorMessage(appLocale.errorReconnectNetwork);
-    }
+    await beginJoinSession(name, roomCode, {
+      locale,
+      tabId,
+      setTabId,
+      setFatalErrorMessage,
+      errorReconnectNetwork: appLocale.errorReconnectNetwork,
+      clearAppErrors,
+      sendHello: sendHelloWithIntent,
+      intentRef,
+    });
   };
 
   const handleStart = () => {
-    if (!ensureWsInteractive()) return;
-    clearAppErrors();
-    client.send({ type: "startGame", payload: {} });
+    sessionActions.start();
   };
 
   const confirmDangerousAction = async (message: string): Promise<boolean> => {
@@ -1212,21 +823,15 @@ export default function App() {
   };
 
   const handleRevealCard = (cardId: string) => {
-    if (!ensureWsInteractive()) return;
-    clearAppErrors();
-    client.send({ type: "revealCard", payload: { cardId } });
+    sessionActions.revealCard(cardId);
   };
 
   const handleVote = (targetPlayerId: string) => {
-    if (!ensureWsInteractive()) return;
-    clearAppErrors();
-    client.send({ type: "vote", payload: { targetPlayerId } });
+    sessionActions.vote(targetPlayerId);
   };
 
   const handleApplySpecial = (specialInstanceId: string, payload?: Record<string, unknown>) => {
-    if (!ensureWsInteractive()) return;
-    clearAppErrors();
-    client.send({ type: "applySpecial", payload: { specialInstanceId, payload } });
+    sessionActions.applySpecial(specialInstanceId, payload);
   };
 
   const markDossierSpecialAction = () => {
@@ -1240,88 +845,61 @@ export default function App() {
   };
 
   const handleFinalizeVoting = () => {
-    if (!ensureWsInteractive()) return;
-    clearAppErrors();
-    client.send({ type: "finalizeVoting", payload: {} });
+    sessionActions.finalizeVoting();
   };
 
   const handleContinueRound = () => {
-    if (!ensureWsInteractive()) return;
-    clearAppErrors();
-    client.send({ type: "continueRound", payload: {} });
+    sessionActions.continueRound();
   };
 
   const handleRevealWorldThreat = (index: number) => {
-    if (!ensureWsInteractive()) return;
-    clearAppErrors();
-    client.send({ type: "revealWorldThreat", payload: { index } });
+    sessionActions.revealWorldThreat(index);
   };
 
   const handleSetBunkerOutcome = (outcome: "survived" | "failed") => {
-    if (!ensureWsInteractive()) return;
-    clearAppErrors();
-    if (IDENTITY_MODE !== "prod") {
-      console.log("[dev] setBunkerOutcome", outcome);
-    }
-    client.send({ type: "setBunkerOutcome", payload: { outcome } });
+    sessionActions.setBunkerOutcome(outcome);
   };
 
   const handleDevSkipRound = async () => {
-    if (!ensureWsInteractive()) return;
     if (!(await confirmDangerousAction(appLocale.confirmSkipRound))) return;
-    clearAppErrors();
-    client.send({ type: "devSkipRound", payload: {} });
+    sessionActions.devSkipRound();
   };
 
   const handleDevKickPlayer = async () => {
-    if (!ensureWsInteractive()) return;
     if (!devKickTargetId) return;
     if (!devKickAgree) return;
-    clearAppErrors();
-    client.send({ type: "devKickPlayer", payload: { targetPlayerId: devKickTargetId } });
+    if (!sessionActions.devKickPlayer(devKickTargetId)) return;
     setDevKickModalOpen(false);
     setDevKickTargetId("");
     setDevKickAgree(false);
   };
 
   const handleUpdateSettings = (settings: GameSettings) => {
-    if (!ensureWsInteractive()) return;
-    clearAppErrors();
-    client.send({ type: "updateSettings", payload: settings });
+    sessionActions.updateSettings(settings);
   };
 
   const handleUpdateRules = (payload: RulesUpdatePayload) => {
-    if (!ensureWsInteractive()) return;
-    clearAppErrors();
-    client.send({ type: "updateRules", payload });
+    sessionActions.updateRules(payload);
   };
 
   const handleKickFromLobby = async (
     targetPlayerId: string,
     options?: { skipConfirm?: boolean }
   ) => {
-    if (!ensureWsInteractive()) return;
     if (!options?.skipConfirm) {
       if (!(await confirmDangerousAction(appLocale.confirmKickFromLobby))) return;
     }
-    clearAppErrors();
-    client.send({ type: "kickFromLobby", payload: { targetPlayerId } });
+    sessionActions.kickFromLobby(targetPlayerId);
   };
 
   const handleRequestHostTransfer = async (
     targetPlayerId?: string,
     options?: { skipConfirm?: boolean }
   ) => {
-    if (!ensureWsInteractive()) return;
     if (!options?.skipConfirm) {
       if (!(await confirmDangerousAction(appLocale.confirmTransferHost))) return;
     }
-    clearAppErrors();
-    const normalizedTargetId = String(targetPlayerId ?? "").trim();
-    client.send({
-      type: "requestHostTransfer",
-      payload: normalizedTargetId ? { targetPlayerId: normalizedTargetId } : {},
-    });
+    sessionActions.requestHostTransfer(targetPlayerId);
   };
 
   const openTransferHostModal = () => {
@@ -1340,15 +918,11 @@ export default function App() {
   };
 
   const handleDevAddPlayer = (name?: string) => {
-    if (!ensureWsInteractive()) return;
-    clearAppErrors();
-    client.send({ type: "devAddPlayer", payload: { name } });
+    sessionActions.devAddPlayer(name);
   };
 
   const handleDevRemovePlayer = (targetPlayerId?: string) => {
-    if (!ensureWsInteractive()) return;
-    clearAppErrors();
-    client.send({ type: "devRemovePlayer", payload: { targetPlayerId } });
+    sessionActions.devRemovePlayer(targetPlayerId);
   };
 
   const performExitGame = () => {
@@ -1357,8 +931,8 @@ export default function App() {
     navigate("/");
   };
 
-  const handleExitGame = () => {
-    if (confirmExitGame) {
+  const handleExitGame = (options?: { skipConfirm?: boolean }) => {
+    if (!options?.skipConfirm && confirmExitGame) {
       setExitConfirmModalOpen(true);
       return;
     }
@@ -1367,6 +941,7 @@ export default function App() {
 
   const handleResetUiSettings = () => {
     setTheme("dark-mint");
+    setStreamerMode(true);
     setShowRoomCode(false);
     setToastPosition("top-right");
     setToastDuration("4000");
@@ -1429,48 +1004,31 @@ export default function App() {
     }
   };
 
-  const visibleUiToasts = isMobile ? uiToasts.slice(-1) : uiToasts;
-  const visibleToasts = isMobile ? toasts.slice(-2) : toasts;
-  const mobileToasts = isMobile
-    ? [
-        ...visibleUiToasts.map((toast) => ({
-          id: `ui-${toast.id}`,
-          title: appLocale.notificationTitle,
-          message: toast.message,
-          variant: toast.variant ?? "",
-          onClose: () => removeUiToast(toast.id),
-        })),
-        ...visibleToasts.map((toast) => {
-          const variant =
-            toast.kind === "playerDisconnected" || toast.kind === "playerLeftBunker"
-              ? "danger"
-              : toast.kind === "playerReconnected"
-                ? "success"
-                : "";
-          return {
-            id: `event-${toast.id}`,
-            title: appLocale.toastKind(toast.kind),
-            message: formatGameEventMessage(toast),
-            variant,
-            onClose: () => removeToast(toast.id),
-          };
-        }),
-      ]
-    : [];
-  const roomCodeHidden = Boolean(roomState && isLobbyRoute && !showRoomCode);
-  const roomCodeLabel = roomState
-    ? appLocale.roomPill(roomCodeHidden ? appLocale.hiddenValue : roomState.roomCode)
-    : "";
-  const roomCodeFromUrl = new URLSearchParams(location.search).get("room")?.trim().toUpperCase() ?? "";
-  const storedPlayerName =
-    typeof window !== "undefined" ? (localStorage.getItem("bunker.playerName") ?? "").trim() : "";
+  const { visibleUiToasts, visibleEventToasts, mobileToasts } = buildToastViews({
+    isMobile,
+    uiToasts,
+    eventToasts: toasts,
+    notificationTitle: appLocale.notificationTitle,
+    toastKind: appLocale.toastKind,
+    removeUiToast,
+    removeEventToast: removeToast,
+  });
+  const roomCodeDisplay = buildRoomCodeDisplay({
+    roomState,
+    isLobbyRoute,
+    streamerMode,
+    showRoomCode,
+    hiddenValue: appLocale.hiddenValue,
+    roomPill: appLocale.roomPill,
+  });
   const isExactLobbyRoute = location.pathname === "/lobby";
   const isExactGameRoute = location.pathname === "/game";
-  const hasReconnectContext =
-    Boolean(roomState) ||
-    Boolean(playerId) ||
-    Boolean(intentRef.current) ||
-    (Boolean(roomCodeFromUrl) && Boolean(storedPlayerName));
+  const hasReconnectContext = hasRouteReconnectContext({
+    roomState,
+    playerId,
+    intentExists: Boolean(intentRef.current),
+    locationSearch: location.search,
+  });
   const showErrorScreen = Boolean(fatalErrorMessage && (isLobbyRoute || isGameRoute));
   const showRoomRouteIssue =
     (isExactLobbyRoute || isExactGameRoute) && !showErrorScreen && !hasReconnectContext;
@@ -1480,18 +1038,13 @@ export default function App() {
     navigate("/");
   };
   const renderRouteIssueScreen = (message: string) => (
-    <section className="panel game-loading forbiddenStatePanel">
-      <div className="forbiddenStateCard" role="alert">
-        <div className="forbiddenStateEyebrow">{appNs.t("appTitle")}</div>
-        <h3 className="forbiddenStateTitle">{appLocale.routeIssueTitle}</h3>
-        <p className="forbiddenStateMessage">{message}</p>
-        <div className="forbiddenStateActions">
-          <button type="button" className="forbiddenStateButton" onClick={exitToMenu}>
-            {appLocale.errorScreenExitToMenu}
-          </button>
-        </div>
-      </div>
-    </section>
+    <RouteIssuePanel
+      appTitle={appNs.t("appTitle")}
+      title={appLocale.routeIssueTitle}
+      message={message}
+      exitLabel={appLocale.errorScreenExitToMenu}
+      onExit={exitToMenu}
+    />
   );
 
   return (
@@ -1505,8 +1058,8 @@ export default function App() {
           {showDevIdentityBadge ? <span className="pill">{appLocale.devBadge}</span> : null}
           {showConnectionStatus ? (
             <>
-              <span className={`status ${statusClass}`}>{statusLabel}</span>
-              {statusHint ? <span className="status-hint">{statusHint}</span> : null}
+              <span className={`status ${connectionDisplay.className}`}>{connectionDisplay.label}</span>
+              {connectionDisplay.hint ? <span className="status-hint">{connectionDisplay.hint}</span> : null}
               {lastWsError ? <span className="status-error">{lastWsError}</span> : null}
               {showRolePillCompact ? <span className="pill role-pill role-pill-mobile">{roleLabel}</span> : null}
             </>
@@ -1540,22 +1093,23 @@ export default function App() {
             {roomState ? (
               <div className={`topbar-room${isLobbyRoute ? " topbar-room-lobby" : ""}`}>
                 <span
-                  className={`topbar-room-code${roomCodeHidden ? " maskedText" : ""}`}
-                  title={roomCodeHidden ? appLocale.showSecret : roomState.roomCode}
+                  className={`topbar-room-code${roomCodeDisplay.hidden ? " maskedText" : ""}`}
+                  title={roomCodeDisplay.hidden ? appLocale.showSecret : roomState.roomCode}
                 >
-                  {roomCodeLabel}
+                  {roomCodeDisplay.label}
                 </span>
+                {showRolePillCompact ? <span className="pill role-pill topbar-room-role">{roleLabel}</span> : null}
                 <span>{appLocale.scenarioPill(roomState.scenarioMeta.name)}</span>
                 {isLobbyRoute ? (
                   <div className="topbar-room-controls">
                     <button
                       type="button"
                       className="ghost iconButton"
-                      aria-label={roomCodeHidden ? appLocale.showSecret : appLocale.hideSecret}
-                      title={roomCodeHidden ? appLocale.showSecret : appLocale.hideSecret}
+                      aria-label={roomCodeDisplay.hidden ? appLocale.showSecret : appLocale.hideSecret}
+                      title={roomCodeDisplay.hidden ? appLocale.showSecret : appLocale.hideSecret}
                       onClick={() => setShowRoomCode((prev) => !prev)}
                     >
-                      <EyeIcon open={!roomCodeHidden} />
+                      <EyeIcon open={!roomCodeDisplay.hidden} />
                     </button>
                     <button type="button" className="ghost button-small" onClick={handleCopyRoomCode}>
                       {roomCodeCopied ? appLocale.copiedButton : appLocale.copyButton}
@@ -1567,240 +1121,76 @@ export default function App() {
           </div>
           <div className="topbar-rightStack">
             <div className="topbar-uiTools">
-              <div className="topbar-popover" ref={settingsMenuRef}>
-                <button
-                  className="ghost topbar-icon-toggle"
-                  aria-label={appLocale.settingsTitle}
-                  title={appLocale.settingsTitle}
-                  onClick={() => {
-                    setSettingsMenuOpen((prev) => !prev);
-                    setThemeMenuOpen(false);
-                  }}
-                >
-                  <svg
-                    className="topbar-icon-svg"
-                    viewBox="0 0 32 32"
-                    fill="none"
-                    aria-hidden="true"
-                  >
-                    <path
-                      d="M29 12.256h-1.88c-0.198-0.585-0.405-1.072-0.643-1.541l0.031 0.067 1.338-1.324c0.35-0.3 0.57-0.742 0.57-1.236 0-0.406-0.149-0.778-0.396-1.063l0.002 0.002-3.178-3.178c-0.283-0.246-0.654-0.395-1.061-0.395-0.494 0-0.937 0.221-1.234 0.57l-0.002 0.002-1.332 1.33c-0.402-0.206-0.888-0.413-1.39-0.586l-0.082-0.025 0.009-1.88c0.003-0.04 0.005-0.086 0.005-0.133 0-0.854-0.66-1.554-1.498-1.617l-0.005-0h-4.496c-0.844 0.063-1.505 0.763-1.505 1.617 0 0.047 0.002 0.093 0.006 0.139l-0-0.006v1.879c-0.585 0.198-1.071 0.404-1.54 0.641l0.067-0.031-1.324-1.336c-0.299-0.352-0.742-0.573-1.236-0.573-0.407 0-0.778 0.15-1.063 0.397l0.002-0.002-3.179 3.179c-0.246 0.283-0.396 0.655-0.396 1.061 0 0.494 0.221 0.937 0.57 1.234l0.002 0.002 1.329 1.329c-0.207 0.403-0.414 0.891-0.587 1.395l-0.024 0.082-1.88-0.009c-0.04-0.003-0.086-0.005-0.133-0.005-0.854 0-1.554 0.661-1.617 1.499l-0 0.005v4.495c0.062 0.844 0.763 1.505 1.617 1.505 0.047 0 0.093-0.002 0.139-0.006l-0.006 0h1.88c0.198 0.585 0.404 1.072 0.642 1.541l-0.03-0.066-1.335 1.32c-0.351 0.3-0.572 0.744-0.572 1.239 0 0.407 0.149 0.779 0.396 1.064l-0.002-0.002 3.179 3.178c0.249 0.246 0.591 0.399 0.97 0.399 0.007 0 0.014-0 0.021-0h-0.001c0.515-0.013 0.977-0.231 1.308-0.576l0.001-0.001 1.33-1.33c0.403 0.207 0.891 0.414 1.395 0.587l0.082 0.025-0.009 1.878c-0.003 0.04-0.005 0.086-0.005 0.132 0 0.854 0.661 1.555 1.499 1.617l0.005 0h4.496c0.843-0.064 1.503-0.763 1.503-1.617 0-0.047-0.002-0.093-0.006-0.139l0 0.006v-1.881c0.585-0.198 1.073-0.405 1.543-0.643l-0.067 0.031 1.321 1.333c0.332 0.344 0.793 0.562 1.304 0.574l0.002 0h0.002c0.006 0 0.013 0 0.019 0 0.378 0 0.72-0.151 0.971-0.395l3.177-3.177c0.244-0.249 0.395-0.591 0.395-0.968 0-0.009-0-0.017-0-0.026l0 0.001c-0.012-0.513-0.229-0.973-0.572-1.304l-0.001-0.001-1.331-1.332c0.206-0.401 0.412-0.887 0.586-1.389l0.025-0.083 1.879 0.009c0.04 0.003 0.086 0.005 0.132 0.005 0.855 0 1.555-0.661 1.617-1.5l0-0.005v-4.495c-0.063-0.844-0.763-1.504-1.618-1.504-0.047 0-0.093 0.002-0.138 0.006l0.006-0zM29.004 18.25l-2.416-0.012c-0.02 0-0.037 0.01-0.056 0.011-0.198 0.024-0.372 0.115-0.501 0.249l-0 0c-0.055 0.072-0.103 0.153-0.141 0.24l-0.003 0.008c-0.005 0.014-0.016 0.024-0.02 0.039-0.24 0.844-0.553 1.579-0.944 2.264l0.026-0.049c-0.054 0.1-0.086 0.218-0.086 0.344 0 0.001 0 0.003 0 0.004v-0c-0 0.016 0.003 0.028 0.004 0.045 0.006 0.187 0.08 0.355 0.199 0.481l-0-0 0.009 0.023 1.707 1.709c0.109 0.109 0.137 0.215 0.176 0.176l-3.102 3.133c-0.099-0.013-0.186-0.061-0.248-0.13l-0-0-1.697-1.713c-0.008-0.009-0.022-0.005-0.03-0.013-0.121-0.112-0.28-0.183-0.456-0.193l-0.002-0c-0.02-0.003-0.044-0.005-0.068-0.006l-0.001-0c-0.125 0-0.243 0.032-0.345 0.088l0.004-0.002c-0.636 0.362-1.373 0.676-2.146 0.903l-0.074 0.019c-0.015 0.004-0.025 0.015-0.039 0.02-0.096 0.042-0.179 0.092-0.255 0.149l0.003-0.002c-0.035 0.034-0.066 0.071-0.093 0.11l-0.002 0.002c-0.027 0.033-0.053 0.07-0.075 0.11l-0.002 0.004c-0.033 0.081-0.059 0.175-0.073 0.274l-0.001 0.007c-0.001 0.016-0.01 0.031-0.01 0.047v2.412c0 0.15-0.055 0.248 0 0.25l-4.41 0.023c-0.052-0.067-0.084-0.153-0.084-0.246 0-0.008 0-0.016 0.001-0.024l-0 0.001 0.012-2.412c0-0.017-0.008-0.032-0.01-0.048-0.005-0.053-0.015-0.102-0.03-0.149l0.001 0.005c-0.012-0.053-0.028-0.1-0.048-0.145l0.002 0.005c-0.052-0.086-0.109-0.16-0.173-0.227l0 0c-0.029-0.024-0.062-0.046-0.096-0.066l-0.004-0.002c-0.044-0.03-0.093-0.056-0.146-0.076l-0.005-0.002c-0.014-0.005-0.024-0.016-0.039-0.02-0.847-0.241-1.585-0.554-2.272-0.944l0.051 0.026c-0.099-0.054-0.216-0.086-0.341-0.086h-0c-0.022-0.001-0.04 0.004-0.062 0.005-0.18 0.008-0.342 0.08-0.465 0.193l0.001-0c-0.008 0.008-0.021 0.004-0.029 0.012l-1.705 1.705c-0.107 0.107-0.216 0.139-0.178 0.178l-3.134-3.101c0.012-0.1 0.06-0.187 0.13-0.25l0-0 1.714-1.695 0.011-0.026c0.115-0.123 0.189-0.286 0.197-0.466l0-0.002c0.001-0.021 0.005-0.037 0.005-0.058 0-0.001 0-0.002 0-0.003 0-0.126-0.032-0.245-0.088-0.348l0.002 0.004c-0.365-0.636-0.679-1.371-0.903-2.145l-0.018-0.072c-0.004-0.015-0.016-0.026-0.021-0.041-0.042-0.094-0.09-0.176-0.146-0.25l0.002 0.003c-0.065-0.061-0.136-0.117-0.212-0.165l-0.006-0.003c-0.051-0.025-0.109-0.045-0.171-0.057l-0.005-0.001c-0.029-0.009-0.065-0.016-0.102-0.021l-0.004-0c-0.02-0.002-0.037-0.012-0.058-0.012h-2.412c-0.152 0.002-0.248-0.055-0.25-0.002l-0.022-4.409c0.067-0.052 0.151-0.084 0.244-0.084 0.009 0 0.017 0 0.026 0.001l-0.001-0 2.416 0.012c0.152-0.004 0.292-0.054 0.407-0.136l-0.002 0.002c0.024-0.014 0.044-0.028 0.064-0.043l-0.002 0.001c0.109-0.088 0.191-0.206 0.235-0.341l0.001-0.005c0.003-0.01 0.014-0.014 0.017-0.025 0.242-0.847 0.555-1.583 0.946-2.27l-0.026 0.05c0.054-0.1 0.086-0.218 0.086-0.344 0-0.001 0-0.001 0-0.002v0c0.001-0.019-0.003-0.033-0.004-0.052-0.007-0.184-0.08-0.35-0.197-0.475l0 0-0.01-0.024-1.705-1.705c-0.108-0.11-0.142-0.221-0.176-0.178l3.102-3.134c0.101 0.008 0.189 0.058 0.248 0.131l0.001 0.001 1.697 1.713c0.018 0.018 0.046 0.011 0.065 0.027 0.125 0.121 0.295 0.196 0.483 0.196 0.13 0 0.251-0.036 0.355-0.098l-0.003 0.002c0.636-0.364 1.372-0.677 2.145-0.902l0.072-0.018c0.014-0.004 0.024-0.015 0.038-0.019 0.057-0.021 0.105-0.047 0.151-0.077l-0.003 0.002c0.163-0.09 0.281-0.244 0.321-0.427l0.001-0.004c0.014-0.043 0.025-0.093 0.03-0.145l0-0.003c0.001-0.016 0.009-0.03 0.009-0.046v-2.412c0-0.151 0.056-0.249 0.001-0.25l4.41-0.023c0.052 0.067 0.083 0.152 0.083 0.245 0 0.009-0 0.017-0.001 0.026l0-0.001-0.012 2.412c-0 0.016 0.008 0.03 0.009 0.047 0.005 0.055 0.015 0.106 0.031 0.155l-0.001-0.005c0.071 0.234 0.243 0.419 0.464 0.506l0.005 0.002c0.014 0.005 0.025 0.016 0.039 0.02 0.845 0.242 1.58 0.555 2.265 0.945l-0.05-0.026c0.105 0.06 0.231 0.096 0.366 0.096 0 0 0.001 0 0.001 0h-0c0.183-0.008 0.347-0.082 0.471-0.198l-0 0c0.017-0.015 0.043-0.008 0.059-0.024l1.709-1.705c0.105-0.106 0.213-0.137 0.176-0.176l3.133 3.102c-0.012 0.1-0.059 0.186-0.129 0.249l-0 0-1.715 1.697-0.011 0.026c-0.116 0.123-0.19 0.287-0.198 0.468l-0 0.002c-0.001 0.02-0.005 0.036-0.005 0.056 0 0.001 0 0.002 0 0.003 0 0.126 0.032 0.245 0.088 0.348l-0.002-0.004c0.365 0.636 0.679 1.371 0.902 2.144l0.018 0.071c0.003 0.012 0.016 0.017 0.019 0.028 0.046 0.137 0.127 0.253 0.232 0.339l0.001 0.001c0.019 0.015 0.041 0.03 0.063 0.043l0.003 0.002c0.112 0.08 0.252 0.13 0.402 0.134l0.001 0h2.412c0.152-0.001 0.248 0.057 0.25 0.001l0.021 4.409c-0.065 0.053-0.149 0.085-0.24 0.085-0.01 0-0.019-0-0.029-0.001l0.001 0zM16 11.25c-2.623 0-4.75 2.127-4.75 4.75s2.127 4.75 4.75 4.75c2.623 0 4.75-2.127 4.75-4.75v0c-0.003-2.622-2.128-4.747-4.75-4.75h-0zM16 19.25c-1.795 0-3.25-1.455-3.25-3.25s1.455-3.25 3.25-3.25c1.795 0 3.25 1.455 3.25 3.25v0c-0.002 1.794-1.456 3.248-3.25 3.25h-0z"
-                      fill="currentColor"
-                    />
-                  </svg>
-                </button>
-                {settingsMenuOpen ? (
-                  <div className="topbar-popover-menu">
-                  <div className="topbar-popover-title">{appLocale.settingsTitle}</div>
-                  <div className="topbar-popover-section">
-                    <button
-                      type="button"
-                      className="topbar-popover-section-toggle"
-                      onClick={() => toggleSettingsSection("game")}
-                      aria-expanded={!settingsSectionsCollapsed.game}
-                    >
-                      <span className="topbar-popover-section-title">{appLocale.settingsGameSectionTitle}</span>
-                      <svg
-                        className={`topbar-popover-section-chevron${settingsSectionsCollapsed.game ? " collapsed" : ""}`}
-                        viewBox="0 0 16 16"
-                        fill="none"
-                        aria-hidden="true"
-                      >
-                        <path
-                          d="M6 3.5 10.5 8 6 12.5"
-                          stroke="currentColor"
-                          strokeWidth="1.7"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </button>
-                    {!settingsSectionsCollapsed.game ? (
-                      <div className="topbar-popover-section-body">
-                        <label className="topbar-menu-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={showRoomCode}
-                            onChange={(event) => setShowRoomCode(event.target.checked)}
-                          />
-                          <span>{appLocale.settingsShowRoomCodeInLobby}</span>
-                        </label>
-                        <label className="topbar-menu-field">
-                          <span>{appLocale.settingsToastPosition}</span>
-                          <select
-                            value={toastPosition}
-                            onChange={(event) => setToastPosition(event.target.value as ToastPosition)}
-                          >
-                            <option value="top-right">{appLocale.toastPosTopRight}</option>
-                            <option value="top-left">{appLocale.toastPosTopLeft}</option>
-                            <option value="bottom-right">{appLocale.toastPosBottomRight}</option>
-                            <option value="bottom-left">{appLocale.toastPosBottomLeft}</option>
-                          </select>
-                        </label>
-                        <label className="topbar-menu-field">
-                          <span>{appLocale.settingsToastDuration}</span>
-                          <select
-                            value={toastDuration}
-                            onChange={(event) => setToastDuration(event.target.value as ToastDuration)}
-                          >
-                            <option value="3000">{appLocale.toastDuration3s}</option>
-                            <option value="4000">{appLocale.toastDuration4s}</option>
-                            <option value="6000">{appLocale.toastDuration6s}</option>
-                          </select>
-                        </label>
-                        <label className="topbar-menu-field">
-                          <span>{appLocale.settingsUiScale}</span>
-                          <select value={uiScale} onChange={(event) => setUiScale(event.target.value as UiScale)}>
-                            <option value="90">90%</option>
-                            <option value="100">100%</option>
-                            <option value="110">110%</option>
-                          </select>
-                        </label>
-                        <label className="topbar-menu-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={reduceMotion}
-                            onChange={(event) => setReduceMotion(event.target.checked)}
-                          />
-                          <span>{appLocale.settingsReduceMotion}</span>
-                        </label>
-                        <label className="topbar-menu-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={confirmDangerousActions}
-                            onChange={(event) => setConfirmDangerousActions(event.target.checked)}
-                          />
-                          <span>{appLocale.settingsConfirmDangerous}</span>
-                        </label>
-                        <label className="topbar-menu-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={confirmExitGame}
-                            onChange={(event) => setConfirmExitGame(event.target.checked)}
-                          />
-                          <span>{appLocale.settingsConfirmExit}</span>
-                        </label>
-                        <label className="topbar-menu-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={compactMode}
-                            onChange={(event) => setCompactMode(event.target.checked)}
-                          />
-                          <span>{appLocale.settingsCompactMode}</span>
-                        </label>
-                        <label className="topbar-menu-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={autoCopyRoomCode}
-                            onChange={(event) => setAutoCopyRoomCode(event.target.checked)}
-                          />
-                          <span>{appLocale.settingsAutoCopyRoomCode}</span>
-                        </label>
-                        <label className="topbar-menu-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={showHints}
-                            onChange={(event) => setShowHints(event.target.checked)}
-                          />
-                          <span>{appLocale.settingsShowHints}</span>
-                        </label>
-                        <button type="button" className="ghost button-small" onClick={handleResetUiSettings}>
-                          {appLocale.settingsResetUi}
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="topbar-popover-section">
-                    <button
-                      type="button"
-                      className="topbar-popover-section-toggle"
-                      onClick={() => toggleSettingsSection("locale")}
-                      aria-expanded={!settingsSectionsCollapsed.locale}
-                    >
-                      <span className="topbar-popover-section-title">{appLocale.settingsLocaleSectionTitle}</span>
-                      <svg
-                        className={`topbar-popover-section-chevron${settingsSectionsCollapsed.locale ? " collapsed" : ""}`}
-                        viewBox="0 0 16 16"
-                        fill="none"
-                        aria-hidden="true"
-                      >
-                        <path
-                          d="M6 3.5 10.5 8 6 12.5"
-                          stroke="currentColor"
-                          strokeWidth="1.7"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </button>
-                    {!settingsSectionsCollapsed.locale ? (
-                      <div className="topbar-popover-section-body">
-                        <button
-                          type="button"
-                          className={`topbar-locale-option${locale === "ru" ? " selected" : ""}`}
-                          onClick={() => setLocale("ru")}
-                        >
-                          <span className="topbar-locale-flag" aria-hidden="true">
-                            🇷🇺
-                          </span>
-                          <span>{appLocale.localeRu}</span>
-                        </button>
-                        <button
-                          type="button"
-                          className={`topbar-locale-option${locale === "en" ? " selected" : ""}`}
-                          onClick={() => setLocale("en")}
-                        >
-                          <span className="topbar-locale-flag" aria-hidden="true">
-                            🇬🇧
-                          </span>
-                          <span>{appLocale.localeEnBeta}</span>
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                  </div>
-                ) : null}
-              </div>
-              <div className="topbar-popover" ref={themeMenuRef}>
-                <button
-                  className="ghost topbar-icon-toggle"
-                  aria-label={appLocale.themeTitle}
-                  title={appLocale.themeTitle}
-                  onClick={() => {
-                    setThemeMenuOpen((prev) => !prev);
-                    setSettingsMenuOpen(false);
-                  }}
-                >
-                  <span
-                    className={`topbar-theme-swatch topbar-theme-swatch--current topbar-theme-swatch--${theme}`}
-                    aria-hidden="true"
-                  />
-                </button>
-                {themeMenuOpen ? (
-                  <div className="topbar-popover-menu">
-                    <div className="topbar-popover-title">{appLocale.themeTitle}</div>
-                    {THEME_OPTIONS.map((option) => (
-                      <button
-                        key={option.id}
-                        type="button"
-                        className={`topbar-theme-option${theme === option.id ? " selected" : ""}`}
-                        onClick={() => {
-                          setTheme(option.id);
-                          setThemeMenuOpen(false);
-                        }}
-                      >
-                        <span className="topbar-theme-option-content">
-                          <span
-                            className={`topbar-theme-swatch topbar-theme-swatch--${option.id}`}
-                            aria-hidden="true"
-                          />
-                          <span>{option.label}</span>
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
+              <AppSettingsPopover
+                popoverRef={settingsMenuRef}
+                locale={{
+                  settingsTitle: appLocale.settingsTitle,
+                  settingsGameSectionTitle: appLocale.settingsGameSectionTitle,
+                  streamerModeLabel: appLocale.streamerModeLabel,
+                  settingsShowRoomCodeInLobby: appLocale.settingsShowRoomCodeInLobby,
+                  settingsToastPosition: appLocale.settingsToastPosition,
+                  toastPosTopRight: appLocale.toastPosTopRight,
+                  toastPosTopLeft: appLocale.toastPosTopLeft,
+                  toastPosBottomRight: appLocale.toastPosBottomRight,
+                  toastPosBottomLeft: appLocale.toastPosBottomLeft,
+                  settingsToastDuration: appLocale.settingsToastDuration,
+                  toastDuration3s: appLocale.toastDuration3s,
+                  toastDuration4s: appLocale.toastDuration4s,
+                  toastDuration6s: appLocale.toastDuration6s,
+                  settingsUiScale: appLocale.settingsUiScale,
+                  settingsReduceMotion: appLocale.settingsReduceMotion,
+                  settingsConfirmDangerous: appLocale.settingsConfirmDangerous,
+                  settingsConfirmExit: appLocale.settingsConfirmExit,
+                  settingsCompactMode: appLocale.settingsCompactMode,
+                  settingsAutoCopyRoomCode: appLocale.settingsAutoCopyRoomCode,
+                  settingsShowHints: appLocale.settingsShowHints,
+                  settingsResetUi: appLocale.settingsResetUi,
+                  settingsLocaleSectionTitle: appLocale.settingsLocaleSectionTitle,
+                  localeRu: appLocale.localeRu,
+                  localeEnBeta: appLocale.localeEnBeta,
+                }}
+                open={settingsMenuOpen}
+                setOpen={setSettingsMenuOpen}
+                closeThemeMenu={() => setThemeMenuOpen(false)}
+                settingsSectionsCollapsed={settingsSectionsCollapsed}
+                toggleSettingsSection={toggleSettingsSection}
+                isSpectateRoute={false}
+                streamerMode={streamerMode}
+                setStreamerMode={setStreamerMode}
+                showRoomCode={showRoomCode}
+                setShowRoomCode={setShowRoomCode}
+                toastPosition={toastPosition}
+                setToastPosition={setToastPosition}
+                toastDuration={toastDuration}
+                setToastDuration={setToastDuration}
+                uiScale={uiScale}
+                setUiScale={setUiScale}
+                reduceMotion={reduceMotion}
+                setReduceMotion={setReduceMotion}
+                confirmDangerousActions={confirmDangerousActions}
+                setConfirmDangerousActions={setConfirmDangerousActions}
+                confirmExitGame={confirmExitGame}
+                setConfirmExitGame={setConfirmExitGame}
+                compactMode={compactMode}
+                setCompactMode={setCompactMode}
+                autoCopyRoomCode={autoCopyRoomCode}
+                setAutoCopyRoomCode={setAutoCopyRoomCode}
+                showHints={showHints}
+                setShowHints={setShowHints}
+                handleResetUiSettings={handleResetUiSettings}
+                localeCode={locale}
+                setLocale={setLocale}
+              />
+              <AppThemePopover
+                popoverRef={themeMenuRef}
+                title={appLocale.themeTitle}
+                theme={theme}
+                options={THEME_OPTIONS}
+                open={themeMenuOpen}
+                setOpen={setThemeMenuOpen}
+                setTheme={setTheme}
+                closeSettingsMenu={() => setSettingsMenuOpen(false)}
+              />
             </div>
             <div className="topbar-actionButtons">
               {roomState && isControl && !isLobbyRoute ? (
@@ -1809,7 +1199,7 @@ export default function App() {
                 </button>
               ) : null}
               {roomState ? (
-                <button className="primary topbar-exit-button" onClick={handleExitGame}>
+                <button className="primary topbar-exit-button" onClick={() => handleExitGame()}>
                   {appLocale.exitButton}
                 </button>
               ) : null}
@@ -1835,7 +1225,7 @@ export default function App() {
               </button>
             </div>
           ))}
-          {visibleToasts.map((toast) => {
+          {visibleEventToasts.map((toast) => {
             const variant =
               toast.kind === "playerDisconnected" || toast.kind === "playerLeftBunker"
                 ? "danger"
@@ -1845,7 +1235,7 @@ export default function App() {
             return (
               <div key={toast.id} className={`toast ${variant}`.trim()}>
                 <div className="toast-kind">{appLocale.toastKind(toast.kind)}</div>
-                <div>{formatGameEventMessage(toast)}</div>
+                <div>{toast.message}</div>
                 <button className="toast-close" onClick={() => removeToast(toast.id)} aria-label={appLocale.closeButton}>
                   {"\u00D7"}
                 </button>
@@ -1876,7 +1266,6 @@ export default function App() {
             canRetry={Boolean(intentRef.current)}
             reconnecting={connectionStatus === "reconnecting"}
             onRetry={() => void handleRetry()}
-            onExitToMenu={() => navigate("/")}
           />
         ) : null}
         <AnimatedRouteContainer>
@@ -1923,10 +1312,10 @@ export default function App() {
                   <GamePage
                     roomState={roomState}
                     gameView={gameView}
-                      isControl={Boolean(isControl)}
-                      showHints={showHints}
-                      wsInteractive={wsInteractive}
-                      eventLog={eventLog}
+                    isControl={Boolean(isControl)}
+                    showHints={showHints}
+                    wsInteractive={wsInteractive}
+                    eventLog={eventLog}
                     onRevealCard={handleRevealCard}
                     onVote={handleVote}
                     onApplySpecial={handleApplySpecial}
@@ -1949,161 +1338,42 @@ export default function App() {
         </AnimatedRouteContainer>
       </main>
 
-      <Modal
-        open={Boolean(dangerConfirmMessage)}
-        title={appLocale.confirmActionTitle}
-        onClose={() => resolveDangerousActionConfirm(false)}
-        dismissible={true}
-      >
-        <div className="muted">{dangerConfirmMessage}</div>
-        <div className="modal-actions">
-          <button className="ghost" onClick={() => resolveDangerousActionConfirm(false)}>
-            {appLocale.modalCancel}
-          </button>
-          <button className="primary" onClick={() => resolveDangerousActionConfirm(true)}>
-            {appLocale.modalApply}
-          </button>
-        </div>
-      </Modal>
-
-      <Modal
-        open={Boolean(transferHostModalOpen && roomState && isControl && !isLobbyRoute)}
-        title={appLocale.transferHostTitle}
-        onClose={() => {
+      <AppModalLayer
+        locale={appLocale}
+        dangerConfirmMessage={dangerConfirmMessage}
+        onResolveDangerConfirm={resolveDangerousActionConfirm}
+        transferHostOpen={transferHostModalOpen}
+        transferHostEnabled={Boolean(roomState && isControl && !isLobbyRoute)}
+        transferHostCandidates={transferHostCandidates}
+        transferHostTargetId={transferHostTargetId}
+        transferHostAgree={transferHostAgree}
+        onTransferHostTargetIdChange={setTransferHostTargetId}
+        onTransferHostAgreeChange={setTransferHostAgree}
+        onCloseTransferHost={() => {
           setTransferHostModalOpen(false);
           setTransferHostAgree(false);
         }}
-        dismissible={true}
-      >
-        {transferHostCandidates.length === 0 ? (
-          <div className="muted">{appLocale.transferHostSelectPlaceholder}</div>
-        ) : (
-          <>
-            <label className="topbar-menu-field">
-              <span>{appLocale.transferHostSelectLabel}</span>
-              <select
-                value={transferHostTargetId}
-                onChange={(event) => setTransferHostTargetId(event.target.value)}
-              >
-                {transferHostCandidates.map((player) => (
-                  <option key={player.playerId} value={player.playerId}>
-                    {player.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="topbar-menu-checkbox">
-              <input
-                type="checkbox"
-                checked={transferHostAgree}
-                onChange={(event) => setTransferHostAgree(event.target.checked)}
-              />
-              <span>{appLocale.transferHostAgreeLabel}</span>
-            </label>
-            <div className="modal-actions">
-              <button
-                className="ghost"
-                onClick={() => {
-                  setTransferHostModalOpen(false);
-                  setTransferHostAgree(false);
-                }}
-              >
-                {appLocale.modalCancel}
-              </button>
-              <button
-                className="primary"
-                disabled={!transferHostTargetId || !transferHostAgree}
-                onClick={handleTransferHostFromModal}
-              >
-                {appLocale.transferHostButton}
-              </button>
-            </div>
-          </>
-        )}
-      </Modal>
-
-      <Modal
-        open={exitConfirmModalOpen}
-        title={appLocale.exitConfirmTitle}
-        onClose={() => setExitConfirmModalOpen(false)}
-        dismissible={true}
-      >
-        <div className="muted">{appLocale.exitConfirmText}</div>
-        <div className="modal-actions">
-          <button className="ghost" onClick={() => setExitConfirmModalOpen(false)}>
-            {appLocale.modalCancel}
-          </button>
-          <button
-            className="primary"
-            onClick={() => {
-              setExitConfirmModalOpen(false);
-              performExitGame();
-            }}
-          >
-            {appLocale.exitButton}
-          </button>
-        </div>
-      </Modal>
-
-      <Modal
-        open={devKickModalOpen && showDevKick}
-        title={appLocale.devKickTitle}
-        onClose={() => {
+        onSubmitTransferHost={handleTransferHostFromModal}
+        exitConfirmOpen={exitConfirmModalOpen}
+        onCloseExitConfirm={() => setExitConfirmModalOpen(false)}
+        onConfirmExit={() => {
+          setExitConfirmModalOpen(false);
+          performExitGame();
+        }}
+        devKickOpen={devKickModalOpen && showDevKick}
+        devKickCandidates={devKickCandidates}
+        devKickTargetId={devKickTargetId}
+        devKickAgree={devKickAgree}
+        onDevKickTargetIdChange={setDevKickTargetId}
+        onDevKickAgreeChange={setDevKickAgree}
+        onCloseDevKick={() => {
           setDevKickModalOpen(false);
           setDevKickTargetId("");
           setDevKickAgree(false);
         }}
-        dismissible={true}
-      >
-        {devKickCandidates.length === 0 ? (
-          <div className="muted">{appLocale.devKickNoTargets}</div>
-        ) : (
-          <>
-            <select
-              value={devKickTargetId}
-              onChange={(event) => setDevKickTargetId(event.target.value)}
-            >
-              <option value="" disabled>
-                {appLocale.devKickSelectPlaceholder}
-              </option>
-              {devKickCandidates.map((player) => (
-                <option key={player.playerId} value={player.playerId}>
-                  {player.name}
-                </option>
-              ))}
-            </select>
-            <div className="modal-actions">
-              <button
-                className="ghost"
-                onClick={() => {
-                  setDevKickModalOpen(false);
-                  setDevKickTargetId("");
-                  setDevKickAgree(false);
-                }}
-              >
-                {appLocale.modalCancel}
-              </button>
-              <label className="topbar-menu-checkbox">
-                <input
-                  type="checkbox"
-                  checked={devKickAgree}
-                  onChange={(event) => setDevKickAgree(event.target.checked)}
-                />
-                <span>{appLocale.devKickAgreeLabel}</span>
-              </label>
-              <button
-                className="primary"
-                disabled={!devKickTargetId || !devKickAgree}
-                onClick={handleDevKickPlayer}
-              >
-                {appLocale.devKickConfirm}
-              </button>
-            </div>
-          </>
-        )}
-      </Modal>
+        onSubmitDevKick={handleDevKickPlayer}
+      />
     </div>
     </ErrorBoundary>
   );
 }
-

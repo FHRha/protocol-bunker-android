@@ -6,37 +6,11 @@ export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "re
 export type StatusHandler = (status: ConnectionStatus, error?: string | null) => void;
 
 const PING_INTERVAL_MS = 20000;
-const PONG_TIMEOUT_MS = 120000;
-const STALE_PONG_GRACE_PINGS = 2;
-
-function ensureHandRevealedFlag(payload: unknown) {
-  if (!payload || typeof payload !== "object") return;
-  const message = payload as { type?: string; payload?: unknown };
-  if (!message.type) return;
-
-  const patchGameView = (gameView: unknown) => {
-    if (!gameView || typeof gameView !== "object") return;
-    const you = (gameView as { you?: unknown }).you;
-    if (!you || typeof you !== "object") return;
-    const hand = (you as { hand?: unknown }).hand;
-    if (!Array.isArray(hand)) return;
-    for (const card of hand) {
-      if (!card || typeof card !== "object") continue;
-      const ref = card as { revealed?: boolean };
-      if (typeof ref.revealed !== "boolean") {
-        ref.revealed = false;
-      }
-    }
-  };
-
-  if (message.type === "gameView") {
-    patchGameView(message.payload);
-    return;
-  }
-  if (message.type === "statePatch" && message.payload && typeof message.payload === "object") {
-    patchGameView((message.payload as { gameView?: unknown }).gameView);
-  }
-}
+const PONG_TIMEOUT_MS = 20000;
+const MAX_MISSED_PONGS = 4;
+const RECONNECT_BASE_DELAY_MS = 500;
+const RECONNECT_MAX_DELAY_MS = 10000;
+const RECONNECT_STABLE_RESET_MS = 20000;
 
 export class BunkerClient {
   private ws: WebSocket | null = null;
@@ -49,8 +23,9 @@ export class BunkerClient {
   private reconnectAttempt = 0;
   private manualClose = false;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
-  private lastPongAt = 0;
-  private stalePongChecks = 0;
+  private pongTimeout: ReturnType<typeof setTimeout> | null = null;
+  private stableReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private missedPongs = 0;
 
   constructor(private url: string) {}
 
@@ -67,49 +42,60 @@ export class BunkerClient {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
     }
-    this.lastPongAt = 0;
-    this.stalePongChecks = 0;
+    if (this.pongTimeout) {
+      clearTimeout(this.pongTimeout);
+      this.pongTimeout = null;
+    }
+    this.missedPongs = 0;
+  }
+
+  private clearStableReconnectTimer() {
+    if (this.stableReconnectTimer) {
+      clearTimeout(this.stableReconnectTimer);
+      this.stableReconnectTimer = null;
+    }
   }
 
   private scheduleReconnect() {
     if (this.manualClose) return;
     if (this.reconnectTimer) return;
     this.reconnectAttempt += 1;
-    const base = Math.min(250 * 2 ** (this.reconnectAttempt - 1), 5000);
+    const base = Math.min(
+      RECONNECT_BASE_DELAY_MS * 2 ** (this.reconnectAttempt - 1),
+      RECONNECT_MAX_DELAY_MS
+    );
     const jitter = base * (0.8 + Math.random() * 0.4);
     this.setStatus("reconnecting");
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      void this.connect(true);
+      void this.connect(true).catch(() => {
+        // Reconnect loop is driven by socket close events.
+      });
     }, jitter);
   }
 
   private startHeartbeat() {
     this.clearHeartbeat();
-    this.lastPongAt = Date.now();
     const sendPing = () => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-      const pongAge = Date.now() - this.lastPongAt;
-      if (pongAge > PONG_TIMEOUT_MS) {
-        this.stalePongChecks += 1;
-        if (this.stalePongChecks < STALE_PONG_GRACE_PINGS) {
-          try {
-            this.ws.send(JSON.stringify({ type: "ping", payload: {} }));
-          } catch {
-            // ignore and let next heartbeat close/reconnect if still stale
-          }
-          return;
-        }
+      this.ws.send(JSON.stringify({ type: "ping", payload: {} }));
+      if (this.pongTimeout) {
+        clearTimeout(this.pongTimeout);
+      }
+      this.pongTimeout = setTimeout(() => {
+        this.pongTimeout = null;
+        this.missedPongs += 1;
+        const limit =
+          typeof document !== "undefined" && document.hidden ? MAX_MISSED_PONGS + 1 : MAX_MISSED_PONGS;
+        if (this.missedPongs < limit) return;
         try {
-          this.ws.close();
+          this.ws?.close();
         } catch {
           // ignore
         }
-        return;
-      }
-      this.stalePongChecks = 0;
-      this.ws.send(JSON.stringify({ type: "ping", payload: {} }));
+      }, PONG_TIMEOUT_MS);
     };
+    sendPing();
     this.pingTimer = setInterval(sendPing, PING_INTERVAL_MS);
   }
 
@@ -120,78 +106,82 @@ export class BunkerClient {
     this.manualClose = false;
     this.setStatus(isReconnect ? "reconnecting" : "connecting");
 
-    this.ws = new WebSocket(this.url);
+    const socket = new WebSocket(this.url);
+    this.ws = socket;
     this.connecting = new Promise((resolve, reject) => {
-      if (!this.ws) return;
-      this.ws.onopen = () => {
-        this.reconnectAttempt = 0;
-        this.setStatus("connected", null);
-        this.startHeartbeat();
-        this.connecting = null;
+      let settled = false;
+      const safeResolve = () => {
+        if (settled) return;
+        settled = true;
         resolve();
       };
-      this.ws.onerror = () => {
+      const safeReject = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
+
+      socket.onopen = () => {
+        if (this.ws !== socket) return;
+        this.missedPongs = 0;
+        this.setStatus("connected", null);
+        this.startHeartbeat();
+        this.clearStableReconnectTimer();
+        this.stableReconnectTimer = setTimeout(() => {
+          this.reconnectAttempt = 0;
+        }, RECONNECT_STABLE_RESET_MS);
+        this.connecting = null;
+        safeResolve();
+      };
+
+      socket.onerror = () => {
+        if (this.ws !== socket) return;
         this.lastError = "WebSocket connection failed";
         this.connecting = null;
         try {
-          this.ws?.close();
+          socket.close();
         } catch {
           // ignore
         }
-        reject(new Error("WebSocket connection failed"));
+        safeReject(new Error("WebSocket connection failed"));
       };
-      this.ws.onclose = () => {
+
+      socket.onclose = () => {
+        if (this.ws === socket) {
+          this.ws = null;
+        }
         this.clearHeartbeat();
+        this.clearStableReconnectTimer();
         this.connecting = null;
+        safeReject(new Error("WebSocket closed"));
         if (this.manualClose) {
           this.setStatus("disconnected");
           return;
         }
         this.scheduleReconnect();
       };
-      this.ws.onmessage = (event) => {
-        this.lastPongAt = Date.now();
-        this.stalePongChecks = 0;
+
+      socket.onmessage = (event) => {
+        if (this.ws !== socket) return;
         let parsed: unknown;
         try {
           parsed = JSON.parse(event.data);
         } catch {
           return;
         }
-        ensureHandRevealedFlag(parsed);
         const result = ServerMessageSchema.safeParse(parsed);
         if (!result.success) {
-          const rawMessage = parsed as { type?: unknown; payload?: unknown };
-          const rawType = typeof rawMessage.type === "string" ? rawMessage.type : "";
-          const rawPayloadObject =
-            rawMessage.payload !== null && typeof rawMessage.payload === "object";
-          const canFallback =
-            rawType === "roomState" ||
-            rawType === "gameView" ||
-            rawType === "statePatch" ||
-            rawType === "gameEvent" ||
-            rawType === "helloAck" ||
-            rawType === "hostChanged" ||
-            rawType === "error" ||
-            rawType === "pong";
-          if (canFallback && (rawType === "pong" || rawPayloadObject)) {
-            if (IDENTITY_MODE !== "prod") {
-              console.warn("[ws] tolerated malformed message", rawType, result.error.issues[0], parsed);
-            }
-            if (rawType === "pong") {
-              this.lastPongAt = Date.now();
-              return;
-            }
-            this.listeners.forEach((listener) => listener(rawMessage as ServerMessage));
-            return;
-          }
           if (IDENTITY_MODE !== "prod") {
-            console.warn("[ws] unknown message", result.error.issues[0], parsed);
+            console.warn("[ws] unknown message", parsed);
           }
           return;
         }
         if (result.data.type === "pong") {
-          this.lastPongAt = Date.now();
+          if (this.pongTimeout) {
+            clearTimeout(this.pongTimeout);
+            this.pongTimeout = null;
+          }
+          this.missedPongs = 0;
           return;
         }
         this.listeners.forEach((listener) => listener(result.data));
@@ -214,10 +204,13 @@ export class BunkerClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.clearStableReconnectTimer();
     this.clearHeartbeat();
-    if (!this.ws) return;
-    this.ws.close();
+    const socket = this.ws;
     this.ws = null;
+    if (socket) {
+      socket.close();
+    }
     this.setStatus("disconnected");
   }
 

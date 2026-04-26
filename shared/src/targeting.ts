@@ -5,45 +5,38 @@ const includesAny = (value: string, terms: readonly string[]) => terms.some((ter
 
 const normalize = (value?: string) => (value ?? "").toLowerCase();
 
-const resolveScopeFromText = (value: string): SpecialTargetScope | null => {
-  if (!value) return null;
-  if (includesAny(value, TARGETING_TERMS.noTarget)) return null;
+export const computeTargetScope = (uiTargeting?: string, text?: string): SpecialTargetScope | null => {
+  const targeting = normalize(uiTargeting);
+  const body = `${targeting} ${normalize(text)}`.trim();
 
-  if (includesAny(value, TARGETING_TERMS.neighbors)) {
+  if (!body) return null;
+  if (includesAny(body, TARGETING_TERMS.noTarget)) return null;
+
+  if (includesAny(body, TARGETING_TERMS.neighbors)) {
     return "neighbors";
   }
 
-  if (includesAny(value, TARGETING_TERMS.selfOnly)) {
+  if (includesAny(body, TARGETING_TERMS.selfOnly)) {
     return "self";
   }
 
-  if (includesAny(value, TARGETING_TERMS.includingSelf)) {
+  if (includesAny(body, TARGETING_TERMS.includingSelf)) {
     return "any_including_self";
   }
 
-  if (includesAny(value, TARGETING_TERMS.notSelf)) {
+  if (includesAny(body, TARGETING_TERMS.notSelf)) {
     return "any_alive";
   }
 
-  if (includesAny(value, TARGETING_TERMS.anyPlayer)) {
+  if (includesAny(body, TARGETING_TERMS.anyPlayer)) {
     return "any_including_self";
   }
 
-  if (includesAny(value, TARGETING_TERMS.choose)) {
+  if (includesAny(targeting, TARGETING_TERMS.choose) || includesAny(body, TARGETING_TERMS.choose)) {
     return "any_alive";
   }
 
   return null;
-};
-
-export const computeTargetScope = (uiTargeting?: string, text?: string): SpecialTargetScope | null => {
-  const targeting = normalize(uiTargeting);
-  const body = normalize(text);
-
-  const targetingScope = resolveScopeFromText(targeting);
-  if (targetingScope !== null || targeting) return targetingScope;
-
-  return resolveScopeFromText(body);
 };
 
 export const computeNeighbors = (

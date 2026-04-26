@@ -21,6 +21,9 @@ class WebViewActivity : AppCompatActivity() {
 
         webView.settings.javaScriptEnabled = true
         webView.settings.domStorageEnabled = true
+        webView.settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+        webView.clearCache(true)
+        webView.clearHistory()
         webView.webViewClient = WebViewClient()
         webView.loadUrl(url)
     }

@@ -26,8 +26,7 @@ const dedupe = (values: string[]): string[] => {
   return out;
 };
 
-const mergeTerms = (key: keyof TargetingDictionary): string[] =>
-  dedupe([...(ru[key] ?? []), ...(en[key] ?? [])]);
+const mergeTerms = (key: keyof TargetingDictionary): string[] => dedupe([...(ru[key] ?? []), ...(en[key] ?? [])]);
 
 export const TARGETING_TERMS = {
   noTarget: mergeTerms("noTarget"),

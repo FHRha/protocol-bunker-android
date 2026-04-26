@@ -1,10 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-
-let modalLockCount = 0;
-let prevBodyOverflow = "";
-let prevHtmlOverflow = "";
+import { useUiLocaleNamespace } from "../localization";
 
 interface ModalProps {
   open: boolean;
@@ -25,6 +22,7 @@ export default function Modal({
 }: ModalProps) {
   const [mounted, setMounted] = useState(open);
   const reduceMotion = useReducedMotion();
+  const text = useUiLocaleNamespace("common");
 
   useEffect(() => {
     if (open) {
@@ -33,27 +31,31 @@ export default function Modal({
   }, [open]);
 
   useEffect(() => {
-    if (!open) return;
-
+    if (!mounted) return;
     const body = document.body;
     const html = document.documentElement;
+    const previousOverflow = body.style.overflow;
+    const previousPosition = body.style.position;
+    const previousTop = body.style.top;
+    const previousWidth = body.style.width;
+    const previousHtmlOverflow = html.style.overflow;
+    const scrollY = window.scrollY;
 
-    if (modalLockCount === 0) {
-      prevBodyOverflow = body.style.overflow;
-      prevHtmlOverflow = html.style.overflow;
-      body.style.overflow = "hidden";
-      html.style.overflow = "hidden";
-    }
-    modalLockCount += 1;
+    body.style.overflow = "hidden";
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.width = "100%";
+    html.style.overflow = "hidden";
 
     return () => {
-      modalLockCount = Math.max(0, modalLockCount - 1);
-      if (modalLockCount === 0) {
-        body.style.overflow = prevBodyOverflow;
-        html.style.overflow = prevHtmlOverflow;
-      }
+      body.style.overflow = previousOverflow;
+      body.style.position = previousPosition;
+      body.style.top = previousTop;
+      body.style.width = previousWidth;
+      html.style.overflow = previousHtmlOverflow;
+      window.scrollTo(0, scrollY);
     };
-  }, [open]);
+  }, [mounted]);
 
   useEffect(() => {
     if (!mounted || !dismissible) return;
@@ -106,7 +108,7 @@ export default function Modal({
             <div className="modal-header">
               {title ? <h3>{title}</h3> : null}
               {dismissible ? (
-                <button className="icon-button" onClick={onClose} aria-label="Close">
+                <button className="icon-button" onClick={onClose} aria-label={text.t("closeButton")}>
                   {"\u00D7"}
                 </button>
               ) : null}
@@ -118,3 +120,5 @@ export default function Modal({
     </AnimatePresence>
   );
 }
+
+

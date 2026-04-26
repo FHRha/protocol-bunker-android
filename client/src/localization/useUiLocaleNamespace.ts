@@ -57,7 +57,7 @@ export function useUiLocaleNamespace(
         primary,
         fallbacks: options.fallbacks,
       }),
-    [locale, primary, options.fallbacks],
+    [locale, primary, options.fallbacks, ready],
   );
 
   return {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useUiLocaleNamespace, useUiLocaleNamespacesActivation } from "../localization";
+import { useUiLocaleNamespace } from "../localization";
 
 interface DossierMiniCardOption {
   id: string;
@@ -14,11 +14,11 @@ interface DossierMiniCardProps {
   expandedText: string;
   expanded: boolean;
   selected: boolean;
-  disabled?: boolean;
   revealed?: boolean;
   fullWidth?: boolean;
   featured?: boolean;
   expandable?: boolean;
+  inactive?: boolean;
   options?: DossierMiniCardOption[];
   onCardClick?: () => void;
   onToggleExpand?: () => void;
@@ -31,20 +31,20 @@ export default function DossierMiniCard({
   expandedText,
   expanded,
   selected,
-  disabled = false,
   revealed = false,
   fullWidth = false,
   featured = false,
   expandable = true,
+  inactive = false,
   options = [],
   onCardClick,
   onToggleExpand,
   onSelectOption,
 }: DossierMiniCardProps) {
+  const text = useUiLocaleNamespace("game", { fallbacks: ["common"] });
+
   const valueRef = useRef<HTMLDivElement | null>(null);
   const [overflowing, setOverflowing] = useState(false);
-  useUiLocaleNamespacesActivation(["misc", "game", "common"]);
-  const text = useUiLocaleNamespace("game", { fallbacks: ["misc", "common"] });
 
   useEffect(() => {
     if (expanded) return;
@@ -71,7 +71,7 @@ export default function DossierMiniCard({
 
   const canExpand = expandable && (overflowing || options.length > 1);
   const handleCardActivate = () => {
-    if (disabled) return;
+    if (inactive) return;
     onCardClick?.();
     if (canExpand) {
       onToggleExpand?.();
@@ -81,10 +81,10 @@ export default function DossierMiniCard({
     "dossier-mini-card",
     expanded ? "expanded" : "",
     selected ? "selected" : "",
-    disabled ? "disabled" : "",
     revealed ? "revealed" : "",
     fullWidth ? "full-width" : "",
     featured ? "featured" : "",
+    inactive ? "inactive" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -95,10 +95,11 @@ export default function DossierMiniCard({
     <div
       className={cardClass}
       role="button"
-      tabIndex={disabled ? -1 : 0}
+      tabIndex={inactive ? -1 : 0}
+      aria-disabled={inactive}
       onClick={handleCardActivate}
       onKeyDown={(event) => {
-        if (disabled) return;
+        if (inactive) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           handleCardActivate();
@@ -113,11 +114,10 @@ export default function DossierMiniCard({
             className={`dossier-mini-chevron${expanded ? " expanded" : ""}`}
             onClick={(event) => {
               event.stopPropagation();
-              if (disabled) return;
+              if (inactive) return;
               onToggleExpand?.();
             }}
             aria-label={expanded ? text.t("collapseLabel") : text.t("expandLabel")}
-            disabled={disabled}
           >
             ▾
           </button>
@@ -137,7 +137,7 @@ export default function DossierMiniCard({
               className={`dossier-mini-option${option.selected ? " selected" : ""}`}
               onClick={(event) => {
                 event.stopPropagation();
-                if (option.selectable && onSelectOption) {
+                if (!inactive && option.selectable && onSelectOption) {
                   onSelectOption(option.id);
                 }
               }}
@@ -152,3 +152,5 @@ export default function DossierMiniCard({
     </div>
   );
 }
+
+

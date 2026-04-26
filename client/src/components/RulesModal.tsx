@@ -27,3 +27,4 @@ export default function RulesModal({ open, onClose }: RulesModalProps) {
     </Modal>
   );
 }
+

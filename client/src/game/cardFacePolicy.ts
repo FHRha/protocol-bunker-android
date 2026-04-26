@@ -1,5 +1,5 @@
 export type CardFaceContext = {
-  mode: "player" | "host";
+  mode: "player" | "host" | "spectator";
   control?: boolean;
   viewer?: boolean;
 };
@@ -27,6 +27,10 @@ export function shouldShowCardFront(card: unknown, ctx: CardFaceContext): boolea
     source.status === "revealed";
   const byExplicitFrontRef = Boolean(source.frontId || source.cardIdFront);
 
-  return byFlag || byExplicitFrontRef;
+  if (ctx.mode === "spectator") {
+    return byFlag || byExplicitFrontRef;
+  }
+
+  return byFlag;
 }
 

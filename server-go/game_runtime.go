@@ -329,8 +329,9 @@ func (g *gameSession) buildDevSpecialOptions() []map[string]any {
 			title = id
 		}
 		options = append(options, map[string]any{
-			"id":    id,
-			"title": title,
+			"id":      id,
+			"title":   title,
+			"assetId": def.AssetID,
 		})
 	}
 	return options
@@ -1659,7 +1660,7 @@ func (g *gameSession) applySpecialEffect(player *gamePlayer, special *specialCon
 		return gameActionResult{
 			StateChanged: true,
 			Events: []gameEvent{
-				g.makeEventLocalized("info", scenarioText(g.Scenario, "event.devChoice.selected", fmt.Sprintf("%s selected for the DEV card: %s.", player.Name, selectedDef.Title)), "event.devChoice.selected", map[string]any{"name": player.Name, "title": selectedDef.Title}),
+				g.makeEventLocalized("info", scenarioText(g.Scenario, "event.devChoice.selected", fmt.Sprintf("%s selected for the DEV card: %s.", player.Name, selectedDef.Title)), "event.devChoice.selected", map[string]any{"name": player.Name, "title": selectedDef.Title, "assetId": resolvedAssetID}),
 			},
 		}
 	case "banVoteAgainst":

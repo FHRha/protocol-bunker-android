@@ -58,7 +58,7 @@ type gameSettings struct {
 	MaxPlayers                  int    `json:"maxPlayers"`
 	FinalThreatReveal           string `json:"finalThreatReveal"`
 	ForcedDisasterID            string `json:"forcedDisasterId"`
-	CardLocale                  string `json:"cardLocale"`
+	CardLocale                  string `json:"-"`
 	// Backward compatibility with older client builds.
 	SelectedDisasterID string `json:"selectedDisasterId,omitempty"`
 }
@@ -91,6 +91,7 @@ type playerSummary struct {
 }
 
 type roomState struct {
+	Revision            int             `json:"revision,omitempty"`
 	RoomCode            string          `json:"roomCode"`
 	Players             []playerSummary `json:"players"`
 	HostID              string          `json:"hostId"`
@@ -266,13 +267,15 @@ type postGameStateView struct {
 }
 
 type threatModifierView struct {
-	Delta      int      `json:"delta"`
-	Reasons    []string `json:"reasons"`
-	BaseCount  int      `json:"baseCount"`
-	FinalCount int      `json:"finalCount"`
+	Delta         int      `json:"delta"`
+	Reasons       []string `json:"reasons"`
+	ReasonCardIDs []string `json:"reasonCardIds,omitempty"`
+	BaseCount     int      `json:"baseCount"`
+	FinalCount    int      `json:"finalCount"`
 }
 
 type gameView struct {
+	Revision      int                `json:"revision,omitempty"`
 	Phase         string             `json:"phase"`
 	Round         int                `json:"round"`
 	Categories    []string           `json:"categoryOrder"`
@@ -362,6 +365,7 @@ type player struct {
 	DisconnectVersion int64
 	NeedsFullState    bool
 	NeedsFullGameView bool
+	Locale            string
 }
 
 type room struct {
@@ -381,6 +385,8 @@ type room struct {
 	JoinOrder         []string
 	Game              roomGame
 	IsDev             bool
+	RoomStateRevision int
+	GameViewRevision  int
 	LastRoomStateSent bool
 	GameTimer         *time.Timer
 	GameTimerVersion  int64

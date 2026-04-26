@@ -1,13 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  type GameSettings,
-  type ManualRulesConfig,
-  type RoomState,
-} from "@bunker/shared";
+import type { GameSettings, ManualRulesConfig, RoomState } from "@bunker/shared";
 import { useUiLocaleNamespace, useUiLocaleNamespacesActivation } from "../localization";
-import InfoTip from "../components/InfoTip";
+import { getLocalizedWorldTitle } from "../cardLocalization";
 import RulesModal from "../components/RulesModal";
-import Modal from "../components/Modal";
+import { LobbyKickModal } from "../lobby/LobbyKickModal";
+import { LobbyManualRulesCard } from "../lobby/LobbyManualRulesCard";
+import { LobbyPlayersCard } from "../lobby/LobbyPlayersCard";
+import { LobbyRulesCard } from "../lobby/LobbyRulesCard";
+import { LobbySettingsCard } from "../lobby/LobbySettingsCard";
+import {
+  buildRevealPlan,
+  clampInt,
+  fitVotesByTotal,
+  generateVotesByDefault,
+  normalizeVotesByRound,
+  parseVotesSchedule,
+  sumVotes,
+} from "../lobby/rulesMath";
 
 interface LobbyPageProps {
   roomState: RoomState | null;
@@ -30,127 +39,6 @@ type LobbyPlayer = RoomState["players"][number];
 
 const GITHUB_URL = "https://github.com/FHRha";
 
-function clampInt(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min;
-  return Math.max(min, Math.min(max, Math.round(value)));
-}
-
-function normalizeVotesByRound(votes: number[]): number[] {
-  const normalized = votes.map((value) => clampInt(value, 0, 9));
-  if (normalized.length === 0) {
-    return [0];
-  }
-  return normalized;
-}
-
-function sumVotes(votes: number[]): number {
-  return votes.reduce((acc, value) => acc + value, 0);
-}
-
-function fitVotesByTotal(votes: number[], requiredVotes: number): number[] {
-  const next = normalizeVotesByRound(votes);
-  const target = clampInt(requiredVotes, 0, 64);
-  const roundsCount = next.length;
-  let diff = target - sumVotes(next);
-
-  if (diff > 0 && roundsCount > 0) {
-    while (diff > 0) {
-      let changedInCycle = false;
-      for (let step = 0; step < roundsCount && diff > 0; step += 1) {
-        const index = roundsCount - 1 - step;
-        if (next[index] >= 9) continue;
-        next[index] += 1;
-        diff -= 1;
-        changedInCycle = true;
-      }
-      if (!changedInCycle) {
-        break;
-      }
-    }
-    return next;
-  }
-
-  if (diff < 0 && roundsCount > 0) {
-    let remainingToRemove = Math.abs(diff);
-    while (remainingToRemove > 0) {
-      let changedInCycle = false;
-      for (let step = 0; step < roundsCount && remainingToRemove > 0; step += 1) {
-        const index = roundsCount - 1 - step;
-        if (next[index] <= 0) continue;
-        next[index] -= 1;
-        remainingToRemove -= 1;
-        changedInCycle = true;
-      }
-      if (!changedInCycle) {
-        break;
-      }
-    }
-  }
-
-  return next;
-}
-
-function generateVotesByDefault(requiredVotes: number, currentVotes: number[]): number[] {
-  const target = clampInt(requiredVotes, 0, 64);
-  const current = normalizeVotesByRound(currentVotes);
-  const leadingZeroCount = (() => {
-    let count = 0;
-    for (const value of current) {
-      if (value !== 0) break;
-      count += 1;
-    }
-    return count;
-  })();
-  const minLength = Math.max(1, current.length, leadingZeroCount + target);
-  const generated: number[] = Array.from({ length: minLength }, () => 0);
-  let remaining = target;
-  for (let index = leadingZeroCount; index < generated.length && remaining > 0; index += 1) {
-    generated[index] = Math.min(1, remaining);
-    remaining -= generated[index];
-  }
-  while (remaining > 0) {
-    const add = Math.min(1, remaining);
-    generated.push(add);
-    remaining -= add;
-  }
-  if (generated.length === 0) {
-    generated.push(0);
-  }
-  return generated;
-}
-
-function parseVotesSchedule(text: string): number[] {
-  const tokens = text
-    .split(/[\/,\s]+/g)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
-  if (tokens.length === 0) {
-    return [0];
-  }
-  return tokens.map((token) => {
-    const value = Number(token);
-    if (!Number.isFinite(value)) return 0;
-    return clampInt(value, 0, 9);
-  });
-}
-
-function buildRevealPlan(roundsCount: number, targetReveals: number): number[] {
-  const rounds = Math.max(1, clampInt(roundsCount, 1, 64));
-  const target = clampInt(targetReveals, 5, 7);
-  const plan = Array.from({ length: rounds }, () => 0);
-  const baseOnes = Math.min(rounds, target);
-  for (let index = 0; index < baseOnes; index += 1) {
-    plan[index] = 1;
-  }
-  let remaining = target - baseOnes;
-  for (let index = rounds - 1; index >= 0 && remaining > 0; index -= 1) {
-    if (plan[index] >= 2) continue;
-    plan[index] += 1;
-    remaining -= 1;
-  }
-  return plan;
-}
-
 function hasSuspiciousPlayerNameChars(value: string): boolean {
   return /[\u0000-\u001f\u007f]/.test(value);
 }
@@ -160,7 +48,8 @@ function getSafePlayerName(
   fallbackName: string
 ): string {
   const trimmed = typeof playerName === "string" ? playerName.trim() : "";
-  return trimmed || fallbackName;
+  if (!trimmed || hasSuspiciousPlayerNameChars(trimmed)) return fallbackName;
+  return trimmed;
 }
 
 export default function LobbyPage({
@@ -188,17 +77,7 @@ export default function LobbyPage({
     "game",
   ]);
   const lobbyTexts = useUiLocaleNamespace("lobby", {
-    fallbacks: [
-      "common",
-      "room-settings",
-      "rules",
-      "format",
-      "maps",
-      "dev",
-      "reconnect",
-      "misc",
-      "game",
-    ],
+    fallbacks: ["common", "room-settings", "rules", "format", "maps", "dev", "reconnect", "misc", "game"],
   });
   const lobbyLocale = useMemo(() => {
     const rawPresetOptions = lobbyTexts.getRaw("rulesPresetOptions");
@@ -210,14 +89,7 @@ export default function LobbyPage({
       authorGithubAria: lobbyTexts.t("authorGithubAria"),
       authorGithubLabel: lobbyTexts.t("authorGithubLabel"),
       controlMarker: lobbyTexts.t("controlMarker"),
-      copiedButton: lobbyTexts.t("copiedButton"),
-      copyButton: lobbyTexts.t("copyButton"),
-      copyFailed: lobbyTexts.t("copyFailed"),
       devKickNoTargets: lobbyTexts.t("devKickNoTargets"),
-      externalLabel: lobbyTexts.t("externalLabel"),
-      externalLinksHint: lobbyTexts.t("externalLinksHint"),
-      hiddenValue: lobbyTexts.t("hiddenValue"),
-      hideSecret: lobbyTexts.t("hideSecret"),
       hostMarker: lobbyTexts.t("hostMarker"),
       hostOnlyHint: lobbyTexts.t("hostOnlyHint"),
       lobbyKickAgreeLabel: lobbyTexts.t("lobbyKickAgreeLabel"),
@@ -241,7 +113,6 @@ export default function LobbyPage({
       maxPlayersHint: lobbyTexts.t("maxPlayersHint"),
       modalCancel: lobbyTexts.t("modalCancel"),
       offlineMarker: lobbyTexts.t("offlineMarker"),
-      openButton: lobbyTexts.t("openButton"),
       playersTitle: lobbyTexts.t("playersTitle"),
       rulesButtonShort: lobbyTexts.t("rulesButtonShort"),
       rulesModeAuto: lobbyTexts.t("rulesModeAuto"),
@@ -282,7 +153,6 @@ export default function LobbyPage({
       settingsThreatTipText: lobbyTexts.t("settingsThreatTipText"),
       settingsTimersBlock: lobbyTexts.t("settingsTimersBlock"),
       settingsTitle: lobbyTexts.t("settingsTitle"),
-      showSecret: lobbyTexts.t("showSecret"),
       startButton: lobbyTexts.t("startButton"),
       transferHostButton: lobbyTexts.t("transferHostButton"),
       transferHostSelectPlaceholder: lobbyTexts.t("transferHostSelectPlaceholder"),
@@ -312,7 +182,6 @@ export default function LobbyPage({
   const [rulesOpen, setRulesOpen] = useState(false);
 
   const canControl = Boolean(isControl);
-  const roomCode = roomState?.roomCode ?? "";
   const controlsDisabled = !wsInteractive;
 
   useEffect(() => {
@@ -327,7 +196,7 @@ export default function LobbyPage({
     }
     const candidateIds = roomState.players
       .map((player) => player.playerId)
-      .filter((playerId) => playerId !== roomState.hostId);
+      .filter((nextPlayerId) => nextPlayerId !== roomState.hostId);
     setTransferHostTargetId((prev) => (candidateIds.includes(prev) ? prev : candidateIds[0] ?? ""));
   }, [roomState?.players, roomState?.hostId]);
 
@@ -338,7 +207,7 @@ export default function LobbyPage({
     }
     const candidateIds = roomState.players
       .map((player) => player.playerId)
-      .filter((playerId) => playerId !== roomState.controlId);
+      .filter((nextPlayerId) => nextPlayerId !== roomState.controlId);
     setKickTargetId((prev) => (candidateIds.includes(prev) ? prev : candidateIds[0] ?? ""));
     if (candidateIds.length === 0) {
       setKickAgree(false);
@@ -377,7 +246,14 @@ export default function LobbyPage({
   }
 
   const settings = draft ?? roomState.settings;
-  const disasterOptions = roomState.disasterOptions ?? [];
+  const disasterOptions = useMemo(
+    () =>
+      (roomState.disasterOptions ?? []).map((option) => ({
+        ...option,
+        title: getLocalizedWorldTitle(lobbyTexts.locale, option),
+      })),
+    [lobbyTexts.locale, roomState.disasterOptions]
+  );
   const supportsForcedDisaster = disasterOptions.length > 0;
   const disasterTitleById = new Map(disasterOptions.map((option) => [option.id, option.title]));
   const normalizedForcedDisasterId =
@@ -509,556 +385,154 @@ export default function LobbyPage({
     <div className={`lobby-page lobbyLayout ${canControl ? "lobby--host" : "lobby--player"}`}>
       <div className="lobbyGrid">
         <div className="lobbyLeftColumn">
-          <section className="lobbyCard lobbyCard--players playersCard">
-            <div className="lobbyCardHeader">
-              <h3 className="lobbyCardTitle">{lobbyLocale.playersTitle}</h3>
-            </div>
-            <div className="lobbyCardBody">
-              <ul className="player-list compact">
-                {visiblePlayers.map((player) => {
-                  const safeName = getLobbyPlayerName(player);
-                  return (
-                    <li key={player.playerId}>
-                      {safeName}
-                      {player.playerId === roomState.hostId ? lobbyLocale.hostMarker : ""}
-                      {player.playerId === roomState.controlId ? lobbyLocale.controlMarker : ""}
-                      {player.connected ? "" : lobbyLocale.offlineMarker}
-                    </li>
-                  );
-                })}
-              </ul>
-              {extraPlayers > 0 ? <div className="muted player-extra">{lobbyLocale.playerExtra(extraPlayers)}</div> : null}
+          <LobbyPlayersCard
+            title={lobbyLocale.playersTitle}
+            visiblePlayers={visiblePlayers}
+            hostId={roomState.hostId}
+            controlId={roomState.controlId}
+            hostMarker={lobbyLocale.hostMarker}
+            controlMarker={lobbyLocale.controlMarker}
+            offlineMarker={lobbyLocale.offlineMarker}
+            extraPlayers={extraPlayers}
+            playerExtraText={extraPlayers > 0 ? lobbyLocale.playerExtra(extraPlayers) : null}
+            canControl={canControl}
+            kickCandidatesCount={kickCandidates.length}
+            kickTitle={lobbyLocale.lobbyKickTitle}
+            kickButton={lobbyLocale.lobbyKickButton}
+            controlsDisabled={controlsDisabled}
+            transferHostTitle={lobbyLocale.transferHostTitle}
+            transferHostTargetId={transferHostTargetId}
+            transferHostCandidates={transferHostCandidates}
+            transferHostSelectPlaceholder={lobbyLocale.transferHostSelectPlaceholder}
+            transferHostButton={lobbyLocale.transferHostButton}
+            startButton={lobbyLocale.startButton}
+            canStart={canStart}
+            isClassic={isClassic}
+            rulesNeedMinPlayers={lobbyLocale.rulesNeedMinPlayers}
+            hostOnlyHint={lobbyLocale.hostOnlyHint}
+            wsHint={wsHint}
+            getLobbyPlayerName={getLobbyPlayerName}
+            onOpenKickModal={() => {
+              if (controlsDisabled) return;
+              setKickAgree(false);
+              setKickModalOpen(true);
+            }}
+            onTransferHostTargetChange={setTransferHostTargetId}
+            onTransferHost={onTransferHost}
+            onStart={() => {
+              if (controlsDisabled) return;
+              onStart();
+            }}
+          />
 
-              {canControl && kickCandidates.length > 0 ? (
-                <div className="formRow">
-                  <span>{lobbyLocale.lobbyKickTitle}</span>
-                  <div className="formControlRow">
-                    <button
-                      className="ghost button-small"
-                      disabled={controlsDisabled}
-                      onClick={() => {
-                        if (controlsDisabled) return;
-                        setKickAgree(false);
-                        setKickModalOpen(true);
-                      }}
-                    >
-                      {lobbyLocale.lobbyKickButton}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-
-              {canControl ? (
-                <div className="formRow formRow--transferHost">
-                  <span>{lobbyLocale.transferHostTitle}</span>
-                  <div className="formControlRow formControlRow--transferHost">
-                    <select
-                      value={transferHostTargetId}
-                      disabled={controlsDisabled || transferHostCandidates.length === 0}
-                      onChange={(event) => setTransferHostTargetId(event.target.value)}
-                    >
-                      {transferHostCandidates.length === 0 ? (
-                        <option value="" disabled>
-                          {lobbyLocale.transferHostSelectPlaceholder}
-                        </option>
-                      ) : null}
-                      {transferHostCandidates.map((player) => {
-                        const safeName = getLobbyPlayerName(player);
-                        return (
-                          <option key={player.playerId} value={player.playerId}>
-                            {safeName}
-                            {player.playerId === roomState.controlId ? lobbyLocale.controlMarker : ""}
-                          </option>
-                        );
-                      })}
-                    </select>
-                    <button
-                      className="ghost button-small"
-                      disabled={!transferHostTargetId || controlsDisabled || transferHostCandidates.length === 0}
-                      onClick={() => {
-                        if (controlsDisabled) return;
-                        if (!transferHostTargetId) return;
-                        onTransferHost(transferHostTargetId);
-                      }}
-                    >
-                      {lobbyLocale.transferHostButton}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-
-              {canControl ? (
-                <div className="start-row">
-                  <button
-                    className="primary button-small"
-                    disabled={!canStart || controlsDisabled}
-                    onClick={() => {
-                      if (controlsDisabled) return;
-                      onStart();
-                    }}
-                  >
-                    {lobbyLocale.startButton}
-                  </button>
-                  {!canStart && isClassic ? <span className="muted">{lobbyLocale.rulesNeedMinPlayers}</span> : null}
-                  {wsHint ? <span className="muted wsDisabledHint">{wsHint}</span> : null}
-                </div>
-              ) : (
-                <div className="muted playerOnlyHint">{lobbyLocale.hostOnlyHint}</div>
-              )}
-            </div>
-          </section>
-
-          <section className="lobbyCard lobbyCard--rules rulesCard">
-            <div className="lobbyCardHeader">
-              <h3 className="lobbyCardTitle">{lobbyLocale.rulesTitle}</h3>
-            </div>
-            <div className="lobbyCardBody">
-              <div className="rulesTop">
-                <div className="lobbyMetaLine">
-                  <span className="muted">{lobbyLocale.scenarioLabel(roomState.scenarioMeta.name)}</span>
-                </div>
-                <div className="rulesModeBox">
-                  <div className="rulesModeLabel">{lobbyLocale.rulesModeLabel}</div>
-                  {canControl && isClassic ? (
-                    <select
-                      className="rulesModeSelect"
-                      value={rulesMode}
-                      disabled={controlsDisabled}
-                      onChange={(event) => applyRulesMode(event.target.value as "auto" | "manual")}
-                    >
-                      <option value="auto">{lobbyLocale.rulesModeAuto}</option>
-                      <option value="manual">{lobbyLocale.rulesModeManual}</option>
-                    </select>
-                  ) : (
-                    <div className="rulesModeValue">{rulesModeText}</div>
-                  )}
-                </div>
-              </div>
-              <div className="rulesStats">
-                <div className="ruleCell">{lobbyLocale.rulesPlayers(roomState.players.length)}</div>
-                <div className="ruleCell">{lobbyLocale.rulesSeats(ruleset.bunkerSeats)}</div>
-                <div className="ruleCell ruleCellGhost" aria-hidden="true"></div>
-                <div className="ruleCell">{lobbyLocale.rulesExiles(ruleset.totalExiles)}</div>
-                <div className="ruleCell rulesSpan2">
-                  <span className="ruleFactLabel">{votesLabel}</span>
-                  <span className="ruleFactValue nowrap">{votesValue}</span>
-                </div>
-              </div>
-            </div>
-          </section>
+          <LobbyRulesCard
+            title={lobbyLocale.rulesTitle}
+            scenarioText={lobbyLocale.scenarioLabel(roomState.scenarioMeta.name)}
+            rulesModeLabel={lobbyLocale.rulesModeLabel}
+            canControl={canControl}
+            isClassic={isClassic}
+            rulesMode={rulesMode}
+            rulesModeText={rulesModeText}
+            controlsDisabled={controlsDisabled}
+            rulesModeAuto={lobbyLocale.rulesModeAuto}
+            rulesModeManual={lobbyLocale.rulesModeManual}
+            onApplyRulesMode={applyRulesMode}
+            playersText={lobbyLocale.rulesPlayers(roomState.players.length)}
+            seatsText={lobbyLocale.rulesSeats(ruleset.bunkerSeats)}
+            exilesText={lobbyLocale.rulesExiles(ruleset.totalExiles)}
+            votesLabel={votesLabel}
+            votesValue={votesValue}
+          />
+          {canControl && isClassic && rulesMode === "manual" ? (
+            <LobbyManualRulesCard
+              text={{
+                manualModeTitle: lobbyLocale.manualModeTitle,
+                rulesPresetLabel: lobbyLocale.rulesPresetLabel,
+                manualFillFromTemplate: lobbyLocale.manualFillFromTemplate,
+                manualBunkerSlotsLabel: lobbyLocale.manualBunkerSlotsLabel,
+                manualVotesRequired: lobbyLocale.manualVotesRequired,
+                manualRevealsRequiredLabel: lobbyLocale.manualRevealsRequiredLabel,
+                manualRevealsRecommended: lobbyLocale.manualRevealsRecommended,
+                manualRevealsWarning: lobbyLocale.manualRevealsWarning,
+                manualRevealsPlanLabel: lobbyLocale.manualRevealsPlanLabel,
+                votesByRoundLabel: lobbyLocale.votesByRoundLabel,
+                manualRoundAdd: lobbyLocale.manualRoundAdd,
+                manualRoundRemove: lobbyLocale.manualRoundRemove,
+                manualGenerate: lobbyLocale.manualGenerate,
+                manualVotesFormatHint: lobbyLocale.manualVotesFormatHint,
+                manualVotesSumHint: lobbyLocale.manualVotesSumHint,
+                manualAdjust: lobbyLocale.manualAdjust,
+              }}
+              controlsDisabled={controlsDisabled}
+              manualTemplatePlayers={manualTemplatePlayers}
+              setManualTemplatePlayers={setManualTemplatePlayers}
+              rulesPresetOptions={lobbyLocale.rulesPresetOptions}
+              fillManualFromTemplate={fillManualFromTemplate}
+              manualConfig={manualConfig}
+              requiredVotes={requiredVotes}
+              manualRevealNotRecommended={manualRevealNotRecommended}
+              revealPlanText={revealPlanText}
+              updateManualConfig={updateManualConfig}
+              manualVotesInput={manualVotesInput}
+              setManualVotesInput={setManualVotesInput}
+              parseVotesSchedule={parseVotesSchedule}
+              generateVotesByDefault={generateVotesByDefault}
+              fitVotesByTotal={fitVotesByTotal}
+              manualVotesMismatch={manualVotesMismatch}
+              manualVotesSum={manualVotesSum}
+              wsHint={wsHint}
+            />
+          ) : null}
         </div>
 
         <div className="lobbyRightColumn">
-          <section className="lobbyCard lobbyCard--settings settingsCard">
-            <div className="lobbyCardHeader">
-              <h3 className="lobbyCardTitle">{lobbyLocale.settingsTitle}</h3>
-            </div>
-            <div className="lobbyCardBody">
-              {canControl ? (
-                <fieldset className="settingsFieldset" disabled={controlsDisabled}>
-                  <div className="settings-grid compact">
-                  <div className="settings-section-title">{lobbyLocale.settingsTimersBlock}</div>
-                  <label className="formRow settingsRow--timer">
-                    <span className="settingsLabel">{lobbyLocale.settingsRevealDiscussionTimer}</span>
-                    <div className="formControlRow settingsControls">
-                      <input
-                        type="checkbox"
-                        checked={settings.enableRevealDiscussionTimer}
-                        onChange={(event) => updateField("enableRevealDiscussionTimer", event.target.checked)}
-                      />
-                      <input
-                        type="number"
-                        min={5}
-                        max={600}
-                        value={settings.revealDiscussionSeconds}
-                        onChange={(event) =>
-                          updateField("revealDiscussionSeconds", Number(event.target.value))
-                        }
-                      />
-                    </div>
-                  </label>
-                  <label className="formRow settingsRow--timer">
-                    <span className="settingsLabel">{lobbyLocale.settingsPreVoteTimer}</span>
-                    <div className="formControlRow settingsControls">
-                      <input
-                        type="checkbox"
-                        checked={settings.enablePreVoteDiscussionTimer}
-                        onChange={(event) => updateField("enablePreVoteDiscussionTimer", event.target.checked)}
-                      />
-                      <input
-                        type="number"
-                        min={5}
-                        max={600}
-                        value={settings.preVoteDiscussionSeconds}
-                        onChange={(event) =>
-                          updateField("preVoteDiscussionSeconds", Number(event.target.value))
-                        }
-                      />
-                    </div>
-                  </label>
-                  <label className="formRow settingsRow--timer">
-                    <span className="settingsLabel">{lobbyLocale.settingsPostVoteTimer}</span>
-                    <div className="formControlRow settingsControls">
-                      <input
-                        type="checkbox"
-                        checked={settings.enablePostVoteDiscussionTimer}
-                        onChange={(event) => updateField("enablePostVoteDiscussionTimer", event.target.checked)}
-                      />
-                      <input
-                        type="number"
-                        min={5}
-                        max={600}
-                        value={settings.postVoteDiscussionSeconds}
-                        onChange={(event) =>
-                          updateField("postVoteDiscussionSeconds", Number(event.target.value))
-                        }
-                      />
-                    </div>
-                  </label>
-                  <div className="settings-section-title">{lobbyLocale.settingsOtherBlock}</div>
-                  <label className="formRow">
-                    <span className="settingsLabelWithTip">
-                      <span>{lobbyLocale.settingsAutomationMode}</span>
-                      <InfoTip text={lobbyLocale.settingsAutomationModeHint} />
-                    </span>
-                    <select
-                      value={settings.automationMode}
-                      onChange={(event) =>
-                        updateAutomationMode(event.target.value as GameSettings["automationMode"])
-                      }
-                    >
-                      <option value="auto">{lobbyLocale.settingsAutomationAuto}</option>
-                      <option value="semi">{lobbyLocale.settingsAutomationSemi}</option>
-                      <option value="manual">{lobbyLocale.settingsAutomationManual}</option>
-                    </select>
-                  </label>
-                  <label className="formRow">
-                    <span className="settingsLabelWithTip">
-                      <span>{lobbyLocale.settingsContinuePermission}</span>
-                      <InfoTip text={continueTipText} />
-                    </span>
-                    <select
-                      value={settings.continuePermission}
-                      onChange={(event) =>
-                        updateField(
-                          "continuePermission",
-                          event.target.value as GameSettings["continuePermission"]
-                        )
-                      }
-                    >
-                      <option value="host_only">{lobbyLocale.settingsContinueHost}</option>
-                      <option value="revealer_only">{lobbyLocale.settingsContinueRevealer}</option>
-                      <option value="anyone">{lobbyLocale.settingsContinueAnyone}</option>
-                    </select>
-                  </label>
-                  <label className="formRow">
-                    <span>{lobbyLocale.settingsRevealTimeoutAction}</span>
-                    <select
-                      value={settings.revealTimeoutAction}
-                      onChange={(event) =>
-                        updateField(
-                          "revealTimeoutAction",
-                          event.target.value as GameSettings["revealTimeoutAction"]
-                        )
-                      }
-                    >
-                      <option value="random_card">{lobbyLocale.settingsRevealTimeoutRandom}</option>
-                      <option value="skip_player">{lobbyLocale.settingsRevealTimeoutSkip}</option>
-                    </select>
-                  </label>
-                  <label className="formRow">
-                    <span>{lobbyLocale.settingsSpecialUsage}</span>
-                    <select
-                      value={settings.specialUsage}
-                      onChange={(event) =>
-                        updateField("specialUsage", event.target.value as GameSettings["specialUsage"])
-                      }
-                    >
-                      <option value="anytime">{lobbyLocale.settingsSpecialAnytime}</option>
-                      <option value="only_during_voting">{lobbyLocale.settingsSpecialVotingOnly}</option>
-                    </select>
-                  </label>
-                  <label className="formRow">
-                    <span className="settingsLabelWithTip">
-                      <span>{lobbyLocale.settingsFinalThreatReveal}</span>
-                      <InfoTip text={threatTipText} />
-                    </span>
-                    <select
-                      value={settings.finalThreatReveal}
-                      onChange={(event) =>
-                        updateField(
-                          "finalThreatReveal",
-                          event.target.value as GameSettings["finalThreatReveal"]
-                        )
-                      }
-                    >
-                      <option value="host">{lobbyLocale.settingsThreatHost}</option>
-                      <option value="anyone">{lobbyLocale.settingsThreatAnyone}</option>
-                    </select>
-                  </label>
-                  {supportsForcedDisaster ? (
-                    <label className="formRow">
-                      <span>{lobbyLocale.settingsForcedDisaster}</span>
-                      <select
-                        value={normalizedForcedDisasterId}
-                        onChange={(event) => updateField("forcedDisasterId", event.target.value)}
-                      >
-                        <option value="random">{lobbyLocale.settingsForcedDisasterRandom}</option>
-                        {disasterOptions.map((option) => (
-                          <option key={option.id} value={option.id}>
-                            {option.title}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-                  <label className="formRow">
-                    <span>{lobbyLocale.settingsMaxPlayers}</span>
-                    <div className="settingsMaxPlayersControl">
-                      <input
-                        type="number"
-                        min={minPlayersLimit}
-                        max={16}
-                        value={settings.maxPlayers}
-                        onChange={(event) =>
-                          updateField(
-                            "maxPlayers",
-                            clampInt(Number(event.target.value), minPlayersLimit, 16)
-                          )
-                        }
-                      />
-                      <small className="muted">{lobbyLocale.maxPlayersHint}</small>
-                    </div>
-                  </label>
-                </div>
-                </fieldset>
-              ) : (
-                <div className="settings-readonly compact">
-                  <div>
-                    {lobbyLocale.settingsAutomationMode}:{" "}
-                    {settings.automationMode === "manual"
-                      ? lobbyLocale.settingsAutomationManual
-                      : settings.automationMode === "semi"
-                        ? lobbyLocale.settingsAutomationSemi
-                        : lobbyLocale.settingsAutomationAuto}
-                  </div>
-                  <div>
-                  </div>
-                  <div>
-                    {lobbyLocale.settingsRevealDiscussionTimer}:{" "}
-                    {settings.enableRevealDiscussionTimer ? lobbyLocale.settingsOn : lobbyLocale.settingsOff} (
-                    {settings.revealDiscussionSeconds}s)
-                  </div>
-                  <div>
-                    {lobbyLocale.settingsPreVoteTimer}: {settings.enablePreVoteDiscussionTimer ? lobbyLocale.settingsOn : lobbyLocale.settingsOff} (
-                    {settings.preVoteDiscussionSeconds}s)
-                  </div>
-                  <div>
-                    {lobbyLocale.settingsPostVoteTimer}: {settings.enablePostVoteDiscussionTimer ? lobbyLocale.settingsOn : lobbyLocale.settingsOff} (
-                    {settings.postVoteDiscussionSeconds}s)
-                  </div>
-                  <div>
-                    {lobbyLocale.settingsContinuePermission}:{" "}
-                    {settings.continuePermission === "host_only"
-                      ? lobbyLocale.settingsContinueHost
-                      : settings.continuePermission === "revealer_only"
-                        ? lobbyLocale.settingsContinueRevealer
-                        : lobbyLocale.settingsContinueAnyone}
-                  </div>
-                  <div>
-                    {lobbyLocale.settingsRevealTimeoutAction}:{" "}
-                    {settings.revealTimeoutAction === "random_card" ? lobbyLocale.settingsRevealTimeoutRandom : lobbyLocale.settingsRevealTimeoutSkip}
-                  </div>
-                  <div>
-                    {lobbyLocale.settingsSpecialUsage}: {settings.specialUsage === "anytime" ? lobbyLocale.settingsSpecialAnytime : lobbyLocale.settingsSpecialVotingOnly}
-                  </div>
-                  <div>
-                    {lobbyLocale.settingsFinalThreatReveal}:{" "}
-                    {settings.finalThreatReveal === "anyone" ? lobbyLocale.settingsThreatAnyone : lobbyLocale.settingsThreatHost}
-                  </div>
-                  {supportsForcedDisaster ? (
-                    <div>
-                      {lobbyLocale.settingsForcedDisaster}: {forcedDisasterTitle}
-                    </div>
-                  ) : null}
-                  <div>
-                    {lobbyLocale.settingsMaxPlayers}: {settings.maxPlayers}
-                  </div>
-                </div>
-              )}
-              {canControl && wsHint ? <div className="muted wsDisabledHint">{wsHint}</div> : null}
-            </div>
-          </section>
-          {canControl && isClassic && rulesMode === "manual" ? (
-            <section className="lobbyCard lobbyCard--manual manualCard">
-              <div className="lobbyCardHeader">
-                <h3 className="lobbyCardTitle">{lobbyLocale.manualModeTitle}</h3>
-              </div>
-              <div className="lobbyCardBody">
-                <fieldset className="settingsFieldset" disabled={controlsDisabled}>
-                <div className="manualRulesBuilder">
-                  <div className="manualRulesRow">
-                    <label>
-                      <span>{lobbyLocale.rulesPresetLabel}</span>
-                      <select
-                        value={manualTemplatePlayers}
-                        onChange={(event) => setManualTemplatePlayers(Number(event.target.value))}
-                      >
-                        {lobbyLocale.rulesPresetOptions.map((count) => (
-                          <option key={count} value={count}>
-                            {count}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button className="ghost button-small" onClick={fillManualFromTemplate}>
-                      {lobbyLocale.manualFillFromTemplate}
-                    </button>
-                  </div>
-
-                  <div className="manualRulesRow manualRulesRow3Wide">
-                    <label>
-                      <span>{lobbyLocale.manualBunkerSlotsLabel}</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={16}
-                        value={manualConfig.bunkerSlots}
-                        onChange={(event) =>
-                          updateManualConfig({ bunkerSlots: Number(event.target.value) })
-                        }
-                      />
-                    </label>
-                    <div className="manualRequiredVotes" aria-live="polite">
-                      {lobbyLocale.manualVotesRequired(requiredVotes)}
-                    </div>
-                    <label className="manualRevealTargetField">
-                      <span>{lobbyLocale.manualRevealsRequiredLabel}</span>
-                      <select
-                        value={manualConfig.targetReveals}
-                        onChange={(event) =>
-                          updateManualConfig({ targetReveals: Number(event.target.value) })
-                        }
-                      >
-                        <option value={5}>5</option>
-                        <option value={6}>6</option>
-                        <option value={7}>7</option>
-                      </select>
-                    </label>
-                  </div>
-
-                  <div className="manualRevealMeta">
-                    <div className="manualRevealHint">
-                      {lobbyLocale.manualRevealsRecommended}
-                    </div>
-                    {manualRevealNotRecommended ? (
-                      <div className="manualRevealWarning">
-                        {lobbyLocale.manualRevealsWarning}
-                      </div>
-                    ) : null}
-                    <div className="manualRevealPlan">
-                      {lobbyLocale.manualRevealsPlanLabel} <span className="nowrap">{revealPlanText}</span>
-                    </div>
-                  </div>
-
-                  <div className="manualVotesHeader">
-                    <div>{lobbyLocale.votesByRoundLabel}</div>
-                    <div className="manualVotesActions">
-                      <button
-                        className="ghost button-small"
-                        onClick={() =>
-                          updateManualConfig({
-                            votesByRound: [...manualConfig.votesByRound, 0],
-                          })
-                        }
-                      >
-                        {lobbyLocale.manualRoundAdd}
-                      </button>
-                      <button
-                        className="ghost button-small"
-                        disabled={manualConfig.votesByRound.length <= 1}
-                        onClick={() =>
-                          updateManualConfig({
-                            votesByRound: manualConfig.votesByRound.slice(
-                              0,
-                              Math.max(1, manualConfig.votesByRound.length - 1)
-                            ),
-                          })
-                        }
-                      >
-                        {lobbyLocale.manualRoundRemove}
-                      </button>
-                      <button
-                        className="ghost button-small"
-                        onClick={() =>
-                          updateManualConfig({
-                            votesByRound: generateVotesByDefault(
-                              requiredVotes,
-                              manualConfig.votesByRound
-                            ),
-                          })
-                        }
-                      >
-                        {lobbyLocale.manualGenerate}
-                      </button>
-                    </div>
-                  </div>
-
-                  <label className="manualVotesTextField">
-                    <span>{lobbyLocale.manualVotesFormatHint}</span>
-                    <input
-                      type="text"
-                      value={manualVotesInput}
-                      onChange={(event) => {
-                        const text = event.target.value;
-                        setManualVotesInput(text);
-                        updateManualConfig({ votesByRound: parseVotesSchedule(text) });
-                      }}
-                    />
-                  </label>
-
-                  <div className="manualVotesInputs">
-                    {manualConfig.votesByRound.map((votes, index) => (
-                      <label key={`round-${index}`} className="manualVoteCell">
-                        <span>R{index + 1}</span>
-                        <input
-                          type="number"
-                          min={0}
-                          max={9}
-                          value={votes}
-                          onChange={(event) => {
-                            const next = [...manualConfig.votesByRound];
-                            next[index] = Number(event.target.value);
-                            updateManualConfig({ votesByRound: next });
-                          }}
-                        />
-                      </label>
-                    ))}
-                  </div>
-
-                  <div className={`manualVotesSummary${manualVotesMismatch ? " warning" : ""}`}>
-                    <span>
-                      {lobbyLocale.manualVotesSumHint(manualVotesSum, requiredVotes)}
-                    </span>
-                    {manualVotesMismatch ? (
-                      <button
-                        className="ghost button-small"
-                        onClick={() =>
-                          updateManualConfig({
-                            votesByRound: fitVotesByTotal(manualConfig.votesByRound, requiredVotes),
-                          })
-                        }
-                      >
-                        {lobbyLocale.manualAdjust}
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-                </fieldset>
-                {wsHint ? <div className="muted wsDisabledHint">{wsHint}</div> : null}
-              </div>
-            </section>
-          ) : null}
+          <LobbySettingsCard
+            text={{
+              settingsTitle: lobbyLocale.settingsTitle,
+              settingsTimersBlock: lobbyLocale.settingsTimersBlock,
+              settingsRevealDiscussionTimer: lobbyLocale.settingsRevealDiscussionTimer,
+              settingsPreVoteTimer: lobbyLocale.settingsPreVoteTimer,
+              settingsPostVoteTimer: lobbyLocale.settingsPostVoteTimer,
+              settingsOtherBlock: lobbyLocale.settingsOtherBlock,
+              settingsAutomationMode: lobbyLocale.settingsAutomationMode,
+              settingsAutomationModeHint: lobbyLocale.settingsAutomationModeHint,
+              settingsAutomationAuto: lobbyLocale.settingsAutomationAuto,
+              settingsAutomationSemi: lobbyLocale.settingsAutomationSemi,
+              settingsAutomationManual: lobbyLocale.settingsAutomationManual,
+              settingsContinuePermission: lobbyLocale.settingsContinuePermission,
+              settingsContinueHost: lobbyLocale.settingsContinueHost,
+              settingsContinueRevealer: lobbyLocale.settingsContinueRevealer,
+              settingsContinueAnyone: lobbyLocale.settingsContinueAnyone,
+              settingsRevealTimeoutAction: lobbyLocale.settingsRevealTimeoutAction,
+              settingsRevealTimeoutRandom: lobbyLocale.settingsRevealTimeoutRandom,
+              settingsRevealTimeoutSkip: lobbyLocale.settingsRevealTimeoutSkip,
+              settingsSpecialUsage: lobbyLocale.settingsSpecialUsage,
+              settingsSpecialAnytime: lobbyLocale.settingsSpecialAnytime,
+              settingsSpecialVotingOnly: lobbyLocale.settingsSpecialVotingOnly,
+              settingsFinalThreatReveal: lobbyLocale.settingsFinalThreatReveal,
+              settingsThreatHost: lobbyLocale.settingsThreatHost,
+              settingsThreatAnyone: lobbyLocale.settingsThreatAnyone,
+              settingsForcedDisaster: lobbyLocale.settingsForcedDisaster,
+              settingsForcedDisasterRandom: lobbyLocale.settingsForcedDisasterRandom,
+              settingsMaxPlayers: lobbyLocale.settingsMaxPlayers,
+              maxPlayersHint: lobbyLocale.maxPlayersHint,
+              settingsOn: lobbyLocale.settingsOn,
+              settingsOff: lobbyLocale.settingsOff,
+            }}
+            canControl={canControl}
+            controlsDisabled={controlsDisabled}
+            settings={settings}
+            continueTipText={continueTipText}
+            threatTipText={threatTipText}
+            supportsForcedDisaster={supportsForcedDisaster}
+            normalizedForcedDisasterId={normalizedForcedDisasterId}
+            disasterOptions={disasterOptions}
+            forcedDisasterTitle={forcedDisasterTitle}
+            minPlayersLimit={minPlayersLimit}
+            wsHint={wsHint}
+            updateField={updateField}
+            updateAutomationMode={updateAutomationMode}
+          />
         </div>
       </div>
       <button className="ghost rulesButton lobbyRulesButton" onClick={() => setRulesOpen(true)}>
@@ -1073,73 +547,33 @@ export default function LobbyPage({
       >
         {lobbyLocale.authorGithubLabel}
       </a>
-      <Modal
+      <LobbyKickModal
         open={kickModalOpen && canControl}
         title={lobbyLocale.lobbyKickTitle}
+        cancelLabel={lobbyLocale.modalCancel}
+        noTargetsLabel={lobbyLocale.devKickNoTargets}
+        selectPlaceholder={lobbyLocale.lobbyKickSelectPlaceholder}
+        agreeLabel={lobbyLocale.lobbyKickAgreeLabel}
+        submitLabel={lobbyLocale.lobbyKickButton}
+        kickCandidates={kickCandidates}
+        kickTargetId={kickTargetId}
+        setKickTargetId={setKickTargetId}
+        kickAgree={kickAgree}
+        setKickAgree={setKickAgree}
+        controlsDisabled={controlsDisabled}
+        getLobbyPlayerName={getLobbyPlayerName}
         onClose={() => {
           setKickModalOpen(false);
           setKickAgree(false);
         }}
-        dismissible={true}
-      >
-        {kickCandidates.length === 0 ? (
-          <div className="muted">{lobbyLocale.devKickNoTargets}</div>
-        ) : (
-          <>
-            <label className="topbar-menu-field">
-              <span>{lobbyLocale.lobbyKickSelectPlaceholder}</span>
-              <select
-                value={kickTargetId}
-                disabled={controlsDisabled}
-                onChange={(event) => setKickTargetId(event.target.value)}
-              >
-                {kickCandidates.map((player) => {
-                  const safeName = getLobbyPlayerName(player);
-                  return (
-                    <option key={player.playerId} value={player.playerId}>
-                      {safeName}
-                    </option>
-                  );
-                })}
-              </select>
-            </label>
-            <label className="topbar-menu-checkbox">
-              <input
-                type="checkbox"
-                checked={kickAgree}
-                onChange={(event) => setKickAgree(event.target.checked)}
-              />
-              <span>{lobbyLocale.lobbyKickAgreeLabel}</span>
-            </label>
-            <div className="modal-actions">
-              <button
-                className="ghost"
-                onClick={() => {
-                  setKickModalOpen(false);
-                  setKickAgree(false);
-                }}
-              >
-                {lobbyLocale.modalCancel}
-              </button>
-              <button
-                className="primary"
-                disabled={!kickTargetId || !kickAgree || controlsDisabled}
-                onClick={() => {
-                  if (controlsDisabled) return;
-                  if (!kickTargetId || !kickAgree) return;
-                  onKickPlayer(kickTargetId, { skipConfirm: true });
-                  setKickModalOpen(false);
-                  setKickAgree(false);
-                }}
-              >
-                {lobbyLocale.lobbyKickButton}
-              </button>
-            </div>
-          </>
-        )}
-      </Modal>
+        onConfirm={(targetPlayerId) => {
+          if (controlsDisabled) return;
+          onKickPlayer(targetPlayerId, { skipConfirm: true });
+          setKickModalOpen(false);
+          setKickAgree(false);
+        }}
+      />
       <RulesModal open={rulesOpen} onClose={() => setRulesOpen(false)} />
     </div>
   );
 }
-

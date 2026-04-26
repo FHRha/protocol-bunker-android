@@ -1,5 +1,5 @@
 import React from "react";
-import { useUiLocaleNamespace, useUiLocaleNamespacesActivation } from "../localization";
+import { useUiLocaleNamespace } from "../localization";
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -11,15 +11,13 @@ interface ErrorBoundaryState {
   errorMessage?: string;
 }
 
-interface ErrorBoundaryText {
-  title: string;
-  unknown: string;
-  reload: string;
-  exit: string;
-}
-
-class ErrorBoundaryImpl extends React.Component<
-  ErrorBoundaryProps & { text: ErrorBoundaryText },
+class ErrorBoundaryInner extends React.Component<
+  ErrorBoundaryProps & {
+    fatalErrorTitle: string;
+    fatalErrorUnknown: string;
+    fatalErrorReload: string;
+    errorScreenExitToMenu: string;
+  },
   ErrorBoundaryState
 > {
   state: ErrorBoundaryState = { hasError: false };
@@ -51,14 +49,14 @@ class ErrorBoundaryImpl extends React.Component<
     return (
       <div className="fatalErrorScreen" role="alert">
         <div className="fatalErrorCard">
-          <h2>{this.props.text.title}</h2>
-          <p className="muted">{this.state.errorMessage ?? this.props.text.unknown}</p>
+          <h2>{this.props.fatalErrorTitle}</h2>
+          <p className="muted">{this.state.errorMessage ?? this.props.fatalErrorUnknown}</p>
           <div className="fatalErrorActions">
             <button className="primary" onClick={this.handleReload}>
-              {this.props.text.reload}
+              {this.props.fatalErrorReload}
             </button>
             <button className="ghost" onClick={this.handleHome}>
-              {this.props.text.exit}
+              {this.props.errorScreenExitToMenu}
             </button>
           </div>
         </div>
@@ -68,14 +66,15 @@ class ErrorBoundaryImpl extends React.Component<
 }
 
 export default function ErrorBoundary(props: ErrorBoundaryProps) {
-  useUiLocaleNamespacesActivation(["reconnect", "misc", "common"]);
-  const locale = useUiLocaleNamespace("reconnect", { fallbacks: ["misc", "common"] });
-  const text: ErrorBoundaryText = {
-    title: locale.t("fatalErrorTitle"),
-    unknown: locale.t("fatalErrorUnknown"),
-    reload: locale.t("fatalErrorReload"),
-    exit: locale.t("errorScreenExitToMenu"),
-  };
+  const text = useUiLocaleNamespace("reconnect", { fallbacks: ["common", "misc"] });
 
-  return <ErrorBoundaryImpl {...props} text={text} />;
+  return (
+    <ErrorBoundaryInner
+      {...props}
+      fatalErrorTitle={text.t("fatalErrorTitle")}
+      fatalErrorUnknown={text.t("fatalErrorUnknown")}
+      fatalErrorReload={text.t("fatalErrorReload")}
+      errorScreenExitToMenu={text.t("errorScreenExitToMenu")}
+    />
+  );
 }

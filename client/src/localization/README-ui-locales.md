@@ -15,6 +15,7 @@
 - `locales/ui/voting`
 - `locales/ui/special`
 - `locales/ui/host-menu`
+- `locales/ui/overlay-links`
 - `locales/ui/reconnect`
 - `locales/ui/room-settings`
 - `locales/ui/rules`
@@ -127,6 +128,7 @@ Hook для активации нужных namespace на уровне стра
 useUiLocaleNamespacesActivation([
   "common",
   "lobby",
+  "overlay-links",
   "room-settings",
 ]);
 ```

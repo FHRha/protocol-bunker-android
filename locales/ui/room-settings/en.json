@@ -1,7 +1,10 @@
 {
   "settingsTitle": "Game settings",
+  "streamerModeLabel": "Hide room code",
   "settingsTimersBlock": "Timers",
   "settingsOtherBlock": "Other",
+  "settingsPresenterMode": "Host mode",
+  "settingsPresenterModeHint": "Phase/voting control via Overlay Control.",
   "settingsAutomationMode": "Round automation mode",
   "settingsAutomationModeHint": "Modes are presets. Timer toggles can be changed in any mode, but auto-start works only in Auto.",
   "settingsAutomationAuto": "Auto",
@@ -41,6 +44,7 @@
   "settingsConfirmExit": "Confirm game exit",
   "settingsCompactMode": "Compact UI mode",
   "settingsAutoCopyRoomCode": "Auto-copy room code",
+  "settingsShowSpectatorLinks": "Show spectator links",
   "settingsShowHints": "Show gameplay hints",
   "settingsResetUi": "Reset UI settings",
   "settingsLocaleSectionTitle": "Localization",

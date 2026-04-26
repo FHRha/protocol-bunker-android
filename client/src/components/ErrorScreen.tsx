@@ -1,11 +1,10 @@
-import { useUiLocaleNamespace, useUiLocaleNamespacesActivation } from "../localization";
+import { useUiLocaleNamespace } from "../localization";
 
 interface ErrorScreenProps {
   message: string;
   canRetry: boolean;
   reconnecting?: boolean;
   onRetry: () => void;
-  onExitToMenu: () => void;
 }
 
 export default function ErrorScreen({
@@ -13,10 +12,8 @@ export default function ErrorScreen({
   canRetry,
   reconnecting = false,
   onRetry,
-  onExitToMenu,
 }: ErrorScreenProps) {
-  useUiLocaleNamespacesActivation(["reconnect", "misc", "common"]);
-  const text = useUiLocaleNamespace("reconnect", { fallbacks: ["misc", "common"] });
+  const text = useUiLocaleNamespace("reconnect", { fallbacks: ["common"] });
 
   return (
     <div className="errorScreen" role="alert">
@@ -30,9 +27,6 @@ export default function ErrorScreen({
               {text.t("retryButton")}
             </button>
           ) : null}
-          <button className="ghost" onClick={onExitToMenu}>
-            {text.t("errorScreenExitToMenu")}
-          </button>
         </div>
       </div>
     </div>

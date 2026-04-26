@@ -1,5 +1,6 @@
 export interface GameHintsText {
   hintWsOffline: string;
+  hintObserverMode: string;
   hintRoundStartReveal: string;
   hintOpenVoteModal: string;
   hintVoteAlreadyDone: string;
@@ -53,6 +54,24 @@ export function buildGameContextHints(params: BuildGameHintsParams, textSource: 
       id: "ws-offline",
       text: textSource.hintWsOffline,
       level: "warning",
+    });
+    return hints;
+  }
+
+  if (params.postGameActive && params.canDecidePostGameOutcome) {
+    pushHint(hints, {
+      id: "decide-outcome",
+      text: textSource.hintDecideOutcome,
+      level: "action",
+    });
+    return hints;
+  }
+
+  if (params.youStatus !== "alive") {
+    pushHint(hints, {
+      id: "observer-mode",
+      text: textSource.hintObserverMode,
+      level: "info",
     });
     return hints;
   }
@@ -138,15 +157,6 @@ export function buildGameContextHints(params: BuildGameHintsParams, textSource: 
     });
   }
 
-  if (params.postGameActive && params.canDecidePostGameOutcome) {
-    pushHint(hints, {
-      id: "decide-outcome",
-      text: textSource.hintDecideOutcome,
-      level: "action",
-    });
-  }
-
   return hints.slice(0, 2);
 }
-
 

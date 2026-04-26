@@ -358,7 +358,7 @@ func TestGameSession_ApplySpecial_DiscardBunkerCard_AllowsRandomTarget(t *testin
 	if !result.StateChanged {
 		t.Fatalf("expected state changed")
 	}
-	if g.World.Bunker[0].Title != "Карта бункера потеряна" {
+	if g.World.Bunker[0].Title != "Bunker card lost" {
 		t.Fatalf("unexpected discard title: %q", g.World.Bunker[0].Title)
 	}
 	if g.World.Bunker[0].ImageID != "" {
@@ -1016,3 +1016,4 @@ func TestBuildPublicCategories_SpecialRevealedCardUsesFace(t *testing.T) {
 		t.Fatalf("unexpected special back category: %q", card.BackCategory)
 	}
 }
+

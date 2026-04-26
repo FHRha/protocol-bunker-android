@@ -31,6 +31,7 @@
   "playerExtra": "+ {count} more",
   "manualVotesRequired": "Required exiles: {count}",
   "manualVotesSumHint": "Total exiles: {sum} / required {required}",
+  "overlayReconnectIn": "Retrying in {seconds}s",
   "tableWorldBunkerLabel": "Bunker: {revealed}/{total}",
   "tableWorldDisasterLabel": "Disaster: {title}",
   "specialDialogHiddenCard": "Hidden card #{index}",
@@ -47,5 +48,6 @@
   "devCheckCards": "cards: {count}",
   "devCheckBunkerCountNotSet": "not set, total={total}",
   "devCheckCropped": "cropped: {count}",
-  "devCheckMissingHint": "missing {expected}; got: {actual}"
+  "devCheckMissingHint": "missing {expected}; got: {actual}",
+  "spectatorInlineMeta": "Status: {status} — Players: {players}"
 }

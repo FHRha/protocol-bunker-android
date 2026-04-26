@@ -1,7 +1,10 @@
 {
   "settingsTitle": "Настройки игры",
+  "streamerModeLabel": "Скрывать код комнаты",
   "settingsTimersBlock": "Таймеры",
   "settingsOtherBlock": "Прочее",
+  "settingsPresenterMode": "Ведущий",
+  "settingsPresenterModeHint": "Управление фазами и голосованием через Управление оверлеем.",
   "settingsAutomationMode": "Автоматизация раунда",
   "settingsAutomationModeHint": "Режимы — это пресеты. Флаги таймеров можно менять в любом режиме, но автозапуск таймеров работает только в «Авто».",
   "settingsAutomationAuto": "Авто",
@@ -41,6 +44,7 @@
   "settingsConfirmExit": "Подтверждать выход из игры",
   "settingsCompactMode": "Компактный режим интерфейса",
   "settingsAutoCopyRoomCode": "Автоматически копировать код комнаты",
+  "settingsShowSpectatorLinks": "Показывать ссылки зрителя",
   "settingsShowHints": "Показывать игровые подсказки",
   "settingsResetUi": "Сбросить настройки интерфейса",
   "settingsLocaleSectionTitle": "Локализация",

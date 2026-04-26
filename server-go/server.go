@@ -252,7 +252,7 @@ func (s *server) isValidDisasterIDLocked(disasterID, locale string) bool {
 		return true
 	}
 	for _, card := range s.disasterDeckCardsLocked(locale) {
-		if card.ID == target {
+		if card.ID == target || localeInvariantAssetID(card.ID) == localeInvariantAssetID(target) {
 			return true
 		}
 	}
@@ -266,13 +266,13 @@ func (s *server) buildDisasterOptionsLocked(locale string) []worldCardView {
 	}
 	options := make([]worldCardView, 0, len(cards))
 	for _, card := range cards {
-		options = append(options, worldCardView{
+		options = append(options, localizeWorldCard(locale, worldCardView{
 			Kind:        "disaster",
 			ID:          card.ID,
 			Title:       card.Label,
 			Description: card.Label,
 			ImageID:     card.ID,
-		})
+		}))
 	}
 	return options
 }
@@ -286,7 +286,7 @@ func (s *server) selectedDisasterCardByIDLocked(disasterID, locale string) (asse
 		return assetCard{}, false
 	}
 	for _, card := range s.disasterDeckCardsLocked(locale) {
-		if card.ID == target {
+		if card.ID == target || localeInvariantAssetID(card.ID) == localeInvariantAssetID(target) {
 			return card, true
 		}
 	}
@@ -381,8 +381,8 @@ func formatServerTemplate(template string, vars map[string]any) string {
 	out := template
 	for key, value := range vars {
 		replacement := fmt.Sprint(value)
-		out = strings.ReplaceAll(out, "{"+key+"}", replacement)
 		out = strings.ReplaceAll(out, "{{"+key+"}}", replacement)
+		out = strings.ReplaceAll(out, "{"+key+"}", replacement)
 	}
 	return out
 }
@@ -390,9 +390,36 @@ func formatServerTemplate(template string, vars map[string]any) string {
 func serverLocaleMessage(room *room, key, fallback string, vars map[string]any) string {
 	locale := "ru"
 	if room != nil {
-		locale = room.Settings.CardLocale
+		locale = roomHostLocale(room)
 	}
 	return formatServerTemplate(serverText(locale, key, fallback), vars)
+}
+
+func roomHostLocale(room *room) string {
+	if room == nil {
+		return "ru"
+	}
+	if host := room.Players[room.HostID]; host != nil && strings.TrimSpace(host.Locale) != "" {
+		return normalizeCardLocale(host.Locale)
+	}
+	return "ru"
+}
+
+func getPlayerCardLocale(player *player) string {
+	if player == nil {
+		return "ru"
+	}
+	return normalizeCardLocale(player.Locale)
+}
+
+func (s *server) connLocaleLocked(conn *websocket.Conn, room *room) string {
+	if room != nil {
+		if _, playerID := s.roomAndPlayerByConnLocked(conn); playerID != "" {
+			return getPlayerCardLocale(room.Players[playerID])
+		}
+		return roomHostLocale(room)
+	}
+	return "ru"
 }
 
 func serverErrorLocaleKey(payloadKey, code string) string {
@@ -817,7 +844,7 @@ func (s *server) handleHelloLocked(conn *websocket.Conn, payload map[string]any)
 		s.writeWSLocked(conn, wsServerMessage{
 			Type: "error",
 			Payload: map[string]any{
-				"message":    serverLocaleMessage(room, "error.roomFull", fmt.Sprintf("Room is full (max %d).", maxPlayers), map[string]any{"maxPlayers": maxPlayers}),
+				"message":    formatServerTemplate(serverText(normalizeCardLocale(hello.Locale), "error.roomFull", fmt.Sprintf("Room is full (max %d).", maxPlayers)), map[string]any{"maxPlayers": maxPlayers}),
 				"code":       "ROOM_FULL",
 				"maxPlayers": maxPlayers,
 			},
@@ -858,9 +885,6 @@ func (s *server) createRoomAndAttachLocked(conn *websocket.Conn, hello clientHel
 	roomCode := s.generateRoomCodeLocked()
 	initialRuleset := buildAutoRuleset(minClassicPlayers)
 	settings := s.normalizeSettingsLocked(defaultSettingsForScenario(scenario.ID))
-	if strings.TrimSpace(hello.Locale) != "" {
-		settings.CardLocale = normalizeCardLocale(hello.Locale)
-	}
 	room := &room{
 		Code:             roomCode,
 		CreatedAtMS:      time.Now().UnixMilli(),
@@ -891,6 +915,7 @@ func (s *server) createRoomAndAttachLocked(conn *websocket.Conn, hello clientHel
 func (s *server) handleResumeLocked(conn *websocket.Conn, payload map[string]any) {
 	roomCode := strings.ToUpper(strings.TrimSpace(asString(payload["roomCode"])))
 	sessionID := strings.TrimSpace(asString(payload["sessionId"]))
+	locale := strings.TrimSpace(asString(payload["locale"]))
 	if roomCode == "" || sessionID == "" {
 		s.sendErrorDetailedLocked(conn, "Invalid resume payload.", "errorResumeInvalidPayload", nil)
 		return
@@ -915,6 +940,7 @@ func (s *server) handleResumeLocked(conn *websocket.Conn, payload map[string]any
 	hello := clientHelloPayload{
 		Name:        existing.Name,
 		RoomCode:    room.Code,
+		Locale:      locale,
 		PlayerToken: existing.Token,
 		TabID:       existing.TabID,
 		SessionID:   sessionID,
@@ -953,7 +979,8 @@ func (s *server) handleStartGameLocked(conn *websocket.Conn) {
 		return
 	}
 	selectedDisasterID := strings.TrimSpace(room.Settings.ForcedDisasterID)
-	gameAssets := s.assetCatalogForLocaleLocked(room.Settings.CardLocale)
+	controlLocale := getPlayerCardLocale(room.Players[room.ControlID])
+	gameAssets := s.assetCatalogForLocaleLocked(controlLocale)
 	if room.Scenario.ID == scenarioClassic {
 		availableDisasters := disasterDeckCardsFromCatalog(gameAssets)
 		if len(availableDisasters) == 0 {
@@ -963,7 +990,7 @@ func (s *server) handleStartGameLocked(conn *websocket.Conn) {
 			if selectedDisasterID == "" {
 				selectedDisasterID = randomDisasterID
 			}
-			if !s.isValidDisasterIDLocked(selectedDisasterID, room.Settings.CardLocale) {
+			if !s.isValidDisasterIDLocked(selectedDisasterID, controlLocale) {
 				log.Printf("[startGame] reject room=%s reason=invalid_disaster selected=%q", room.Code, selectedDisasterID)
 				s.sendErrorDetailedLocked(conn, "Selected disaster is invalid.", "errorDisasterInvalid", nil)
 				return
@@ -1005,7 +1032,7 @@ func (s *server) handleStartGameLocked(conn *websocket.Conn) {
 			time.Now().UnixNano(),
 		)
 	}
-	if selectedCard, ok := s.selectedDisasterCardByIDLocked(selectedDisasterID, room.Settings.CardLocale); ok {
+	if selectedCard, ok := s.selectedDisasterCardByIDLocked(selectedDisasterID, controlLocale); ok {
 		forceDisasterOnGame(room.Game, selectedCard)
 	}
 	room.Phase = phaseGame
@@ -1054,6 +1081,8 @@ func (s *server) handleUpdateSettingsLocked(conn *websocket.Conn, payload map[st
 		s.sendErrorDetailedLocked(conn, "Invalid settings payload.", "errorSettingsInvalidPayload", nil)
 		return
 	}
+	controlLocale := getPlayerCardLocale(room.Players[playerID])
+	next.CardLocale = controlLocale
 	next = s.normalizeSettingsLocked(next)
 
 	minAllowed := 2
@@ -1069,7 +1098,7 @@ func (s *server) handleUpdateSettingsLocked(conn *websocket.Conn, payload map[st
 	if selectedDisasterID == "" {
 		selectedDisasterID = randomDisasterID
 	}
-	if !s.isValidDisasterIDLocked(selectedDisasterID, next.CardLocale) {
+	if !s.isValidDisasterIDLocked(selectedDisasterID, controlLocale) {
 		s.sendErrorDetailedLocked(conn, "Selected disaster is invalid.", "errorDisasterInvalid", nil)
 		return
 	}
@@ -1080,7 +1109,7 @@ func (s *server) handleUpdateSettingsLocked(conn *websocket.Conn, payload map[st
 }
 
 func (s *server) handleUpdateLocaleLocked(conn *websocket.Conn, payload map[string]any) {
-	room, _ := s.roomAndPlayerByConnLocked(conn)
+	room, playerID := s.roomAndPlayerByConnLocked(conn)
 	if room == nil {
 		s.sendErrorLocked(conn, "Room not found.")
 		return
@@ -1093,12 +1122,17 @@ func (s *server) handleUpdateLocaleLocked(conn *websocket.Conn, payload map[stri
 	}
 
 	nextLocale := normalizeCardLocale(request.Locale)
-	if room.Settings.CardLocale == nextLocale {
+	player := room.Players[playerID]
+	if player == nil {
+		s.sendErrorLocked(conn, "Player is not found in room.")
 		return
 	}
-
-	room.Settings.CardLocale = nextLocale
-	room.Settings = s.normalizeSettingsLocked(room.Settings)
+	if getPlayerCardLocale(player) == nextLocale {
+		return
+	}
+	player.Locale = nextLocale
+	player.NeedsFullState = true
+	player.NeedsFullGameView = true
 	s.broadcastRoomStateLocked(room)
 	if room.Phase == phaseGame && room.Game != nil {
 		s.broadcastGameViewsLocked(room)
@@ -1331,6 +1365,7 @@ func (s *server) attachPlayerLocked(room *room, hello clientHelloPayload, conn *
 			Connected:         true,
 			NeedsFullState:    true,
 			NeedsFullGameView: true,
+			Locale:            normalizeCardLocale(hello.Locale),
 		}
 		if existing.SessionID == "" {
 			existing.SessionID = randomToken(12)
@@ -1363,6 +1398,11 @@ func (s *server) attachPlayerLocked(room *room, hello clientHelloPayload, conn *
 		existing.Connected = true
 		existing.NeedsFullState = true
 		existing.NeedsFullGameView = true
+	}
+	if strings.TrimSpace(hello.Locale) != "" {
+		existing.Locale = normalizeCardLocale(hello.Locale)
+	} else if strings.TrimSpace(existing.Locale) == "" {
+		existing.Locale = "ru"
 	}
 
 	s.connToID[conn] = connInfo{RoomCode: room.Code, PlayerID: existing.ID}
@@ -1840,7 +1880,7 @@ func (s *server) handlePlayerConnectionLostLocked(room *room, player *player, co
 	}
 }
 
-func (s *server) buildRoomStateLocked(room *room) roomState {
+func (s *server) buildRoomStateLocked(room *room, locale string) roomState {
 	players := make([]playerSummary, 0, len(room.JoinOrder))
 	for _, playerID := range room.JoinOrder {
 		player := room.Players[playerID]
@@ -1875,18 +1915,20 @@ func (s *server) buildRoomStateLocked(room *room) roomState {
 	}
 
 	state := roomState{
+		Revision:            room.RoomStateRevision,
 		RoomCode:            room.Code,
 		Players:             players,
 		HostID:              room.HostID,
 		ControlID:           room.ControlID,
 		Phase:               room.Phase,
-		ScenarioMeta:        room.Scenario,
+		ScenarioMeta:        localizedScenarioMeta(room.Scenario, locale),
 		Settings:            room.Settings,
-		DisasterOptions:     s.buildDisasterOptionsLocked(room.Settings.CardLocale),
+		DisasterOptions:     s.buildDisasterOptionsLocked(locale),
 		Ruleset:             room.Ruleset,
 		RulesOverriddenHost: room.RulesOverridden,
 		RulesPresetCount:    room.RulesPresetCount,
 	}
+	state.Settings.CardLocale = ""
 	if room.IsDev {
 		flag := true
 		state.IsDev = &flag
@@ -1899,18 +1941,20 @@ func (s *server) broadcastRoomStateLocked(room *room) {
 	if room == nil || s.rooms[room.Code] == nil {
 		return
 	}
-	state := s.buildRoomStateLocked(room)
+	room.RoomStateRevision++
 	for _, p := range room.Players {
 		if p.Connection == nil {
 			continue
 		}
+		state := s.buildRoomStateLocked(room, getPlayerCardLocale(p))
 		if p.NeedsFullState || !room.LastRoomStateSent {
 			s.writeWSLocked(p.Connection, wsServerMessage{Type: "roomState", Payload: state})
 		} else {
 			s.writeWSLocked(p.Connection, wsServerMessage{
 				Type: "statePatch",
 				Payload: map[string]any{
-					"roomState": state,
+					"roomState":         state,
+					"roomStateRevision": room.RoomStateRevision,
 				},
 			})
 		}
@@ -1923,19 +1967,22 @@ func (s *server) broadcastGameViewsLocked(room *room) {
 	if room.Game == nil {
 		return
 	}
+	room.GameViewRevision++
 	for _, playerID := range room.JoinOrder {
 		player := room.Players[playerID]
 		if player == nil || player.Connection == nil {
 			continue
 		}
-		view := room.Game.buildGameView(room, player.ID)
+		view := localizeGameViewForLocale(room.Game.buildGameView(room, player.ID), getPlayerCardLocale(player), room.Scenario.ID)
+		view.Revision = room.GameViewRevision
 		if player.NeedsFullGameView {
 			s.writeWSLocked(player.Connection, wsServerMessage{Type: "gameView", Payload: view})
 		} else {
 			s.writeWSLocked(player.Connection, wsServerMessage{
 				Type: "statePatch",
 				Payload: map[string]any{
-					"gameView": view,
+					"gameView":         view,
+					"gameViewRevision": room.GameViewRevision,
 				},
 			})
 		}
@@ -1950,7 +1997,7 @@ func (s *server) broadcastEventLocked(room *room, event gameEvent) {
 		}
 		s.writeWSLocked(player.Connection, wsServerMessage{
 			Type:    "gameEvent",
-			Payload: event,
+			Payload: localizeGameEventForLocale(event, getPlayerCardLocale(player), room.Scenario.ID),
 		})
 	}
 }
@@ -2230,7 +2277,7 @@ func (s *server) sendErrorDetailedLocked(conn *websocket.Conn, message, explicit
 		errorKey, errorVars = inferErrorLocalization(code, safeMessage, room)
 	}
 	if localeKey := serverErrorLocaleKey(errorKey, code); localeKey != "" {
-		safeMessage = serverLocaleMessage(room, localeKey, safeMessage, errorVars)
+		safeMessage = formatServerTemplate(serverText(s.connLocaleLocked(conn, room), localeKey, safeMessage), errorVars)
 	}
 	log.Printf("[ws-error] raw=%q sanitized=%q code=%s", message, safeMessage, code)
 	payload := map[string]any{
